@@ -1,34 +1,25 @@
 mod common;
 
 use rex::{
-    ast::CompilationUnit,
-    engine::{Builder, CompileOptions, EngineError, Module},
+    ast::Symbol,
+    engine::{Builder, CompileOptions, EngineError},
     parser::parse as parse_rex,
     typesystem::TypeError,
 };
+
+fn symbol_local_name_is(symbol: &Symbol, local: &str) -> bool {
+    symbol.as_ref() == local || symbol.as_ref().rsplit('.').next() == Some(local)
+}
 
 async fn compile_err(code: &str) -> EngineError {
     let program = parse_rex(code).unwrap_or_else(|errs| {
         panic!("expected parse success, got: {errs:?}\ncode:\n{code}");
     });
 
-    let mut builder = Builder::with_prelude(()).unwrap();
-    let mut module = Module::global();
-    module.add_decls(program.decls.clone());
-    if let Err(e) = builder.inject_module(module) {
-        return e;
-    }
+    let builder = Builder::with_prelude(()).unwrap();
     let compiler = builder.build_compiler();
-    // Preserve declaration-injected body diagnostics here.
-    let body_program = CompilationUnit {
-        decls: Vec::new(),
-        body: program.body.clone(),
-    };
     let (compiled, evaluator) = match compiler
-        .compile_program(
-            &body_program,
-            CompileOptions::for_module("test.main").unwrap(),
-        )
+        .compile_program(&program, CompileOptions::for_module("test.main").unwrap())
         .await
     {
         Ok(compiled) => compiled,
@@ -190,7 +181,13 @@ async fn compile_rejects_invalid_programs() {
             }
             0
             "#,
-            |e| matches!(e, TypeError::InvalidClassArity { class, .. } if class.as_ref() == "C"),
+            |e| {
+                matches!(
+                    e,
+                    TypeError::InvalidClassArity { class, .. }
+                        if symbol_local_name_is(class, "C")
+                )
+            },
         ),
         (
             "duplicate_class_definition",
@@ -203,7 +200,7 @@ async fn compile_rejects_invalid_programs() {
             }
             0
             "#,
-            |e| matches!(e, TypeError::DuplicateClass(name) if name.as_ref() == "C"),
+            |e| matches!(e, TypeError::DuplicateClass(name) if symbol_local_name_is(name, "C")),
         ),
         (
             "duplicate_class_method_definition",
@@ -214,7 +211,12 @@ async fn compile_rejects_invalid_programs() {
             }
             0
             "#,
-            |e| matches!(e, TypeError::DuplicateClassMethod(name) if name.as_ref() == "m"),
+            |e| {
+                matches!(
+                    e,
+                    TypeError::DuplicateClassMethod(name) if symbol_local_name_is(name, "m")
+                )
+            },
         ),
         (
             "unknown_class_in_instance",
@@ -224,7 +226,7 @@ async fn compile_rejects_invalid_programs() {
             }
             0
             "#,
-            |e| matches!(e, TypeError::UnknownClass(name) if name.as_ref() == "NoSuch"),
+            |e| matches!(e, TypeError::UnknownClass(name) if symbol_local_name_is(name, "NoSuch")),
         ),
         (
             "unknown_method_in_instance",
@@ -237,7 +239,13 @@ async fn compile_rejects_invalid_programs() {
             }
             0
             "#,
-            |e| matches!(e, TypeError::UnknownInstanceMethod { method, .. } if method.as_ref() == "n"),
+            |e| {
+                matches!(
+                    e,
+                    TypeError::UnknownInstanceMethod { method, .. }
+                        if symbol_local_name_is(method, "n")
+                )
+            },
         ),
         (
             "missing_method_in_instance",
@@ -251,7 +259,13 @@ async fn compile_rejects_invalid_programs() {
             }
             0
             "#,
-            |e| matches!(e, TypeError::MissingInstanceMethod { method, .. } if method.as_ref() == "n"),
+            |e| {
+                matches!(
+                    e,
+                    TypeError::MissingInstanceMethod { method, .. }
+                        if symbol_local_name_is(method, "n")
+                )
+            },
         ),
         (
             "duplicate_function_declaration",
@@ -260,7 +274,7 @@ async fn compile_rejects_invalid_programs() {
             fn f (x: i32) -> i32 = x;
             f 1
             "#,
-            |e| matches!(e, TypeError::DuplicateValue(name) if name.as_ref() == "f"),
+            |e| matches!(e, TypeError::DuplicateValue(name) if symbol_local_name_is(name, "f")),
         ),
         (
             "function_body_must_match_declared_return_type",
@@ -279,7 +293,7 @@ async fn compile_rejects_invalid_programs() {
             let x = m 1 in x
             "#,
             |e| {
-                matches!(e, TypeError::NoInstance(class, _) if class.as_ref() == "C")
+                matches!(e, TypeError::NoInstance(class, _) if symbol_local_name_is(class, "C"))
                     || matches!(e, TypeError::AmbiguousTypeVars { constraints, .. } if constraints.contains("C"))
             },
         ),

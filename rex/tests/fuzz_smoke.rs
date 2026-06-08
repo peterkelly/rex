@@ -1,8 +1,7 @@
 mod common;
 
 use rex::{
-    ast::CompilationUnit,
-    engine::{Builder, CompileOptions, Module, standard_type_system},
+    engine::{Builder, CompileOptions, standard_type_system},
     parser::parse,
     typesystem::infer,
 };
@@ -67,20 +66,10 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
         };
         let _ = infer(&mut ts, body.as_ref());
 
-        let mut builder = Builder::with_prelude(()).unwrap();
-        let mut module = Module::global();
-        module.add_decls(program.decls.clone());
-        let _ = builder.inject_module(module);
+        let builder = Builder::with_prelude(()).unwrap();
         let compiler = builder.build_compiler();
-        let body_program = CompilationUnit {
-            decls: Vec::new(),
-            body: Some(body.clone()),
-        };
         if let Ok((compiled, evaluator)) = compiler
-            .compile_program(
-                &body_program,
-                CompileOptions::for_module("test.main").unwrap(),
-            )
+            .compile_program(&program, CompileOptions::for_module("test.main").unwrap())
             .await
         {
             let _ = evaluator.run(compiled, Default::default()).await;

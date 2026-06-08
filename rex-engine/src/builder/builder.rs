@@ -1,7 +1,7 @@
 use crate::{
     builder::{
         export::{Export, ExportTarget, HostFnSync},
-        qualify::qualify_program,
+        qualify::qualify_package,
         registry::{NativeRegistry, TypeclassRegistry},
     },
     compiler::{
@@ -23,9 +23,10 @@ use crate::{
     },
     handlers::RexDefault,
     modules::{
-        ImportRequest, Importer, Module, ModuleExports, ModuleId, ModuleSystem, ROOT_MODULE_NAME,
-        ResolvedModule, ResolvedModuleContent, StdlibImporter, VirtualModule,
-        interface_decls_from_program, prefix_for_module, virtual_export_name,
+        CompilationPackage, Declarations, ImportRequest, Importer, Module, ModuleExports, ModuleId,
+        ModuleSystem, ROOT_MODULE_NAME, ResolvedModule, ResolvedModuleContent, StdlibImporter,
+        VirtualModule, exports_from_package, interface_decls_from_package, prefix_for_module,
+        virtual_export_name,
     },
     prelude::{inject_prelude, inject_prelude_virtual_module, standard_type_system},
     util::{
@@ -35,7 +36,7 @@ use crate::{
     value::{Handle, Heap, IntoRex, Pointer},
 };
 use futures::future::BoxFuture;
-use rex_ast::{CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, Scope, Symbol};
+use rex_ast::{DeclareFnDecl, Expr, FnDecl, InstanceDecl, Scope, Symbol};
 use rex_typesystem::{
     inference::infer,
     types::{
@@ -189,21 +190,12 @@ where
         }
 
         if is_global {
-            for adt in &module.adts {
-                self.inject_adt(adt.clone())?;
+            for staged in &module.adts {
+                self.inject_adt(staged.adt.clone())?;
             }
 
-            let staged_adt_names: BTreeSet<Symbol> =
-                module.adts.iter().map(|adt| adt.name.clone()).collect();
-            let decls = module
-                .decls
-                .iter()
-                .filter(|decl| match decl {
-                    Decl::Type(ty) => !staged_adt_names.contains(&ty.name),
-                    _ => true,
-                })
-                .cloned()
-                .collect::<Vec<_>>();
+            let mut decls = module.declarations();
+            decls.types.clear();
 
             for export in module.exports {
                 self.inject_module_export(ROOT_MODULE_NAME, export)?;
@@ -220,9 +212,7 @@ where
                 module_id: installed.id.clone(),
                 resolved: ResolvedModule {
                     id: installed.id,
-                    content: ResolvedModuleContent::CompilationUnit(
-                        installed.compilation_unit.clone(),
-                    ),
+                    content: ResolvedModuleContent::CompilationPackage(installed.package.clone()),
                 },
             }));
         Ok(())
@@ -391,7 +381,7 @@ pub(crate) struct ModuleLoaderState<State: Clone + Send + Sync + 'static> {
     pub(crate) system: ModuleSystem<State>,
     pub(crate) injected_modules: BTreeSet<String>,
     pub(crate) module_exports_cache: BTreeMap<ModuleId, ModuleExports>,
-    pub(crate) module_interface_cache: BTreeMap<ModuleId, Vec<Decl>>,
+    pub(crate) module_interface_cache: BTreeMap<ModuleId, Declarations>,
     pub(crate) module_sources: BTreeMap<ModuleId, String>,
     pub(crate) published_cycle_interfaces: BTreeSet<ModuleId>,
     pub(crate) default_imports: Vec<String>,
@@ -409,7 +399,7 @@ pub(crate) struct RuntimePolicy {
 pub(crate) struct InstalledRustModule {
     pub(crate) id: ModuleId,
     pub(crate) exports: ModuleExports,
-    pub(crate) compilation_unit: CompilationUnit,
+    pub(crate) package: CompilationPackage,
 }
 
 pub(crate) trait RustModuleInstallContext<State>: ExportTarget<State>
@@ -418,7 +408,7 @@ where
 {
     fn module_loader(&self) -> &ModuleLoaderState<State>;
     fn module_loader_mut(&mut self) -> &mut ModuleLoaderState<State>;
-    fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError>;
+    fn inject_decls(&mut self, decls: &Declarations) -> Result<(), EngineError>;
     fn inject_module_export(
         &mut self,
         module_name: &str,
@@ -524,24 +514,24 @@ where
         )));
     }
 
-    let mut decls = module.decls.clone();
-    decls.extend(
-        module
-            .exports
-            .iter()
-            .map(|export| Decl::DeclareFn(export.interface.clone())),
-    );
-    let local_type_names = module_local_type_names_from_decls(&decls);
+    let mut package = CompilationPackage {
+        decls: module.declarations(),
+        body: None,
+    };
+    package
+        .decls
+        .declare_fns
+        .extend(module.exports.iter().map(|export| export.interface.clone()));
+    let local_type_names = module_local_type_names_from_declarations(&package.decls);
     engine
         .module_loader_mut()
         .module_local_type_names
         .insert(module_name.clone(), local_type_names);
 
-    let compilation_unit = CompilationUnit { decls, body: None };
     let prefix = prefix_for_module(&module_id);
-    let exports = crate::modules::exports_from_program(&compilation_unit, &prefix, &module_id);
-    let qualified = qualify_program(&compilation_unit, &prefix);
-    let interfaces = interface_decls_from_program(&qualified);
+    let exports = exports_from_package(&package, &prefix, &module_id);
+    let qualified = qualify_package(&package, &prefix);
+    let interfaces = interface_decls_from_package(&qualified);
     engine
         .module_loader_mut()
         .module_exports_cache
@@ -553,7 +543,7 @@ where
     engine.module_loader_mut().virtual_modules.insert(
         module_name.clone(),
         VirtualModule {
-            decls: compilation_unit.decls.clone(),
+            package: package.clone(),
         },
     );
 
@@ -569,7 +559,7 @@ where
     Ok(InstalledRustModule {
         id: module_id,
         exports,
-        compilation_unit,
+        package,
     })
 }
 
@@ -702,7 +692,7 @@ where
         inject_adt_parts(&mut self.type_system, &mut self.runtime, adt)
     }
 
-    pub(crate) fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
+    pub(crate) fn inject_decls(&mut self, decls: &Declarations) -> Result<(), EngineError> {
         inject_decls_parts(
             &mut self.env,
             &mut self.type_system,
@@ -779,7 +769,7 @@ where
         &mut self.module_loader
     }
 
-    fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
+    fn inject_decls(&mut self, decls: &Declarations) -> Result<(), EngineError> {
         Builder::inject_decls(self, decls)
     }
 
@@ -818,7 +808,7 @@ where
         result
     }
 
-    pub(crate) fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
+    pub(crate) fn inject_decls(&mut self, decls: &Declarations) -> Result<(), EngineError> {
         inject_decls_parts(
             &mut self.env,
             &mut self.type_system,
@@ -883,7 +873,7 @@ where
         &mut self.module_loader
     }
 
-    fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
+    fn inject_decls(&mut self, decls: &Declarations) -> Result<(), EngineError> {
         Compiler::inject_decls(self, decls)
     }
 
@@ -1112,51 +1102,34 @@ fn inject_decls_parts<State>(
     type_system: &mut TypeSystem,
     runtime: &mut RuntimeRegistry<State>,
     heap: &Heap,
-    decls: &[Decl],
+    decls: &Declarations,
 ) -> Result<(), EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    let mut type_decls = Vec::new();
-    let mut class_decls = Vec::new();
-    let mut declare_fn_decls = Vec::new();
-    let mut fn_decls = Vec::new();
-    let mut instance_decls = Vec::new();
-
-    for decl in decls {
-        match decl {
-            Decl::Type(td) => type_decls.push(td.clone()),
-            Decl::Class(cd) => class_decls.push(cd.clone()),
-            Decl::DeclareFn(df) => declare_fn_decls.push(df.clone()),
-            Decl::Fn(fd) => fn_decls.push(fd.clone()),
-            Decl::Instance(id) => instance_decls.push(id.clone()),
-            Decl::Import(..) => {}
-        }
-    }
-
     let adts = type_system
-        .register_type_decls(&type_decls)
+        .register_type_decls(&decls.types)
         .map_err(EngineError::Type)?;
     for adt in adts {
         inject_adt_parts(type_system, runtime, adt)?;
     }
 
     type_system
-        .register_class_decls(&class_decls)
+        .register_class_decls(&decls.classes)
         .map_err(EngineError::Type)?;
 
-    for decl in &declare_fn_decls {
+    for decl in &decls.declare_fns {
         type_system
             .inject_declare_fn_decl(decl)
             .map_err(EngineError::Type)?;
     }
 
     let prepared_fns = type_system
-        .register_fn_decl_signatures(&fn_decls)
+        .register_fn_decl_signatures(&decls.fns)
         .map_err(EngineError::Type)?;
 
-    let mut prepared_instances = Vec::with_capacity(instance_decls.len());
-    for decl in &instance_decls {
+    let mut prepared_instances = Vec::with_capacity(decls.instances.len());
+    for decl in &decls.instances {
         let prepared = type_system
             .register_instance_decl(decl)
             .map_err(EngineError::Type)?;
@@ -1166,7 +1139,7 @@ where
     type_system
         .check_fn_decl_bodies(&prepared_fns)
         .map_err(EngineError::Type)?;
-    inject_fn_runtime_parts(env, type_system, runtime, heap, &fn_decls)?;
+    inject_fn_runtime_parts(env, type_system, runtime, heap, &decls.fns)?;
 
     for (decl, prepared) in &prepared_instances {
         register_typeclass_instance_parts(type_system, env, runtime, decl, prepared)?;
@@ -1194,16 +1167,9 @@ fn publish_runtime_decl_interfaces_parts(
 fn publish_runtime_interfaces_parts(
     env: &mut RootedEnvironment,
     heap: &Heap,
-    decls: &[Decl],
+    decls: &Declarations,
 ) -> Result<(), EngineError> {
-    let mut signatures = Vec::new();
-    for decl in decls {
-        let Decl::DeclareFn(df) = decl else {
-            continue;
-        };
-        signatures.push(df.clone());
-    }
-    publish_runtime_decl_interfaces_parts(env, heap, &signatures)
+    publish_runtime_decl_interfaces_parts(env, heap, &decls.declare_fns)
 }
 
 fn register_native_parts<State>(
@@ -1331,14 +1297,8 @@ where
     Ok(())
 }
 
-fn module_local_type_names_from_decls(decls: &[Decl]) -> BTreeSet<Symbol> {
-    let mut out = BTreeSet::new();
-    for decl in decls {
-        if let Decl::Type(td) = decl {
-            out.insert(td.name.clone());
-        }
-    }
-    out
+fn module_local_type_names_from_declarations(decls: &Declarations) -> BTreeSet<Symbol> {
+    decls.types.iter().map(|td| td.name.clone()).collect()
 }
 
 fn qualify_module_scheme_refs(

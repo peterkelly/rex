@@ -4,12 +4,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use rex_ast::{CompilationUnit, Decl, Symbol};
+use rex_ast::Symbol;
 use rex_typesystem::types::Type;
 
 use crate::{EngineError, Handle, modules::ModuleId};
 
-use super::Module;
+use super::{CompilationPackage, Module};
 
 /// Request passed from the module system to importers when Rex code imports a module.
 ///
@@ -40,15 +40,15 @@ impl ImportRequest {
 /// Imported module payload returned by an [`Importer`](super::Importer).
 ///
 /// Importers may return raw Rex source for the engine to parse or a prebuilt
-/// compilation unit when the caller has already parsed or synthesized the AST.
-/// They may also return a Rust-backed module that will be installed lazily by
-/// the compiler when the import is actually needed.
+/// compilation package when the caller has already parsed or synthesized the
+/// AST. They may also return a Rust-backed module that will be installed lazily
+/// by the compiler when the import is actually needed.
 #[derive(Clone, Debug)]
 pub enum ResolvedModuleContent<State: Clone + Send + Sync + 'static = ()> {
     /// Raw Rex source text.
     Source(String),
     /// Parsed or synthesized module declarations.
-    CompilationUnit(CompilationUnit),
+    CompilationPackage(CompilationPackage),
     /// Rust-backed host module to install into the engine.
     Module(ResolvedRustModule<State>),
 }
@@ -295,7 +295,7 @@ impl ModuleExports {
 /// declarations that define the module surface used by import typechecking.
 #[derive(Clone)]
 pub struct VirtualModule {
-    pub decls: Vec<Decl>,
+    pub package: CompilationPackage,
 }
 
 /// Loaded module cached by the module system after compilation and evaluation.

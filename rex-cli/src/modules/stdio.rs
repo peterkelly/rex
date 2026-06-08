@@ -16,8 +16,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use rex::{
     ast::Symbol,
     engine::{
-        Builder, Context, EngineError, FromRex, Handle, HostAction, HostActionEffect, IntoRex,
-        Module, run_host_action,
+        Builder, Context, Declarations, EngineError, FromRex, Handle, HostAction, HostActionEffect,
+        IntoRex, Module, run_host_action,
     },
     parser::parse as parse_rex,
     typesystem::{AdtDecl, BuiltinTypeId, Scheme, Type, TypeKind, TypeVar, TypeVarSupply},
@@ -43,7 +43,17 @@ fn io_registry() -> &'static IoRegistry {
 pub(crate) fn inject_cli_io_natives(builder: &mut Builder) -> Result<(), EngineError> {
     let mut module = Module::new("std.io");
     module.add_adt_decl(io_adt_decl())?;
-    module.add_decls(io_typeclass_decls()?);
+    let io_decls = Declarations::from(io_typeclass_decls()?);
+    if !io_decls.types.is_empty() {
+        return Err(EngineError::Internal(
+            "std.io typeclass declarations unexpectedly included type declarations".into(),
+        ));
+    }
+    module.imports.extend(io_decls.imports);
+    module.fns.extend(io_decls.fns);
+    module.declare_fns.extend(io_decls.declare_fns);
+    module.classes.extend(io_decls.classes);
+    module.instances.extend(io_decls.instances);
 
     module.export_native("io_pure", io_pure_scheme(), 1, |ctx, _typ, args| {
         let value = args

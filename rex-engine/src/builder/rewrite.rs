@@ -1,15 +1,17 @@
 use crate::{
     builder::{
         core::{Builder, RustModuleInstallContext, install_named_rust_module},
-        qualify::qualify_program,
+        qualify::qualify_package,
     },
     compiler::Compiler,
     error::EngineError,
     modules::{
-        ImportBindingPolicy, ImportBindings, ModuleId, ResolvedModuleCache, add_import_bindings,
-        alias_is_visible, collect_pattern_bindings, contains_import_alias, decl_type_names,
-        decl_value_names, default_import_decl, exports_from_program, import_specifier,
-        interface_decls_from_program, program_from_resolved, qualified_alias_member,
+        CompilationPackage, Declarations, ImportBindingPolicy, ImportBindings, ModuleId,
+        ResolvedModuleCache, add_import_bindings, alias_is_visible, collect_pattern_bindings,
+        contains_import_alias_in_declarations, decl_type_names_from_declarations,
+        decl_value_names_from_declarations, default_import_decl, exports_from_package,
+        import_specifier, interface_decls_from_package, package_from_resolved,
+        qualified_alias_member,
         system::ImportChain,
         types::{
             CanonicalSymbol, ImportRequest, ModuleExports, ResolvedModule, ResolvedModuleContent,
@@ -134,30 +136,27 @@ where
     }
 }
 
-pub(crate) fn rewrite_program_with_imports<'a, State, C>(
+pub(crate) fn rewrite_package_with_imports<'a, State, C>(
     engine: &'a mut C,
-    compilation_unit: &'a CompilationUnit,
+    package: &'a CompilationPackage,
     importer: Option<ModuleId>,
     prefix: &'a str,
     chain: &'a ImportChain<State>,
     load_state: &'a mut ModuleLoadState<State>,
-) -> BoxFuture<'a, Result<CompilationUnit, EngineError>>
+) -> BoxFuture<'a, Result<CompilationPackage, EngineError>>
 where
     State: Clone + Send + Sync + 'static,
     C: ModuleRewriteContext<State> + 'a,
 {
     Box::pin(async move {
         let mut bindings = ImportBindings::default();
-        let local_values = decl_value_names(&compilation_unit.decls);
-        let local_types = decl_type_names(&compilation_unit.decls);
+        let local_values = decl_value_names_from_declarations(&package.decls);
+        let local_types = decl_type_names_from_declarations(&package.decls);
         let import_policy = ImportBindingPolicy {
             forbidden_values: &local_values,
             forbidden_types: &local_types,
         };
-        for decl in &compilation_unit.decls {
-            let Decl::Import(import_decl) = decl else {
-                continue;
-            };
+        for import_decl in &package.decls.imports {
             let exports = resolve_module_exports_for_rewrite(
                 engine,
                 import_decl,
@@ -172,7 +171,7 @@ where
         let default_imports = engine.default_imports().to_vec();
         for module_name in default_imports {
             let alias = Symbol::intern(default_import_alias(&module_name));
-            if contains_import_alias(&compilation_unit.decls, &alias) {
+            if contains_import_alias_in_declarations(&package.decls, &alias) {
                 continue;
             }
             let import_decl = default_import_decl(&module_name);
@@ -207,9 +206,9 @@ where
             }
         }
 
-        let qualified = qualify_program(compilation_unit, prefix);
-        validate_import_uses(&qualified, &bindings.alias_exports, None)?;
-        Ok(rewrite_import_uses(
+        let qualified = qualify_package(package, prefix);
+        validate_import_uses_package(&qualified, &bindings.alias_exports, None)?;
+        Ok(rewrite_import_uses_package(
             &qualified,
             &bindings.alias_exports,
             &bindings.imported_values,
@@ -434,7 +433,34 @@ pub fn validate_import_uses_with_spans(
     aliases: &BTreeMap<Symbol, ModuleExports>,
     shadowed_values: Option<&BTreeSet<Symbol>>,
 ) -> Result<(), ImportUseError> {
-    for decl in &compilation_unit.decls {
+    validate_import_uses_decls_and_body(
+        &compilation_unit.decls,
+        compilation_unit.body.as_deref(),
+        aliases,
+        shadowed_values,
+    )
+}
+
+pub fn validate_import_uses_package_with_spans(
+    package: &CompilationPackage,
+    aliases: &BTreeMap<Symbol, ModuleExports>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
+) -> Result<(), ImportUseError> {
+    validate_import_uses_declarations_and_body(
+        &package.decls,
+        package.body.as_deref(),
+        aliases,
+        shadowed_values,
+    )
+}
+
+fn validate_import_uses_decls_and_body(
+    decls: &[Decl],
+    body: Option<&Expr>,
+    aliases: &BTreeMap<Symbol, ModuleExports>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
+) -> Result<(), ImportUseError> {
+    for decl in decls {
         match decl {
             Decl::Fn(fd) => {
                 for (_, t) in &fd.params {
@@ -571,8 +597,101 @@ pub fn validate_import_uses_with_spans(
         }
     }
     let mut bound = BTreeSet::new();
-    if let Some(body) = &compilation_unit.body {
-        validate_import_uses_expr(body.as_ref(), &mut bound, aliases, shadowed_values)?;
+    if let Some(body) = body {
+        validate_import_uses_expr(body, &mut bound, aliases, shadowed_values)?;
+    }
+    Ok(())
+}
+
+fn validate_import_uses_declarations_and_body(
+    decls: &Declarations,
+    body: Option<&Expr>,
+    aliases: &BTreeMap<Symbol, ModuleExports>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
+) -> Result<(), ImportUseError> {
+    for fd in &decls.fns {
+        for (_, t) in &fd.params {
+            validate_import_uses_type_expr(t, &BTreeSet::new(), aliases, shadowed_values)?;
+        }
+        validate_import_uses_type_expr(&fd.ret, &BTreeSet::new(), aliases, shadowed_values)?;
+        for c in &fd.constraints {
+            validate_import_uses_class_name(
+                &c.class,
+                *c.typ.span(),
+                &BTreeSet::new(),
+                aliases,
+                shadowed_values,
+            )?;
+            validate_import_uses_type_expr(&c.typ, &BTreeSet::new(), aliases, shadowed_values)?;
+        }
+        let mut bound: BTreeSet<Symbol> = fd.params.iter().map(|(v, _)| v.name.clone()).collect();
+        validate_import_uses_expr(fd.body.as_ref(), &mut bound, aliases, shadowed_values)?;
+    }
+    for df in &decls.declare_fns {
+        for (_, t) in &df.params {
+            validate_import_uses_type_expr(t, &BTreeSet::new(), aliases, shadowed_values)?;
+        }
+        validate_import_uses_type_expr(&df.ret, &BTreeSet::new(), aliases, shadowed_values)?;
+        for c in &df.constraints {
+            validate_import_uses_class_name(
+                &c.class,
+                *c.typ.span(),
+                &BTreeSet::new(),
+                aliases,
+                shadowed_values,
+            )?;
+            validate_import_uses_type_expr(&c.typ, &BTreeSet::new(), aliases, shadowed_values)?;
+        }
+    }
+    for td in &decls.types {
+        for v in &td.variants {
+            for t in &v.args {
+                validate_import_uses_type_expr(t, &BTreeSet::new(), aliases, shadowed_values)?;
+            }
+        }
+    }
+    for cd in &decls.classes {
+        for c in &cd.supers {
+            validate_import_uses_class_name(
+                &c.class,
+                *c.typ.span(),
+                &BTreeSet::new(),
+                aliases,
+                shadowed_values,
+            )?;
+            validate_import_uses_type_expr(&c.typ, &BTreeSet::new(), aliases, shadowed_values)?;
+        }
+        for m in &cd.methods {
+            validate_import_uses_type_expr(&m.typ, &BTreeSet::new(), aliases, shadowed_values)?;
+        }
+    }
+    for inst in &decls.instances {
+        validate_import_uses_class_name(
+            &NameRef::from_dotted(inst.class.as_ref()),
+            inst.span,
+            &BTreeSet::new(),
+            aliases,
+            shadowed_values,
+        )?;
+        validate_import_uses_type_expr(&inst.head, &BTreeSet::new(), aliases, shadowed_values)?;
+        for c in &inst.context {
+            validate_import_uses_class_name(
+                &c.class,
+                *c.typ.span(),
+                &BTreeSet::new(),
+                aliases,
+                shadowed_values,
+            )?;
+            validate_import_uses_type_expr(&c.typ, &BTreeSet::new(), aliases, shadowed_values)?;
+        }
+        for m in &inst.methods {
+            let mut bound = BTreeSet::new();
+            validate_import_uses_expr(m.body.as_ref(), &mut bound, aliases, shadowed_values)?;
+        }
+    }
+    let mut bound = BTreeSet::new();
+    if let Some(body) = body {
+        validate_import_uses_expr(body, &mut bound, aliases, shadowed_values)?;
     }
     Ok(())
 }
@@ -583,6 +702,15 @@ pub fn validate_import_uses(
     shadowed_values: Option<&BTreeSet<Symbol>>,
 ) -> Result<(), EngineError> {
     validate_import_uses_with_spans(compilation_unit, aliases, shadowed_values)
+        .map_err(ImportUseError::into_error)
+}
+
+pub fn validate_import_uses_package(
+    package: &CompilationPackage,
+    aliases: &BTreeMap<Symbol, ModuleExports>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
+) -> Result<(), EngineError> {
+    validate_import_uses_package_with_spans(package, aliases, shadowed_values)
         .map_err(ImportUseError::into_error)
 }
 
@@ -603,9 +731,95 @@ pub fn rewrite_import_uses(
         shadowed_types,
         shadowed_values,
     };
+    let (decls, body) = rewrite_import_uses_decls_and_body(
+        &compilation_unit.decls,
+        compilation_unit.body.as_deref(),
+        &scope,
+    );
+    CompilationUnit { decls, body }
+}
+
+pub fn rewrite_import_uses_package(
+    package: &CompilationPackage,
+    aliases: &BTreeMap<Symbol, ModuleExports>,
+    imported_values: &BTreeMap<Symbol, CanonicalSymbol>,
+    imported_types: &BTreeMap<Symbol, CanonicalSymbol>,
+    imported_classes: &BTreeMap<Symbol, CanonicalSymbol>,
+    shadowed_types: Option<&BTreeSet<Symbol>>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
+) -> CompilationPackage {
+    let scope = RewriteScope {
+        aliases,
+        imported_values,
+        imported_types,
+        imported_classes,
+        shadowed_types,
+        shadowed_values,
+    };
+    let (decls, body) =
+        rewrite_import_uses_declarations_and_body(&package.decls, package.body.as_deref(), &scope);
+    CompilationPackage { decls, body }
+}
+
+fn rewrite_import_uses_declarations_and_body(
+    decls: &Declarations,
+    body: Option<&Expr>,
+    scope: &RewriteScope<'_>,
+) -> (Declarations, Option<Arc<Expr>>) {
+    let mut out = Declarations {
+        imports: decls.imports.clone(),
+        ..Declarations::default()
+    };
+    for td in &decls.types {
+        let rewritten =
+            rewrite_import_uses_decls_and_body(&[Decl::Type(td.clone())], None, scope).0;
+        if let Some(Decl::Type(td)) = rewritten.into_iter().next() {
+            out.types.push(td);
+        }
+    }
+    for fd in &decls.fns {
+        let rewritten = rewrite_import_uses_decls_and_body(&[Decl::Fn(fd.clone())], None, scope).0;
+        if let Some(Decl::Fn(fd)) = rewritten.into_iter().next() {
+            out.fns.push(fd);
+        }
+    }
+    for df in &decls.declare_fns {
+        let rewritten =
+            rewrite_import_uses_decls_and_body(&[Decl::DeclareFn(df.clone())], None, scope).0;
+        if let Some(Decl::DeclareFn(df)) = rewritten.into_iter().next() {
+            out.declare_fns.push(df);
+        }
+    }
+    for cd in &decls.classes {
+        let rewritten =
+            rewrite_import_uses_decls_and_body(&[Decl::Class(cd.clone())], None, scope).0;
+        if let Some(Decl::Class(cd)) = rewritten.into_iter().next() {
+            out.classes.push(cd);
+        }
+    }
+    for instance in &decls.instances {
+        let rewritten =
+            rewrite_import_uses_decls_and_body(&[Decl::Instance(instance.clone())], None, scope).0;
+        if let Some(Decl::Instance(instance)) = rewritten.into_iter().next() {
+            out.instances.push(instance);
+        }
+    }
+    let body = rewrite_import_uses_decls_and_body(&[], body, scope).1;
+    (out, body)
+}
+
+fn rewrite_import_uses_decls_and_body(
+    decls: &[Decl],
+    body: Option<&Expr>,
+    scope: &RewriteScope<'_>,
+) -> (Vec<Decl>, Option<Arc<Expr>>) {
+    let aliases = scope.aliases;
+    let imported_types = scope.imported_types;
+    let imported_classes = scope.imported_classes;
+    let shadowed_types = scope.shadowed_types;
+    let shadowed_values = scope.shadowed_values;
     let decl_bound = BTreeSet::new();
-    let decls = compilation_unit
-        .decls
+    let decls = decls
         .iter()
         .map(|decl| match decl {
             Decl::Fn(fd) => {
@@ -614,7 +828,7 @@ pub fn rewrite_import_uses(
                 let body = Arc::new(rewrite_import_uses_expr(
                     fd.body.as_ref(),
                     &mut bound,
-                    &scope,
+                    scope,
                 ));
                 Decl::Fn(FnDecl {
                     span: fd.span,
@@ -801,11 +1015,8 @@ pub fn rewrite_import_uses(
                     .iter()
                     .map(|m| {
                         let mut bound = BTreeSet::new();
-                        let body = Arc::new(rewrite_import_uses_expr(
-                            m.body.as_ref(),
-                            &mut bound,
-                            &scope,
-                        ));
+                        let body =
+                            Arc::new(rewrite_import_uses_expr(m.body.as_ref(), &mut bound, scope));
                         InstanceMethodImpl {
                             name: m.name.clone(),
                             type_params: m.type_params.clone(),
@@ -873,11 +1084,11 @@ pub fn rewrite_import_uses(
         })
         .collect();
 
-    let body = compilation_unit.body.as_ref().map(|body| {
+    let body = body.map(|body| {
         let mut bound = BTreeSet::new();
-        Arc::new(rewrite_import_uses_expr(body.as_ref(), &mut bound, &scope))
+        Arc::new(rewrite_import_uses_expr(body, &mut bound, scope))
     });
-    CompilationUnit { decls, body }
+    (decls, body)
 }
 
 struct RewriteScope<'a> {
@@ -1373,7 +1584,7 @@ where
         #[derive(Clone)]
         struct PendingModule<State: Clone + Send + Sync + 'static> {
             resolved: ResolvedModule<State>,
-            program: CompilationUnit,
+            package: CompilationPackage,
             prefix: String,
         }
 
@@ -1398,8 +1609,8 @@ where
             }
 
             let prefix = prefix_for_module(&resolved.id);
-            let program = program_from_resolved(&resolved)?;
-            let exports = exports_from_program(&program, &prefix, &resolved.id);
+            let package = package_from_resolved(&resolved)?;
+            let exports = exports_from_package(&package, &prefix, &resolved.id);
             load_state.loaded.insert(resolved.id.clone(), exports);
             load_state.loading.insert(resolved.id.clone());
             if let ResolvedModuleContent::Source(source) = &resolved.content {
@@ -1408,14 +1619,14 @@ where
                     .module_sources
                     .insert(resolved.id.clone(), source.clone());
             }
-            let qualified = qualify_program(&program, &prefix);
-            let interfaces = interface_decls_from_program(&qualified);
+            let qualified = qualify_package(&package, &prefix);
+            let interfaces = interface_decls_from_package(&qualified);
             engine
                 .module_loader_mut()
                 .module_interface_cache
                 .insert(resolved.id.clone(), interfaces);
 
-            let imports = graph_imports_for_program(&program, engine.default_imports());
+            let imports = graph_imports_for_package(&package, engine.default_imports());
             for import_decl in imports {
                 let module_id = import_specifier(&import_decl.path)?;
                 let imported = load_state
@@ -1449,7 +1660,7 @@ where
                 module_id.clone(),
                 PendingModule {
                     resolved,
-                    program,
+                    package,
                     prefix,
                 },
             );
@@ -1477,9 +1688,9 @@ where
                 let node = pending
                     .get(module_id)
                     .ok_or_else(|| EngineError::Internal("missing pending module node".into()))?;
-                let rewritten = rewrite_program_with_imports(
+                let rewritten = rewrite_package_with_imports(
                     engine,
-                    &node.program,
+                    &node.package,
                     Some(node.resolved.id.clone()),
                     &node.prefix,
                     chain,
@@ -1501,19 +1712,14 @@ where
     })
 }
 
-fn graph_imports_for_program(
-    compilation_unit: &CompilationUnit,
+fn graph_imports_for_package(
+    package: &CompilationPackage,
     default_imports: &[String],
 ) -> Vec<ImportDecl> {
-    let mut out = Vec::new();
-    for decl in &compilation_unit.decls {
-        if let Decl::Import(import_decl) = decl {
-            out.push(import_decl.clone());
-        }
-    }
+    let mut out = package.decls.imports.clone();
     for module_name in default_imports {
         let alias = Symbol::intern(default_import_alias(module_name));
-        if contains_import_alias(&compilation_unit.decls, &alias) {
+        if contains_import_alias_in_declarations(&package.decls, &alias) {
             continue;
         }
         out.push(default_import_decl(module_name));

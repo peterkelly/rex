@@ -1,5 +1,5 @@
 use futures::FutureExt;
-use rex_ast::{CompilationUnit, Decl, Expr};
+use rex_ast::{CompilationUnit, Expr};
 use rex_engine::{
     Builder, CompileOptions, Context, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value,
 };
@@ -63,25 +63,6 @@ fn inject_globals(
     builder.inject_module(module).unwrap();
 }
 
-fn inject_global_decls(builder: &mut Builder, decls: &[Decl]) {
-    let mut module = Module::global();
-    module.add_decls(decls.iter().cloned());
-    builder.inject_module(module).unwrap();
-}
-
-fn inject_global_type_decls(builder: &mut Builder, decls: &[Decl]) {
-    inject_global_decls(
-        builder,
-        &decls
-            .iter()
-            .filter_map(|decl| match decl {
-                Decl::Type(ty) => Some(Decl::Type(ty.clone())),
-                _ => None,
-            })
-            .collect::<Vec<_>>(),
-    );
-}
-
 async fn eval_expr(builder: Builder, expr: &Expr) -> Result<Handle, EngineError> {
     let compiler = builder.build_compiler();
     let program = CompilationUnit {
@@ -91,6 +72,12 @@ async fn eval_expr(builder: Builder, expr: &Expr) -> Result<Handle, EngineError>
     let (compiled, evaluator) = compiler
         .compile_program(&program, compile_options())
         .await?;
+    evaluator.run(compiled, Default::default()).await
+}
+
+async fn eval_program(builder: Builder, program: &CompilationUnit) -> Result<Handle, EngineError> {
+    let compiler = builder.build_compiler();
+    let (compiled, evaluator) = compiler.compile_program(program, compile_options()).await?;
     evaluator.run(compiled, Default::default()).await
 }
 
@@ -476,11 +463,8 @@ async fn eval_record_update_single_variant_adt() {
           bar.x
         "#,
     );
-    let mut builder = builder_with_arith();
-    inject_global_decls(&mut builder, &program.decls);
-    let value = eval_expr(builder, program.body.as_ref().unwrap().as_ref())
-        .await
-        .unwrap();
+    let builder = builder_with_arith();
+    let value = eval_program(builder, &program).await.unwrap();
     assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(6).unwrap());
 }
 
@@ -498,11 +482,8 @@ async fn eval_record_update_refined_by_match() {
           }
         "#,
     );
-    let mut builder = builder_with_arith();
-    inject_global_decls(&mut builder, &program.decls);
-    let value = eval_expr(builder, program.body.as_ref().unwrap().as_ref())
-        .await
-        .unwrap();
+    let builder = builder_with_arith();
+    let value = eval_program(builder, &program).await.unwrap();
     assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(2).unwrap());
 }
 
@@ -516,11 +497,8 @@ async fn eval_record_update_plain_record_type() {
           match (f { x = 1, y = 2 }) with { case {y} -> y; }
         "#,
     );
-    let mut builder = builder_with_arith();
-    inject_global_decls(&mut builder, &program.decls);
-    let value = eval_expr(builder, program.body.as_ref().unwrap().as_ref())
-        .await
-        .unwrap();
+    let builder = builder_with_arith();
+    let value = eval_program(builder, &program).await.unwrap();
     assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(9).unwrap());
 }
 
@@ -979,11 +957,8 @@ async fn eval_user_adt_declaration() {
             }
         "#,
     );
-    let mut builder = Builder::with_prelude(()).unwrap();
-    inject_global_type_decls(&mut builder, &program.decls);
-    let value = eval_expr(builder, program.body.as_ref().unwrap().as_ref())
-        .await
-        .unwrap();
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_program(builder, &program).await.unwrap();
     assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(42).unwrap());
 }
 
@@ -995,8 +970,7 @@ async fn eval_fn_decl_simple() {
         add 1 2
         "#,
     );
-    let mut builder = Builder::with_prelude(()).unwrap();
-    inject_global_type_decls(&mut builder, &program.decls);
+    let builder = Builder::with_prelude(()).unwrap();
     let expr = program.body_with_fns().unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(3).unwrap());
@@ -1010,8 +984,7 @@ async fn eval_fn_decl_with_where_constraints() {
         my_add 1 2
         "#,
     );
-    let mut builder = Builder::with_prelude(()).unwrap();
-    inject_global_type_decls(&mut builder, &program.decls);
+    let builder = Builder::with_prelude(()).unwrap();
     let expr = program.body_with_fns().unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(3).unwrap());
@@ -1028,11 +1001,8 @@ async fn eval_adt_record_projection_single_variant() {
             (x.field1, x.field2)
         "#,
     );
-    let mut builder = Builder::with_prelude(()).unwrap();
-    inject_global_type_decls(&mut builder, &program.decls);
-    let value = eval_expr(builder, program.body.as_ref().unwrap().as_ref())
-        .await
-        .unwrap();
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_program(builder, &program).await.unwrap();
     let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
@@ -1061,11 +1031,8 @@ async fn eval_adt_record_projection_match_arm() {
             }
         "#,
     );
-    let mut builder = Builder::with_prelude(()).unwrap();
-    inject_global_type_decls(&mut builder, &program.decls);
-    let value = eval_expr(builder, program.body.as_ref().unwrap().as_ref())
-        .await
-        .unwrap();
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_program(builder, &program).await.unwrap();
     assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(1).unwrap());
 }
 

@@ -8,27 +8,27 @@
 use std::sync::Arc;
 
 use crate::{Builder, EngineError, builder::rewrite::load_module_types_from_resolved};
-use rex_ast::{CompilationUnit, ImportDecl};
+use rex_ast::ImportDecl;
 
 pub use crate::builder::rewrite::{
     ImportUseError, ModuleLoadState, rewrite_import_uses, validate_import_uses,
     validate_import_uses_with_spans,
 };
 pub use crate::modules::types::{module_key_for_module, prefix_for_module, prefix_for_module_key};
+use crate::modules::{CompilationPackage, Importer, ModuleExports};
 pub use crate::modules::{
     ImportBindingPolicy, ImportBindings, ImportRequest, ModuleId, ResolvedModuleContent,
     add_import_bindings, alias_is_visible, collect_pattern_bindings, contains_import_alias,
     decl_type_names, decl_value_names, default_import_decl, exports_from_program, import_specifier,
-    interface_decls_from_program, parse_program_from_source, program_from_resolved,
+    interface_decls_from_program, package_from_resolved, parse_program_from_source,
     qualified_alias_member,
 };
-use crate::modules::{Importer, ModuleExports};
 
 #[derive(Clone, Debug)]
 pub struct ToolingLoadedImport {
     pub module_id: ModuleId,
     pub exports: ModuleExports,
-    pub program: CompilationUnit,
+    pub package: CompilationPackage,
     pub source: Option<String>,
 }
 
@@ -62,7 +62,7 @@ where
         .await?;
     let source = match &resolved.content {
         ResolvedModuleContent::Source(source) => Some(source.clone()),
-        ResolvedModuleContent::CompilationUnit(_) | ResolvedModuleContent::Module(_) => None,
+        ResolvedModuleContent::CompilationPackage(_) | ResolvedModuleContent::Module(_) => None,
     };
     let exports = if let Some(exports) = builder
         .module_loader
@@ -75,9 +75,9 @@ where
     } else {
         load_module_types_from_resolved(builder, resolved.clone(), &chain, load_state).await?
     };
-    let program = match &resolved.content {
-        ResolvedModuleContent::Source(_) | ResolvedModuleContent::CompilationUnit(_) => {
-            program_from_resolved(&resolved)?
+    let package = match &resolved.content {
+        ResolvedModuleContent::Source(_) | ResolvedModuleContent::CompilationPackage(_) => {
+            package_from_resolved(&resolved)?
         }
         ResolvedModuleContent::Module(_) => {
             let module_name = resolved.id.to_string();
@@ -91,17 +91,14 @@ where
                         resolved.id
                     ))
                 })?;
-            CompilationUnit {
-                decls: module.decls.clone(),
-                body: None,
-            }
+            module.package.clone()
         }
     };
 
     Ok(ToolingLoadedImport {
         module_id: resolved.id,
         exports,
-        program,
+        package,
         source,
     })
 }

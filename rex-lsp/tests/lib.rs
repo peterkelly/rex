@@ -3,7 +3,7 @@ use lsp_types::{
     WorkspaceEdit,
 };
 use rex::{
-    engine::{Builder, CompileOptions, Module},
+    engine::{Builder, CompileOptions},
     parser::parse as parse_rex,
 };
 use rex_ast::{CompilationUnit, Decl, Expr, NameRef, TypeExpr};
@@ -94,20 +94,10 @@ fn engine_module_prefix_for_path(path: &Path) -> String {
 
 async fn eval_source_to_display(code: &str) -> (String, String) {
     let program = parse_rex(code).expect("parse source");
-    let mut builder = Builder::with_prelude(()).expect("build builder");
-    let mut module = Module::global();
-    module.add_decls(program.decls.clone());
-    builder.inject_module(module).expect("inject decls");
+    let builder = Builder::with_prelude(()).expect("build builder");
     let compiler = builder.build_compiler();
-    let body_program = CompilationUnit {
-        decls: Vec::new(),
-        body: program.body.clone(),
-    };
     let (compiled, evaluator) = compiler
-        .compile_program(
-            &body_program,
-            CompileOptions::for_module("lsp.test").unwrap(),
-        )
+        .compile_program(&program, CompileOptions::for_module("lsp.test").unwrap())
         .await
         .expect("compile source");
     let ty = compiled.result_type().clone();
@@ -121,7 +111,24 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
             ..ValueDisplayOptions::default()
         })
         .expect("display value");
-    (display, ty.to_string())
+    (display, strip_internal_module_qualifiers(&ty.to_string()))
+}
+
+fn strip_internal_module_qualifiers(text: &str) -> String {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '@' || c == '.'))
+        .fold(text.to_string(), |out, token| {
+            let Some(rest) = token.strip_prefix("@m") else {
+                return out;
+            };
+            let Some((hash, local)) = rest.split_once('.') else {
+                return out;
+            };
+            if hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                out.replace(token, local)
+            } else {
+                out
+            }
+        })
 }
 
 fn diagnostics_from_text(uri: &Url, text: &str) -> Vec<Diagnostic> {

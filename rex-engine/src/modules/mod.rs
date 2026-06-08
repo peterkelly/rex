@@ -17,7 +17,7 @@ pub(crate) mod system;
 pub(crate) mod types;
 
 pub use importers::{DenyImporter, StdlibImporter};
-pub use module::Module;
+pub use module::{CompilationPackage, Declarations, Module, StagedAdtDecl};
 pub use module_id::{ModuleId, ModuleIdError};
 pub use system::Importer;
 pub use types::virtual_export_name;
@@ -47,6 +47,10 @@ pub fn contains_import_alias(decls: &[Decl], alias: &Symbol) -> bool {
         Decl::Import(import_decl) => import_decl.alias == *alias,
         _ => false,
     })
+}
+
+pub fn contains_import_alias_in_declarations(decls: &Declarations, alias: &Symbol) -> bool {
+    decls.imports.iter().any(|import| import.alias == *alias)
 }
 
 pub fn default_import_decl(module_name: &str) -> ImportDecl {
@@ -231,47 +235,62 @@ pub fn qualified_alias_member(name: &NameRef) -> Option<(&Symbol, &Symbol)> {
 }
 
 pub fn decl_value_names(decls: &[Decl]) -> BTreeSet<Symbol> {
+    decl_value_names_from_declarations(&Declarations::from(decls))
+}
+
+pub fn decl_value_names_from_declarations(decls: &Declarations) -> BTreeSet<Symbol> {
     let mut out = BTreeSet::new();
-    for decl in decls {
-        match decl {
-            Decl::Fn(fd) => {
-                out.insert(fd.name.name.clone());
-            }
-            Decl::DeclareFn(df) => {
-                out.insert(df.name.name.clone());
-            }
-            Decl::Type(td) => {
-                for variant in &td.variants {
-                    out.insert(variant.name.clone());
-                }
-            }
-            Decl::Class(..) | Decl::Instance(..) | Decl::Import(..) => {}
+    for fd in &decls.fns {
+        out.insert(fd.name.name.clone());
+    }
+    for df in &decls.declare_fns {
+        out.insert(df.name.name.clone());
+    }
+    for td in &decls.types {
+        for variant in &td.variants {
+            out.insert(variant.name.clone());
         }
     }
     out
 }
 
 pub fn decl_type_names(decls: &[Decl]) -> BTreeSet<Symbol> {
+    decl_type_names_from_declarations(&Declarations::from(decls))
+}
+
+pub fn decl_type_names_from_declarations(decls: &Declarations) -> BTreeSet<Symbol> {
     let mut out = BTreeSet::new();
-    for decl in decls {
-        match decl {
-            Decl::Type(td) => {
-                out.insert(td.name.clone());
-            }
-            Decl::Class(cd) => {
-                out.insert(cd.name.clone());
-            }
-            Decl::Fn(..) | Decl::DeclareFn(..) | Decl::Instance(..) | Decl::Import(..) => {}
-        }
+    for td in &decls.types {
+        out.insert(td.name.clone());
+    }
+    for cd in &decls.classes {
+        out.insert(cd.name.clone());
     }
     out
 }
 
 pub fn interface_decls_from_program(compilation_unit: &CompilationUnit) -> Vec<Decl> {
+    interface_decls_from_declarations(&Declarations::from(compilation_unit.decls.as_slice()))
+}
+
+pub fn interface_decls_from_package(package: &CompilationPackage) -> Declarations {
+    interface_declarations_from_declarations(&package.decls)
+}
+
+pub fn interface_decls_from_declarations(decls: &Declarations) -> Vec<Decl> {
+    let declarations = interface_declarations_from_declarations(decls);
+    declarations
+        .declare_fns
+        .into_iter()
+        .map(Decl::DeclareFn)
+        .collect()
+}
+
+pub fn interface_declarations_from_declarations(decls: &Declarations) -> Declarations {
     let mut out = Vec::new();
-    for decl in &compilation_unit.decls {
-        match decl {
-            Decl::Fn(fd) if fd.is_pub => out.push(Decl::DeclareFn(DeclareFnDecl {
+    for fd in &decls.fns {
+        if fd.is_pub {
+            out.push(DeclareFnDecl {
                 span: fd.span,
                 is_pub: fd.is_pub,
                 name: fd.name.clone(),
@@ -279,16 +298,13 @@ pub fn interface_decls_from_program(compilation_unit: &CompilationUnit) -> Vec<D
                 params: fd.params.clone(),
                 ret: fd.ret.clone(),
                 constraints: fd.constraints.clone(),
-            })),
-            Decl::Instance(..)
-            | Decl::Import(..)
-            | Decl::Fn(..)
-            | Decl::DeclareFn(..)
-            | Decl::Type(..)
-            | Decl::Class(..) => {}
+            });
         }
     }
-    out
+    Declarations {
+        declare_fns: out,
+        ..Declarations::default()
+    }
 }
 
 pub fn exports_from_program(
@@ -298,83 +314,116 @@ pub fn exports_from_program(
 ) -> ModuleExports {
     let (value_renames, type_renames, class_renames) =
         collect_local_renames(compilation_unit, prefix);
+    exports_from_declarations(
+        &Declarations::from(compilation_unit.decls.as_slice()),
+        &value_renames,
+        &type_renames,
+        &class_renames,
+        module_id,
+    )
+}
+
+pub fn exports_from_package(
+    package: &CompilationPackage,
+    prefix: &str,
+    module_id: &ModuleId,
+) -> ModuleExports {
+    let (value_renames, type_renames, class_renames) =
+        crate::builder::qualify::collect_local_renames_from_declarations(&package.decls, prefix);
+    exports_from_declarations(
+        &package.decls,
+        &value_renames,
+        &type_renames,
+        &class_renames,
+        module_id,
+    )
+}
+
+fn exports_from_declarations(
+    decls: &Declarations,
+    value_renames: &BTreeMap<Symbol, Symbol>,
+    type_renames: &BTreeMap<Symbol, Symbol>,
+    class_renames: &BTreeMap<Symbol, Symbol>,
+    module_id: &ModuleId,
+) -> ModuleExports {
     let module_key = module_key_for_module(module_id);
 
     let mut exports = ModuleExports::default();
 
-    for decl in &compilation_unit.decls {
-        match decl {
-            Decl::Fn(fd) if fd.is_pub => {
-                if let Some(internal) = value_renames.get(&fd.name.name) {
-                    exports.insert_value(
-                        fd.name.name.clone(),
-                        CanonicalSymbol::from_symbol(
-                            module_key,
-                            SymbolKind::Value,
-                            fd.name.name.clone(),
-                            internal.clone(),
-                        ),
-                    );
-                }
-            }
-            Decl::DeclareFn(df) if df.is_pub => {
-                if let Some(internal) = value_renames.get(&df.name.name) {
-                    exports.insert_value(
-                        df.name.name.clone(),
-                        CanonicalSymbol::from_symbol(
-                            module_key,
-                            SymbolKind::Value,
-                            df.name.name.clone(),
-                            internal.clone(),
-                        ),
-                    );
-                }
-            }
-            Decl::Type(td) if td.is_pub => {
-                if let Some(internal) = type_renames.get(&td.name) {
-                    exports.insert_type(
+    for fd in &decls.fns {
+        if fd.is_pub
+            && let Some(internal) = value_renames.get(&fd.name.name)
+        {
+            exports.insert_value(
+                fd.name.name.clone(),
+                CanonicalSymbol::from_symbol(
+                    module_key,
+                    SymbolKind::Value,
+                    fd.name.name.clone(),
+                    internal.clone(),
+                ),
+            );
+        }
+    }
+
+    for df in &decls.declare_fns {
+        if df.is_pub
+            && let Some(internal) = value_renames.get(&df.name.name)
+        {
+            exports.insert_value(
+                df.name.name.clone(),
+                CanonicalSymbol::from_symbol(
+                    module_key,
+                    SymbolKind::Value,
+                    df.name.name.clone(),
+                    internal.clone(),
+                ),
+            );
+        }
+    }
+
+    for td in &decls.types {
+        if td.is_pub {
+            if let Some(internal) = type_renames.get(&td.name) {
+                exports.insert_type(
+                    td.name.clone(),
+                    CanonicalSymbol::from_symbol(
+                        module_key,
+                        SymbolKind::Type,
                         td.name.clone(),
+                        internal.clone(),
+                    ),
+                );
+            }
+            for variant in &td.variants {
+                if let Some(internal) = value_renames.get(&variant.name) {
+                    exports.insert_value(
+                        variant.name.clone(),
                         CanonicalSymbol::from_symbol(
                             module_key,
-                            SymbolKind::Type,
-                            td.name.clone(),
-                            internal.clone(),
-                        ),
-                    );
-                }
-                for variant in &td.variants {
-                    if let Some(internal) = value_renames.get(&variant.name) {
-                        exports.insert_value(
+                            SymbolKind::Value,
                             variant.name.clone(),
-                            CanonicalSymbol::from_symbol(
-                                module_key,
-                                SymbolKind::Value,
-                                variant.name.clone(),
-                                internal.clone(),
-                            ),
-                        );
-                    }
-                }
-            }
-            Decl::Class(cd) if cd.is_pub => {
-                if let Some(internal) = class_renames.get(&cd.name) {
-                    exports.insert_class(
-                        cd.name.clone(),
-                        CanonicalSymbol::from_symbol(
-                            module_key,
-                            SymbolKind::Class,
-                            cd.name.clone(),
                             internal.clone(),
                         ),
                     );
                 }
             }
-            Decl::Instance(..)
-            | Decl::Import(..)
-            | Decl::Fn(..)
-            | Decl::DeclareFn(..)
-            | Decl::Type(..)
-            | Decl::Class(..) => {}
+        }
+    }
+
+    for cd in &decls.classes {
+        if cd.is_pub
+            && let Some(internal) = class_renames.get(&cd.name)
+        {
+            exports.insert_class(
+                cd.name.clone(),
+                CanonicalSymbol::from_symbol(
+                    module_key,
+                    SymbolKind::Class,
+                    cd.name.clone(),
+                    internal.clone(),
+                ),
+            );
         }
     }
 
@@ -403,24 +452,25 @@ pub fn parse_program_from_source(
     Ok(program)
 }
 
-pub fn program_from_resolved<State>(
+pub fn package_from_resolved<State>(
     resolved: &ResolvedModule<State>,
-) -> Result<CompilationUnit, EngineError>
+) -> Result<CompilationPackage, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
     match &resolved.content {
         ResolvedModuleContent::Source(source) => {
-            parse_program_from_source(source, Some(&resolved.id))
+            let program = parse_program_from_source(source, Some(&resolved.id))?;
+            Ok(CompilationPackage::from(program))
         }
-        ResolvedModuleContent::CompilationUnit(program) => {
-            if program.body.is_some() {
+        ResolvedModuleContent::CompilationPackage(package) => {
+            if package.body.is_some() {
                 return Err(crate::ModuleError::TopLevelExprInModule {
                     module: resolved.id.clone(),
                 }
                 .into());
             }
-            Ok(program.clone())
+            Ok(package.clone())
         }
         ResolvedModuleContent::Module(_) => Err(EngineError::Internal(format!(
             "Rust module `{}` must be installed before extracting a program",

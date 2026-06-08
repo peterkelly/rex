@@ -1,5 +1,9 @@
-use rex_ast::Span;
-use rex_ast::{Decl, TypeDecl, TypeVariant};
+use std::sync::Arc;
+
+use rex_ast::{
+    ClassDecl, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, InstanceDecl, Span,
+    TypeDecl, TypeVariant,
+};
 use rex_typesystem::{
     types::{AdtDecl, RexType, Scheme, Type},
     types::{collect_adts_in_types, order_adt_family},
@@ -15,6 +19,94 @@ use crate::{
     util::{adt_family_error_to_engine, type_expr_from_type},
 };
 
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct Declarations {
+    pub types: Vec<TypeDecl>,
+    pub fns: Vec<FnDecl>,
+    pub declare_fns: Vec<DeclareFnDecl>,
+    pub imports: Vec<ImportDecl>,
+    pub classes: Vec<ClassDecl>,
+    pub instances: Vec<InstanceDecl>,
+}
+
+impl Declarations {
+    pub fn is_empty(&self) -> bool {
+        self.types.is_empty()
+            && self.fns.is_empty()
+            && self.declare_fns.is_empty()
+            && self.imports.is_empty()
+            && self.classes.is_empty()
+            && self.instances.is_empty()
+    }
+
+    pub fn push_decl(&mut self, decl: Decl) {
+        match decl {
+            Decl::Type(decl) => self.types.push(decl),
+            Decl::Fn(decl) => self.fns.push(decl),
+            Decl::DeclareFn(decl) => self.declare_fns.push(decl),
+            Decl::Import(decl) => self.imports.push(decl),
+            Decl::Class(decl) => self.classes.push(decl),
+            Decl::Instance(decl) => self.instances.push(decl),
+        }
+    }
+
+    pub fn extend_decls(&mut self, decls: impl IntoIterator<Item = Decl>) {
+        for decl in decls {
+            self.push_decl(decl);
+        }
+    }
+}
+
+impl From<Vec<Decl>> for Declarations {
+    fn from(decls: Vec<Decl>) -> Self {
+        let mut out = Declarations::default();
+        out.extend_decls(decls);
+        out
+    }
+}
+
+impl From<&[Decl]> for Declarations {
+    fn from(decls: &[Decl]) -> Self {
+        Declarations::from(decls.to_vec())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct CompilationPackage {
+    pub decls: Declarations,
+    pub body: Option<Arc<Expr>>,
+}
+
+impl CompilationPackage {
+    pub fn from_compilation_unit(unit: CompilationUnit) -> Self {
+        Self {
+            decls: Declarations::from(unit.decls),
+            body: unit.body,
+        }
+    }
+}
+
+impl From<CompilationUnit> for CompilationPackage {
+    fn from(unit: CompilationUnit) -> Self {
+        Self::from_compilation_unit(unit)
+    }
+}
+
+impl From<&CompilationUnit> for CompilationPackage {
+    fn from(unit: &CompilationUnit) -> Self {
+        Self {
+            decls: Declarations::from(unit.decls.as_slice()),
+            body: unit.body.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StagedAdtDecl {
+    pub adt: AdtDecl,
+    pub type_decl: TypeDecl,
+}
+
 /// A staged host module that you build up in Rust and later inject into a [`Builder`].
 ///
 /// `Module` is the host-side representation of a Rex module. It lets embedders collect:
@@ -28,7 +120,7 @@ use crate::{
 /// from Rex code.
 ///
 /// This type is intentionally mutable and staged: you can build it incrementally, inspect its
-/// structured declarations plus [`Module::exports`], transform them, and only inject it once you
+/// staged declarations plus [`Module::exports`], transform them, and only inject it once you
 /// are satisfied with the final module shape.
 ///
 /// # Examples
@@ -61,20 +153,27 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     /// ```
     pub name: String,
 
-    /// Structured declarations registered by the embedder.
-    ///
-    /// APIs such as [`Module::add_adt_decl`] and [`Module::add_rex_adt`] append here. The field
-    /// is public so advanced embedders can inspect, transform, or assemble module declarations
-    /// programmatically before injection.
-    pub decls: Vec<Decl>,
+    /// Import declarations staged for this module.
+    pub imports: Vec<ImportDecl>,
 
     /// ADT declarations staged for runtime constructor injection.
     ///
     /// APIs such as [`Module::add_adt_decl`], [`Module::add_adt_family`], and
     /// [`Module::add_rex_adt`] append here. The engine uses this list to register
-    /// constructor schemes for global modules and to avoid duplicate global type
-    /// declaration injection.
-    pub adts: Vec<AdtDecl>,
+    /// constructor schemes and to derive the module's source-level type declarations.
+    pub adts: Vec<StagedAdtDecl>,
+
+    /// Rex function declarations staged for this module.
+    pub fns: Vec<FnDecl>,
+
+    /// Native interface declarations staged for this module.
+    pub declare_fns: Vec<DeclareFnDecl>,
+
+    /// Typeclass declarations staged for this module.
+    pub classes: Vec<ClassDecl>,
+
+    /// Typeclass instance declarations staged for this module.
+    pub instances: Vec<InstanceDecl>,
 
     /// Staged host exports that will become callable Rex values when the module is injected.
     ///
@@ -124,26 +223,39 @@ where
     ///
     /// let module = Module::<()>::new("acme.math");
     /// assert_eq!(module.name, "acme.math");
-    /// assert!(module.decls.is_empty());
+    /// assert!(module.declarations().is_empty());
     /// assert!(module.exports.is_empty());
     /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            decls: Vec::new(),
+            imports: Vec::new(),
             adts: Vec::new(),
+            fns: Vec::new(),
+            declare_fns: Vec::new(),
+            classes: Vec::new(),
+            instances: Vec::new(),
             exports: Vec::new(),
         }
     }
 
-    /// Append a structured Rex declaration to this staged module.
-    pub fn add_decl(&mut self, decl: Decl) {
-        self.decls.push(decl);
-    }
-
-    /// Append multiple structured Rex declarations to this staged module.
-    pub fn add_decls(&mut self, decls: impl IntoIterator<Item = Decl>) {
-        self.decls.extend(decls);
+    /// Return this module's staged declarations in the compiler package representation.
+    ///
+    /// Type declarations are derived from [`Module::adts`] so staged ADTs remain the single source
+    /// of truth for host-provided module-local types.
+    pub fn declarations(&self) -> Declarations {
+        Declarations {
+            types: self
+                .adts
+                .iter()
+                .map(|staged| staged.type_decl.clone())
+                .collect(),
+            fns: self.fns.clone(),
+            declare_fns: self.declare_fns.clone(),
+            imports: self.imports.clone(),
+            classes: self.classes.clone(),
+            instances: self.instances.clone(),
+        }
     }
 
     /// Convert an [`AdtDecl`] into a structured type declaration and append it to this module.
@@ -170,12 +282,12 @@ where
     pub fn add_adt_family(&mut self, adts: Vec<AdtDecl>) -> Result<(), EngineError> {
         for adt in order_adt_family(adts).map_err(adt_family_error_to_engine)? {
             let candidate = type_decl_from_adt(&adt);
-            let already_staged = self.decls.iter().find_map(|decl| match decl {
-                Decl::Type(type_decl) if type_decl.name == adt.name => Some(type_decl),
-                _ => None,
-            });
-            if let Some(existing_decl) = already_staged {
-                if existing_decl != &candidate {
+            let already_staged = self
+                .adts
+                .iter()
+                .find(|staged| staged.type_decl.name == adt.name);
+            if let Some(existing) = already_staged {
+                if existing.type_decl != candidate {
                     return Err(EngineError::Custom(format!(
                         "conflicting staged ADT registration for `{}`: existing declaration differs from new ADT declaration",
                         adt.name,
@@ -183,8 +295,10 @@ where
                 }
                 continue;
             }
-            self.adts.push(adt);
-            self.decls.push(Decl::Type(candidate));
+            self.adts.push(StagedAdtDecl {
+                adt,
+                type_decl: candidate,
+            });
         }
         Ok(())
     }

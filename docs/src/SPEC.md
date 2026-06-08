@@ -130,8 +130,10 @@ Type/class rewrites run with declaration ordering semantics:
 - Importing a module does not execute arbitrary top-level expressions.
 - Module initialization is declaration-driven: exported values/types/classes are registered from
   declarations, and import resolution rewrites references to canonical internal symbols.
-- Source and prebuilt-`CompilationUnit` imports are loaded through strongly connected component
-  (SCC) loading of module interfaces, so cyclic source imports are supported.
+- Source imports are parsed as `CompilationUnit`s, then converted into `CompilationPackage`s for
+  module processing. Source-derived and prebuilt `CompilationPackage` imports are loaded through
+  strongly connected component (SCC) loading of module interfaces, so cyclic source imports are
+  supported.
 - Rust modules returned by importers are installed lazily through the same named-module machinery as
   eager `Builder::inject_module`. They must be named modules matching the resolved module identity,
   not root/global modules, and they do not run nested Rex import graph loading.

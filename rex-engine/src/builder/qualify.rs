@@ -2,202 +2,264 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use rex_ast::{
-    ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl,
+    ClassDecl, ClassMethodSig, CompilationUnit, DeclareFnDecl, Expr, FnDecl, InstanceDecl,
     InstanceMethodImpl, NameRef, Pattern, Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant,
     Var,
 };
 
-use crate::modules::{collect_pattern_bindings, types::qualify};
+use crate::modules::{CompilationPackage, Declarations, collect_pattern_bindings, types::qualify};
 
-pub(crate) fn qualify_program(compilation_unit: &CompilationUnit, prefix: &str) -> CompilationUnit {
+pub(crate) fn qualify_package(package: &CompilationPackage, prefix: &str) -> CompilationPackage {
     let (value_renames, type_renames, class_renames) =
-        collect_local_renames(compilation_unit, prefix);
+        collect_local_renames_from_declarations(&package.decls, prefix);
+    qualify_package_with_renames(package, &value_renames, &type_renames, &class_renames)
+}
 
-    let decls = compilation_unit
-        .decls
-        .iter()
-        .filter_map(|decl| match decl {
-            Decl::Import(..) => None,
-            Decl::Type(td) => {
-                let name = type_renames
-                    .get(&td.name)
-                    .cloned()
-                    .unwrap_or_else(|| td.name.clone());
-                let variants = td
-                    .variants
-                    .iter()
-                    .map(|v| TypeVariant {
-                        name: value_renames
-                            .get(&v.name)
-                            .cloned()
-                            .unwrap_or_else(|| v.name.clone()),
-                        args: v
-                            .args
-                            .iter()
-                            .map(|t| rename_type_expr(t, &type_renames, &class_renames))
-                            .collect(),
-                    })
-                    .collect();
-                Some(Decl::Type(TypeDecl {
-                    span: td.span,
-                    is_pub: td.is_pub,
-                    name,
-                    params: td.params.clone(),
-                    variants,
-                }))
-            }
-            Decl::Fn(fd) => {
-                let name_sym = value_renames
-                    .get(&fd.name.name)
-                    .cloned()
-                    .unwrap_or_else(|| fd.name.name.clone());
-                let name = Var {
-                    span: fd.name.span,
-                    name: name_sym,
-                };
-                let params: Vec<(Var, TypeExpr)> = fd
-                    .params
-                    .iter()
-                    .map(|(v, ann)| {
-                        (
-                            v.clone(),
-                            rename_type_expr(ann, &type_renames, &class_renames),
-                        )
-                    })
-                    .collect();
-                let ret = rename_type_expr(&fd.ret, &type_renames, &class_renames);
-                let constraints =
-                    rename_constraints(&fd.constraints, &type_renames, &class_renames);
-                let mut bound = BTreeSet::new();
-                for (v, _) in &params {
-                    bound.insert(v.name.clone());
-                }
-                let body = Arc::new(rename_expr(
-                    fd.body.as_ref(),
-                    &mut bound,
-                    &value_renames,
-                    &type_renames,
-                    &class_renames,
-                ));
-                Some(Decl::Fn(FnDecl {
-                    span: fd.span,
-                    is_pub: fd.is_pub,
-                    name,
-                    type_params: fd.type_params.clone(),
-                    params,
-                    ret,
-                    constraints,
-                    body,
-                }))
-            }
-            Decl::DeclareFn(df) => {
-                let name_sym = value_renames
-                    .get(&df.name.name)
-                    .cloned()
-                    .unwrap_or_else(|| df.name.name.clone());
-                let name = Var {
-                    span: df.name.span,
-                    name: name_sym,
-                };
-                let params: Vec<(Var, TypeExpr)> = df
-                    .params
-                    .iter()
-                    .map(|(v, ann)| {
-                        (
-                            v.clone(),
-                            rename_type_expr(ann, &type_renames, &class_renames),
-                        )
-                    })
-                    .collect();
-                let ret = rename_type_expr(&df.ret, &type_renames, &class_renames);
-                let constraints =
-                    rename_constraints(&df.constraints, &type_renames, &class_renames);
-                Some(Decl::DeclareFn(DeclareFnDecl {
-                    span: df.span,
-                    is_pub: df.is_pub,
-                    name,
-                    type_params: df.type_params.clone(),
-                    params,
-                    ret,
-                    constraints,
-                }))
-            }
-            Decl::Class(cd) => {
-                let name = class_renames
-                    .get(&cd.name)
-                    .cloned()
-                    .unwrap_or_else(|| cd.name.clone());
-                let supers = rename_constraints(&cd.supers, &type_renames, &class_renames);
-                let methods = cd
-                    .methods
-                    .iter()
-                    .map(|m| ClassMethodSig {
-                        name: m.name.clone(),
-                        type_params: m.type_params.clone(),
-                        typ: rename_type_expr(&m.typ, &type_renames, &class_renames),
-                    })
-                    .collect();
-                Some(Decl::Class(ClassDecl {
-                    span: cd.span,
-                    is_pub: cd.is_pub,
-                    name,
-                    params: cd.params.clone(),
-                    supers,
-                    methods,
-                }))
-            }
-            Decl::Instance(id) => {
-                let class = class_renames
-                    .get(&id.class)
-                    .cloned()
-                    .unwrap_or_else(|| id.class.clone());
-                let head = rename_type_expr(&id.head, &type_renames, &class_renames);
-                let context = rename_constraints(&id.context, &type_renames, &class_renames);
-                let mut methods = Vec::new();
-                for m in &id.methods {
-                    let mut bound = BTreeSet::new();
-                    let body = Arc::new(rename_expr(
-                        m.body.as_ref(),
-                        &mut bound,
-                        &value_renames,
-                        &type_renames,
-                        &class_renames,
-                    ));
-                    methods.push(InstanceMethodImpl {
-                        name: m.name.clone(),
-                        type_params: m.type_params.clone(),
-                        ann: m
-                            .ann
-                            .as_ref()
-                            .map(|t| rename_type_expr(t, &type_renames, &class_renames)),
-                        body,
-                    });
-                }
-                Some(Decl::Instance(InstanceDecl {
-                    span: id.span,
-                    is_pub: id.is_pub,
-                    type_params: id.type_params.clone(),
-                    class,
-                    head,
-                    context,
-                    methods,
-                }))
-            }
-        })
-        .collect();
-
-    let body = compilation_unit.body.as_ref().map(|body| {
+fn qualify_package_with_renames(
+    package: &CompilationPackage,
+    value_renames: &BTreeMap<Symbol, Symbol>,
+    type_renames: &BTreeMap<Symbol, Symbol>,
+    class_renames: &BTreeMap<Symbol, Symbol>,
+) -> CompilationPackage {
+    let body = package.body.as_ref().map(|body| {
         let mut bound = BTreeSet::new();
         Arc::new(rename_expr(
             body.as_ref(),
             &mut bound,
-            &value_renames,
-            &type_renames,
-            &class_renames,
+            value_renames,
+            type_renames,
+            class_renames,
         ))
     });
 
-    CompilationUnit { decls, body }
+    CompilationPackage {
+        decls: Declarations {
+            types: package
+                .decls
+                .types
+                .iter()
+                .map(|td| qualify_type_decl(td, value_renames, type_renames, class_renames))
+                .collect(),
+            fns: package
+                .decls
+                .fns
+                .iter()
+                .map(|fd| qualify_fn_decl(fd, value_renames, type_renames, class_renames))
+                .collect(),
+            declare_fns: package
+                .decls
+                .declare_fns
+                .iter()
+                .map(|df| qualify_declare_fn_decl(df, value_renames, type_renames, class_renames))
+                .collect(),
+            imports: Vec::new(),
+            classes: package
+                .decls
+                .classes
+                .iter()
+                .map(|cd| qualify_class_decl(cd, type_renames, class_renames))
+                .collect(),
+            instances: package
+                .decls
+                .instances
+                .iter()
+                .map(|id| qualify_instance_decl(id, value_renames, type_renames, class_renames))
+                .collect(),
+        },
+        body,
+    }
+}
+
+fn qualify_type_decl(
+    td: &TypeDecl,
+    value_renames: &BTreeMap<Symbol, Symbol>,
+    type_renames: &BTreeMap<Symbol, Symbol>,
+    class_renames: &BTreeMap<Symbol, Symbol>,
+) -> TypeDecl {
+    let name = type_renames
+        .get(&td.name)
+        .cloned()
+        .unwrap_or_else(|| td.name.clone());
+    let variants = td
+        .variants
+        .iter()
+        .map(|v| TypeVariant {
+            name: value_renames
+                .get(&v.name)
+                .cloned()
+                .unwrap_or_else(|| v.name.clone()),
+            args: v
+                .args
+                .iter()
+                .map(|t| rename_type_expr(t, type_renames, class_renames))
+                .collect(),
+        })
+        .collect();
+    TypeDecl {
+        span: td.span,
+        is_pub: td.is_pub,
+        name,
+        params: td.params.clone(),
+        variants,
+    }
+}
+
+fn qualify_fn_decl(
+    fd: &FnDecl,
+    value_renames: &BTreeMap<Symbol, Symbol>,
+    type_renames: &BTreeMap<Symbol, Symbol>,
+    class_renames: &BTreeMap<Symbol, Symbol>,
+) -> FnDecl {
+    let name_sym = value_renames
+        .get(&fd.name.name)
+        .cloned()
+        .unwrap_or_else(|| fd.name.name.clone());
+    let name = Var {
+        span: fd.name.span,
+        name: name_sym,
+    };
+    let params: Vec<(Var, TypeExpr)> = fd
+        .params
+        .iter()
+        .map(|(v, ann)| {
+            (
+                v.clone(),
+                rename_type_expr(ann, type_renames, class_renames),
+            )
+        })
+        .collect();
+    let ret = rename_type_expr(&fd.ret, type_renames, class_renames);
+    let constraints = rename_constraints(&fd.constraints, type_renames, class_renames);
+    let mut bound = BTreeSet::new();
+    for (v, _) in &params {
+        bound.insert(v.name.clone());
+    }
+    let body = Arc::new(rename_expr(
+        fd.body.as_ref(),
+        &mut bound,
+        value_renames,
+        type_renames,
+        class_renames,
+    ));
+    FnDecl {
+        span: fd.span,
+        is_pub: fd.is_pub,
+        name,
+        type_params: fd.type_params.clone(),
+        params,
+        ret,
+        constraints,
+        body,
+    }
+}
+
+fn qualify_declare_fn_decl(
+    df: &DeclareFnDecl,
+    value_renames: &BTreeMap<Symbol, Symbol>,
+    type_renames: &BTreeMap<Symbol, Symbol>,
+    class_renames: &BTreeMap<Symbol, Symbol>,
+) -> DeclareFnDecl {
+    let name_sym = value_renames
+        .get(&df.name.name)
+        .cloned()
+        .unwrap_or_else(|| df.name.name.clone());
+    let name = Var {
+        span: df.name.span,
+        name: name_sym,
+    };
+    let params: Vec<(Var, TypeExpr)> = df
+        .params
+        .iter()
+        .map(|(v, ann)| {
+            (
+                v.clone(),
+                rename_type_expr(ann, type_renames, class_renames),
+            )
+        })
+        .collect();
+    let ret = rename_type_expr(&df.ret, type_renames, class_renames);
+    let constraints = rename_constraints(&df.constraints, type_renames, class_renames);
+    DeclareFnDecl {
+        span: df.span,
+        is_pub: df.is_pub,
+        name,
+        type_params: df.type_params.clone(),
+        params,
+        ret,
+        constraints,
+    }
+}
+
+fn qualify_class_decl(
+    cd: &ClassDecl,
+    type_renames: &BTreeMap<Symbol, Symbol>,
+    class_renames: &BTreeMap<Symbol, Symbol>,
+) -> ClassDecl {
+    let name = class_renames
+        .get(&cd.name)
+        .cloned()
+        .unwrap_or_else(|| cd.name.clone());
+    let supers = rename_constraints(&cd.supers, type_renames, class_renames);
+    let methods = cd
+        .methods
+        .iter()
+        .map(|m| ClassMethodSig {
+            name: m.name.clone(),
+            type_params: m.type_params.clone(),
+            typ: rename_type_expr(&m.typ, type_renames, class_renames),
+        })
+        .collect();
+    ClassDecl {
+        span: cd.span,
+        is_pub: cd.is_pub,
+        name,
+        params: cd.params.clone(),
+        supers,
+        methods,
+    }
+}
+
+fn qualify_instance_decl(
+    id: &InstanceDecl,
+    value_renames: &BTreeMap<Symbol, Symbol>,
+    type_renames: &BTreeMap<Symbol, Symbol>,
+    class_renames: &BTreeMap<Symbol, Symbol>,
+) -> InstanceDecl {
+    let class = class_renames
+        .get(&id.class)
+        .cloned()
+        .unwrap_or_else(|| id.class.clone());
+    let head = rename_type_expr(&id.head, type_renames, class_renames);
+    let context = rename_constraints(&id.context, type_renames, class_renames);
+    let mut methods = Vec::new();
+    for m in &id.methods {
+        let mut bound = BTreeSet::new();
+        let body = Arc::new(rename_expr(
+            m.body.as_ref(),
+            &mut bound,
+            value_renames,
+            type_renames,
+            class_renames,
+        ));
+        methods.push(InstanceMethodImpl {
+            name: m.name.clone(),
+            type_params: m.type_params.clone(),
+            ann: m
+                .ann
+                .as_ref()
+                .map(|t| rename_type_expr(t, type_renames, class_renames)),
+            body,
+        });
+    }
+    InstanceDecl {
+        span: id.span,
+        is_pub: id.is_pub,
+        type_params: id.type_params.clone(),
+        class,
+        head,
+        context,
+        methods,
+    }
 }
 
 fn rename_expr(
@@ -592,29 +654,38 @@ pub(crate) fn collect_local_renames(
     BTreeMap<Symbol, Symbol>,
     BTreeMap<Symbol, Symbol>,
 ) {
+    collect_local_renames_from_declarations(
+        &Declarations::from(compilation_unit.decls.as_slice()),
+        prefix,
+    )
+}
+
+pub(crate) fn collect_local_renames_from_declarations(
+    decls: &Declarations,
+    prefix: &str,
+) -> (
+    BTreeMap<Symbol, Symbol>,
+    BTreeMap<Symbol, Symbol>,
+    BTreeMap<Symbol, Symbol>,
+) {
     let mut values = BTreeMap::new();
     let mut types = BTreeMap::new();
     let mut classes = BTreeMap::new();
 
-    for decl in &compilation_unit.decls {
-        match decl {
-            Decl::Fn(fd) => {
-                values.insert(fd.name.name.clone(), qualify(prefix, &fd.name.name));
-            }
-            Decl::DeclareFn(df) => {
-                values.insert(df.name.name.clone(), qualify(prefix, &df.name.name));
-            }
-            Decl::Type(td) => {
-                types.insert(td.name.clone(), qualify(prefix, &td.name));
-                for variant in &td.variants {
-                    values.insert(variant.name.clone(), qualify(prefix, &variant.name));
-                }
-            }
-            Decl::Class(cd) => {
-                classes.insert(cd.name.clone(), qualify(prefix, &cd.name));
-            }
-            Decl::Instance(..) | Decl::Import(..) => {}
+    for fd in &decls.fns {
+        values.insert(fd.name.name.clone(), qualify(prefix, &fd.name.name));
+    }
+    for df in &decls.declare_fns {
+        values.insert(df.name.name.clone(), qualify(prefix, &df.name.name));
+    }
+    for td in &decls.types {
+        types.insert(td.name.clone(), qualify(prefix, &td.name));
+        for variant in &td.variants {
+            values.insert(variant.name.clone(), qualify(prefix, &variant.name));
         }
+    }
+    for cd in &decls.classes {
+        classes.insert(cd.name.clone(), qualify(prefix, &cd.name));
     }
 
     (values, types, classes)

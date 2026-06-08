@@ -114,6 +114,12 @@ pub use rex_engine::Importer;
 /// Staged host module containing Rex declarations and Rust-backed exports.
 pub use rex_engine::Module;
 
+pub use rex_engine::CompilationPackage;
+
+pub use rex_engine::Declarations;
+
+pub use rex_engine::StagedAdtDecl;
+
 /// Stable identity assigned to an imported module.
 pub use rex_engine::ModuleId;
 

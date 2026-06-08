@@ -85,10 +85,12 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   or content hash. Importers decide whether a module name maps to a file, database row, in-memory
   string, open editor buffer, generated AST, or Rust host module.
 - **Importer payloads and caching**: importers are generic over host state and can return Rex
-  source, a prebuilt `CompilationUnit`, or a Rust-backed `Module<State>`. Source and
-  `CompilationUnit` modules are loaded through the SCC module graph path. Rust-backed modules are
-  installed lazily through the same internal module installer used by eager `inject_module`, and
-  are self-contained host modules rather than Rex source modules with nested import loading.
+  source, a prebuilt `CompilationPackage`, or a Rust-backed `Module<State>`. Source imports are
+  parsed into `CompilationUnit` values, then converted into `CompilationPackage` for compiler
+  module processing. Source-derived and prebuilt packages are loaded through the SCC module graph
+  path. Rust-backed modules are installed lazily through the same internal module installer used by
+  eager `inject_module`, and are self-contained host modules rather than Rex source modules with
+  nested import loading.
   Importer results are cached for one compile so the same request is not resolved repeatedly.
 
 ## Intentional String Boundaries

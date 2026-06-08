@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use rex_ast::{CompilationUnit, Decl, Expr, Symbol};
+use rex_ast::{CompilationUnit, Expr, Symbol};
 use rex_engine::{Builder, CompileOptions, EngineError, Module, Value};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
@@ -193,18 +193,20 @@ fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
         .add_adt_decls_from_types(&mut builder, types)
         .unwrap();
 
-    assert_eq!(module.decls.len(), 2);
+    assert_eq!(module.adts.len(), 2);
     assert!(
         module
-            .decls
+            .declarations()
+            .types
             .iter()
-            .any(|d| matches!(d, Decl::Type(td) if td.name == Symbol::intern("Foo")))
+            .any(|td| td.name == Symbol::intern("Foo"))
     );
     assert!(
         module
-            .decls
+            .declarations()
+            .types
             .iter()
-            .any(|d| matches!(d, Decl::Type(td) if td.name == Symbol::intern("Bar")))
+            .any(|td| td.name == Symbol::intern("Bar"))
     );
 }
 
@@ -306,19 +308,9 @@ async fn record_update_requires_known_variant_for_sum_types() {
           f (Bar { x = 1 })
         "#,
     );
-    let mut builder = builder_with_arith();
-    let mut module = Module::global();
-    module.add_decls(program.decls.clone());
-    builder.inject_module(module).unwrap();
+    let builder = builder_with_arith();
     let compiler = builder.build_compiler();
-    let body_program = CompilationUnit {
-        decls: Vec::new(),
-        body: program.body.clone(),
-    };
-    match compiler
-        .compile_program(&body_program, compile_options())
-        .await
-    {
+    match compiler.compile_program(&program, compile_options()).await {
         Err(err) => {
             let EngineError::Type(err) = err else {
                 panic!("expected type error");

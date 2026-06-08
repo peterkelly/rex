@@ -11,15 +11,15 @@ use crate::{
     builder::{
         core::{Builder, ModuleLoaderState, RuntimePolicy, RuntimeRegistry},
         rewrite::load_module_types_from_resolved,
-        rewrite::{ModuleLoadState, rewrite_program_with_imports},
+        rewrite::{ModuleLoadState, rewrite_package_with_imports},
     },
     compiler::{program::CompiledProgram, type_check::type_check_engine},
     env::RootedEnvironment,
     evaluator::runtime_core::RuntimeCore,
     manifest::{MainInputSpec, MainSignature},
     modules::{
-        ImportChain, ImportRequest, Importer, ModuleId, ResolvedModuleContent,
-        exports_from_program, parse_program_from_source, prefix_for_module, program_from_resolved,
+        CompilationPackage, ImportChain, ImportRequest, Importer, ModuleId, ResolvedModuleContent,
+        exports_from_package, package_from_resolved, parse_program_from_source, prefix_for_module,
     },
     value::Heap,
 };
@@ -115,24 +115,18 @@ where
         )
     }
 
-    fn rewrite_and_inject_program<'a>(
+    fn rewrite_and_inject_package<'a>(
         &'a mut self,
-        compilation_unit: &'a CompilationUnit,
+        package: &'a CompilationPackage,
         importer: Option<ModuleId>,
         prefix: &'a str,
         chain: &'a ImportChain<State>,
         load_state: &'a mut ModuleLoadState<State>,
-    ) -> BoxFuture<'a, Result<CompilationUnit, EngineError>> {
+    ) -> BoxFuture<'a, Result<CompilationPackage, EngineError>> {
         Box::pin(async move {
-            let rewritten = rewrite_program_with_imports(
-                self,
-                compilation_unit,
-                importer,
-                prefix,
-                chain,
-                load_state,
-            )
-            .await?;
+            let rewritten =
+                rewrite_package_with_imports(self, package, importer, prefix, chain, load_state)
+                    .await?;
             self.inject_decls(&rewritten.decls)?;
             Ok(rewritten)
         })
@@ -153,14 +147,9 @@ where
         let prefix = prefix_for_module(&module_id);
         let mut load_state = ModuleLoadState::default();
         let chain = self.module_loader.system.import_chain();
+        let package = CompilationPackage::from(&entry.program);
         let rewritten = self
-            .rewrite_and_inject_program(
-                &entry.program,
-                Some(module_id),
-                &prefix,
-                &chain,
-                &mut load_state,
-            )
+            .rewrite_and_inject_package(&package, Some(module_id), &prefix, &chain, &mut load_state)
             .await?;
         let body = rewritten
             .body
@@ -181,8 +170,9 @@ where
         let prefix = prefix_for_module(&module_id);
         let mut load_state = ModuleLoadState::default();
         let chain = self.module_loader.system.import_chain();
+        let package = CompilationPackage::from(program);
         let rewritten = self
-            .rewrite_and_inject_program(&program, Some(module_id), &prefix, &chain, &mut load_state)
+            .rewrite_and_inject_package(&package, Some(module_id), &prefix, &chain, &mut load_state)
             .await?;
         let body = rewritten
             .body
@@ -211,11 +201,11 @@ where
         load_state.loading_mut().insert(resolved.id.clone());
 
         let prefix = prefix_for_module(&resolved.id);
-        let program = program_from_resolved(&resolved)?;
+        let package = package_from_resolved(&resolved)?;
 
         let rewritten = self
-            .rewrite_and_inject_program(
-                &program,
+            .rewrite_and_inject_package(
+                &package,
                 Some(resolved.id.clone()),
                 &prefix,
                 &chain,
@@ -227,7 +217,7 @@ where
             .unwrap_or_else(|| Arc::new(Expr::Tuple(Default::default(), Vec::new())));
         let result = self.infer_type(body.as_ref())?;
 
-        let exports = exports_from_program(&program, &prefix, &resolved.id);
+        let exports = exports_from_package(&package, &prefix, &resolved.id);
         load_state.loaded_mut().insert(resolved.id.clone(), exports);
         load_state.loading_mut().remove(&resolved.id);
 

@@ -84,8 +84,9 @@ use crate::{
         },
     },
     modules::{
-        CanonicalSymbol, ModuleExports, ModuleId, PRELUDE_MODULE_NAME, ResolvedModule,
-        ResolvedModuleContent, SymbolKind, VirtualModule, module_key_for_module,
+        CanonicalSymbol, CompilationPackage, Declarations, ModuleExports, ModuleId,
+        PRELUDE_MODULE_NAME, ResolvedModule, ResolvedModuleContent, SymbolKind, VirtualModule,
+        module_key_for_module,
     },
     stack::NativeUnaryShape,
     util::split_fun,
@@ -234,11 +235,11 @@ where
     engine
         .module_loader
         .module_interface_cache
-        .insert(module_id.clone(), Vec::new());
+        .insert(module_id.clone(), Declarations::default());
     engine.module_loader.virtual_modules.insert(
         PRELUDE_MODULE_NAME.to_string(),
         VirtualModule {
-            decls: compilation_unit.decls.clone(),
+            package: CompilationPackage::from(&compilation_unit),
         },
     );
     engine
@@ -248,7 +249,9 @@ where
             module_id: module_id.clone(),
             resolved: ResolvedModule {
                 id: module_id,
-                content: ResolvedModuleContent::CompilationUnit(compilation_unit),
+                content: ResolvedModuleContent::CompilationPackage(CompilationPackage::from(
+                    &compilation_unit,
+                )),
             },
         }));
     Ok(())

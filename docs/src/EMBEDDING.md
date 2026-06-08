@@ -248,9 +248,11 @@ while leaf Rex types inherit a no-op default. For example, if `Label` contains a
 `Label` is enough; you do not need to stage `Side` separately. Cyclic ADT families are still
 rejected.
 
-`Module` also exposes its staged `decls`, `adts`, and `exports` vectors directly. That is useful
-if you want to inspect, transform, or assemble a module in multiple passes before calling
-`Builder::inject_module`.
+`Module` also exposes its staged declarations directly as categorized fields: `imports`,
+`adts`, `fns`, `declare_fns`, `classes`, `instances`, and `exports`. Type declarations come from
+the staged `adts` list; call `Module::declarations()` when you need the derived
+`Declarations` package view used by the compiler. These fields are useful if you want to inspect,
+transform, or assemble a module in multiple passes before calling `Builder::inject_module`.
 
 `export` handlers are fallible and must return `Result<T, EngineError>`. If a handler returns
 `Err(...)`, evaluation fails with that engine error.
@@ -512,7 +514,7 @@ Importer contract:
 `ResolvedModule<State>` can carry:
 
 - `ResolvedModuleContent::Source(...)` for Rex source text.
-- `ResolvedModuleContent::CompilationUnit(...)` for preconstructed structured Rex modules.
+- `ResolvedModuleContent::CompilationPackage(...)` for preconstructed structured Rex modules.
 - `ResolvedModuleContent::module(...)` for a Rust-backed `Module<State>` installed lazily.
 
 ### 5) Snippets That Import Relative Modules
