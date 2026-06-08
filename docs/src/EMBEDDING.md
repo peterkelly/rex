@@ -240,6 +240,7 @@ Use `Module` + `Builder::inject_module(...)`:
    - typed exports with `export` / `export_async`
    - runtime/native exports with `export_native` / `export_native_async`
    - optional structured declarations with `add_rex_adt` / `add_adt_decl`
+   - optional typeclass instances for existing classes with `add_instance`
 3. Inject it into the builder.
 
 `Module::add_rex_adt::<T>()` now stages the full acyclic ADT family reachable from `T`.
@@ -248,11 +249,11 @@ while leaf Rex types inherit a no-op default. For example, if `Label` contains a
 `Label` is enough; you do not need to stage `Side` separately. Cyclic ADT families are still
 rejected.
 
-`Module` also exposes its staged declarations directly as categorized fields: `imports`,
-`adts`, `fns`, `declare_fns`, `classes`, `instances`, and `exports`. Type declarations come from
-the staged `adts` list; call `Module::declarations()` when you need the derived
-`Declarations` package view used by the compiler. These fields are useful if you want to inspect,
-transform, or assemble a module in multiple passes before calling `Builder::inject_module`.
+`Module` is intentionally narrower than a general Rex declaration package. Embedders can stage
+host-provided ADTs, host exports, and instances of existing typeclasses. Arbitrary Rex declarations
+belong in `CompilationPackage`, not `Module`. Type declarations come from the staged ADTs; call
+`Module::declarations()` when you need the derived `Declarations` package view used by the
+compiler.
 
 `export` handlers are fallible and must return `Result<T, EngineError>`. If a handler returns
 `Err(...)`, evaluation fails with that engine error.

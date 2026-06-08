@@ -193,7 +193,7 @@ fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
         .add_adt_decls_from_types(&mut builder, types)
         .unwrap();
 
-    assert_eq!(module.adts.len(), 2);
+    assert_eq!(module.adts().len(), 2);
     assert!(
         module
             .declarations()

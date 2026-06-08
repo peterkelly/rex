@@ -44,16 +44,19 @@ pub(crate) fn inject_cli_io_natives(builder: &mut Builder) -> Result<(), EngineE
     let mut module = Module::new("std.io");
     module.add_adt_decl(io_adt_decl())?;
     let io_decls = Declarations::from(io_typeclass_decls()?);
-    if !io_decls.types.is_empty() {
+    if !io_decls.types.is_empty()
+        || !io_decls.fns.is_empty()
+        || !io_decls.declare_fns.is_empty()
+        || !io_decls.imports.is_empty()
+        || !io_decls.classes.is_empty()
+    {
         return Err(EngineError::Internal(
-            "std.io typeclass declarations unexpectedly included type declarations".into(),
+            "std.io typeclass declarations unexpectedly included non-instance declarations".into(),
         ));
     }
-    module.imports.extend(io_decls.imports);
-    module.fns.extend(io_decls.fns);
-    module.declare_fns.extend(io_decls.declare_fns);
-    module.classes.extend(io_decls.classes);
-    module.instances.extend(io_decls.instances);
+    for instance in io_decls.instances {
+        module.add_instance(instance);
+    }
 
     module.export_native("io_pure", io_pure_scheme(), 1, |ctx, _typ, args| {
         let value = args

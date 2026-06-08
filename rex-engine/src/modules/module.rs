@@ -111,7 +111,8 @@ pub struct StagedAdtDecl {
 ///
 /// `Module` is the host-side representation of a Rex module. It lets embedders collect:
 ///
-/// - structured Rex declarations such as ADTs
+/// - host-provided ADTs
+/// - typeclass instances for existing classes
 /// - typed Rust handlers via [`Module::export`] / [`Module::export_async`]
 /// - handle-based dynamic native handlers via [`Module::export_native`] /
 ///   [`Module::export_native_async`]
@@ -149,31 +150,19 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     /// use rex_engine::Module;
     ///
     /// let module = Module::<()>::new("acme.math");
-    /// assert_eq!(module.name, "acme.math");
+    /// assert_eq!(module.name(), "acme.math");
     /// ```
-    pub name: String,
-
-    /// Import declarations staged for this module.
-    pub imports: Vec<ImportDecl>,
+    pub(crate) name: String,
 
     /// ADT declarations staged for runtime constructor injection.
     ///
     /// APIs such as [`Module::add_adt_decl`], [`Module::add_adt_family`], and
     /// [`Module::add_rex_adt`] append here. The engine uses this list to register
     /// constructor schemes and to derive the module's source-level type declarations.
-    pub adts: Vec<StagedAdtDecl>,
-
-    /// Rex function declarations staged for this module.
-    pub fns: Vec<FnDecl>,
-
-    /// Native interface declarations staged for this module.
-    pub declare_fns: Vec<DeclareFnDecl>,
-
-    /// Typeclass declarations staged for this module.
-    pub classes: Vec<ClassDecl>,
+    pub(crate) adts: Vec<StagedAdtDecl>,
 
     /// Typeclass instance declarations staged for this module.
-    pub instances: Vec<InstanceDecl>,
+    pub(crate) instances: Vec<InstanceDecl>,
 
     /// Staged host exports that will become callable Rex values when the module is injected.
     ///
@@ -182,8 +171,7 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     ///
     /// Most callers populate this with [`Module::export`], [`Module::export_async`],
     /// [`Module::export_native`], [`Module::export_native_async`], or [`Module::add_export`].
-    /// The field is public so advanced embedders can construct exports separately and assemble the
-    /// final module programmatically.
+    /// Use [`Module::add_export`] when exports are assembled separately.
     ///
     /// # Examples
     ///
@@ -192,11 +180,11 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     ///
     /// let mut module = Module::<()>::new("acme.math");
     /// let export = Export::from_handler("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
-    /// module.exports.push(export);
+    /// module.add_export(export);
     ///
-    /// assert_eq!(module.exports.len(), 1);
+    /// assert_eq!(module.exports().len(), 1);
     /// ```
-    pub exports: Vec<Export<State>>,
+    pub(crate) exports: Vec<Export<State>>,
 }
 
 impl<State> Module<State>
@@ -222,27 +210,44 @@ where
     /// use rex_engine::Module;
     ///
     /// let module = Module::<()>::new("acme.math");
-    /// assert_eq!(module.name, "acme.math");
+    /// assert_eq!(module.name(), "acme.math");
     /// assert!(module.declarations().is_empty());
-    /// assert!(module.exports.is_empty());
+    /// assert!(module.exports().is_empty());
     /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            imports: Vec::new(),
             adts: Vec::new(),
-            fns: Vec::new(),
-            declare_fns: Vec::new(),
-            classes: Vec::new(),
             instances: Vec::new(),
             exports: Vec::new(),
         }
     }
 
+    /// Return the module name Rex code will import.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Return the staged ADTs for this module.
+    pub fn adts(&self) -> &[StagedAdtDecl] {
+        &self.adts
+    }
+
+    /// Return the staged typeclass instances for this module.
+    pub fn instances(&self) -> &[InstanceDecl] {
+        &self.instances
+    }
+
+    /// Return the staged host exports for this module.
+    pub fn exports(&self) -> &[Export<State>] {
+        &self.exports
+    }
+
     /// Return this module's staged declarations in the compiler package representation.
     ///
     /// Type declarations are derived from [`Module::adts`] so staged ADTs remain the single source
-    /// of truth for host-provided module-local types.
+    /// of truth for host-provided module-local types. Host exports are intentionally not included;
+    /// named module installation adds their generated interface declarations separately.
     pub fn declarations(&self) -> Declarations {
         Declarations {
             types: self
@@ -250,12 +255,17 @@ where
                 .iter()
                 .map(|staged| staged.type_decl.clone())
                 .collect(),
-            fns: self.fns.clone(),
-            declare_fns: self.declare_fns.clone(),
-            imports: self.imports.clone(),
-            classes: self.classes.clone(),
             instances: self.instances.clone(),
+            ..Declarations::default()
         }
+    }
+
+    /// Append a typeclass instance for a class that already exists.
+    ///
+    /// This lets embedders connect host-provided types and functions to existing Rex typeclasses
+    /// without defining new typeclasses or injecting arbitrary Rex declarations through `Module`.
+    pub fn add_instance(&mut self, instance: InstanceDecl) {
+        self.instances.push(instance);
     }
 
     /// Convert an [`AdtDecl`] into a structured type declaration and append it to this module.

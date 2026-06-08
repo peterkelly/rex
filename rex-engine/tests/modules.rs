@@ -8,8 +8,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use futures::{FutureExt, future::BoxFuture};
 use rex_ast::Symbol;
 use rex_engine::{
-    Builder, CompileOptions, Context, EngineError, EngineOptions, Handle, ImportRequest, Importer,
-    Module, ModuleError, ModuleId, PreludeMode, ResolvedModule, ResolvedModuleContent, Value,
+    Builder, CompileOptions, Context, Declarations, EngineError, EngineOptions, Handle,
+    ImportRequest, Importer, Module, ModuleError, ModuleId, PreludeMode, ResolvedModule,
+    ResolvedModuleContent, Value,
 };
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
@@ -1732,6 +1733,56 @@ async fn module_import_missing_class_export_in_instance_header() {
     let msg = err.to_string();
     assert!(msg.contains("does not export"), "{msg}");
     assert!(msg.contains("Missing"), "{msg}");
+}
+
+#[tokio::test]
+async fn module_injected_from_rust_can_add_typeclass_instances() {
+    let mut builder = builder_with_prelude();
+
+    let mut module = Module::new("host.defaults");
+    let mut supply = TypeVarSupply::new();
+    let mut token = AdtDecl::new(&Symbol::intern("Token"), &[], &mut supply);
+    token.add_variant(Symbol::intern("Token"), vec![]);
+    module.add_adt_decl(token).unwrap();
+    module
+        .export_native(
+            "make_token",
+            Scheme::new(vec![], vec![], Type::con("Token", 0)),
+            0,
+            |ctx: Context<()>, _: &Type, _args| {
+                ctx.heap().alloc_adt(Symbol::intern("Token"), vec![])
+            },
+        )
+        .unwrap();
+
+    let instance_program = parse_rex(
+        r#"
+        instance Default Token where {
+            default = make_token;
+        }
+        "#,
+    )
+    .unwrap();
+    for instance in Declarations::from(instance_program.decls).instances {
+        module.add_instance(instance);
+    }
+    builder.inject_module(module).unwrap();
+
+    let (value_ptr, ty) = run_snippet(
+        builder,
+        r#"
+        import host.defaults (Token);
+        let token: Token = default in
+        match token with {
+            case Token -> 42;
+        }
+        "#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    assert_eq!(value_ptr.to_rust::<i32>().unwrap(), 42);
 }
 
 #[tokio::test]
