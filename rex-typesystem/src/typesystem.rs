@@ -337,6 +337,14 @@ pub struct PreparedInstanceDecl {
     pub type_vars: BTreeMap<Symbol, TypeVar>,
 }
 
+#[derive(Clone, Debug)]
+pub struct PreparedFnDecl {
+    pub decl: FnDecl,
+    pub expected: Type,
+    pub declared_preds: Vec<Predicate>,
+    pub ann_vars: BTreeMap<Symbol, TypeVar>,
+}
+
 impl TypeSystem {
     pub fn new() -> Self {
         Self {
@@ -359,38 +367,38 @@ impl TypeSystem {
         self.limits = limits;
     }
 
-    fn register_decl(&mut self, decl: &Decl) -> Result<(), TypeError> {
-        match decl {
-            Decl::Type(ty) => self.register_type_decl(ty),
-            Decl::Class(class_decl) => self.register_class_decl(class_decl),
-            Decl::Instance(inst_decl) => {
-                let _ = self.register_instance_decl(inst_decl)?;
-                Ok(())
-            }
-            Decl::Fn(fd) => self.register_fn_decls(std::slice::from_ref(fd)),
-            Decl::DeclareFn(fd) => self.inject_declare_fn_decl(fd),
-            Decl::Import(..) => Ok(()),
-        }
-    }
-
     pub fn register_decls(&mut self, decls: &[Decl]) -> Result<(), TypeError> {
-        let mut pending_fns: Vec<FnDecl> = Vec::new();
+        let mut type_decls = Vec::new();
+        let mut class_decls = Vec::new();
+        let mut declare_fn_decls = Vec::new();
+        let mut fn_decls = Vec::new();
+        let mut instance_decls = Vec::new();
+
         for decl in decls {
-            if let Decl::Fn(fd) = decl {
-                pending_fns.push(fd.clone());
-                continue;
+            match decl {
+                Decl::Type(td) => type_decls.push(td.clone()),
+                Decl::Class(cd) => class_decls.push(cd.clone()),
+                Decl::DeclareFn(df) => declare_fn_decls.push(df.clone()),
+                Decl::Fn(fd) => fn_decls.push(fd.clone()),
+                Decl::Instance(id) => instance_decls.push(id.clone()),
+                Decl::Import(..) => {}
             }
-
-            if !pending_fns.is_empty() {
-                self.register_fn_decls(&pending_fns)?;
-                pending_fns.clear();
-            }
-
-            self.register_decl(decl)?;
         }
-        if !pending_fns.is_empty() {
-            self.register_fn_decls(&pending_fns)?;
+
+        self.register_type_decls(&type_decls)?;
+        self.register_class_decls(&class_decls)?;
+
+        for decl in &declare_fn_decls {
+            self.inject_declare_fn_decl(decl)?;
         }
+
+        let prepared_fns = self.register_fn_decl_signatures(&fn_decls)?;
+
+        for decl in &instance_decls {
+            let _ = self.register_instance_decl(decl)?;
+        }
+
+        self.check_fn_decl_bodies(&prepared_fns)?;
         Ok(())
     }
 
@@ -411,22 +419,54 @@ impl TypeSystem {
             .add_instance(Symbol::intern(class.as_ref()), inst);
     }
 
+    fn register_class_decl_header(&mut self, decl: &ClassDecl) -> Result<(), TypeError> {
+        if self.class_info.contains_key(&decl.name) || self.classes.classes.contains_key(&decl.name)
+        {
+            return Err(TypeError::DuplicateClass(decl.name.clone()));
+        }
+        if decl.params.is_empty() {
+            return Err(TypeError::InvalidClassArity {
+                class: decl.name.clone(),
+                got: decl.params.len(),
+            });
+        }
+        self.classes.add_class(decl.name.clone(), Vec::new());
+        Ok(())
+    }
+
+    pub fn register_class_decls(&mut self, decls: &[ClassDecl]) -> Result<(), TypeError> {
+        let mut seen = BTreeSet::new();
+        for decl in decls {
+            let span = decl.span;
+            let result = (|| {
+                if !seen.insert(decl.name.clone()) {
+                    return Err(TypeError::DuplicateClass(decl.name.clone()));
+                }
+                self.register_class_decl_header(decl)
+            })();
+            result.map_err(|err| err.with_span(&span))?;
+        }
+
+        for decl in decls {
+            self.register_class_decl_body(decl)?;
+        }
+        Ok(())
+    }
+
     pub fn register_class_decl(&mut self, decl: &ClassDecl) -> Result<(), TypeError> {
         let span = decl.span;
         (|| {
-            // Classes are global, and Rex does not support reopening/merging them.
-            // Allowing that would be a long-term maintenance hazard: it creates
-            // spooky-action-at-a-distance across modules and makes reviews harder.
-            if self.class_info.contains_key(&decl.name)
-                || self.classes.classes.contains_key(&decl.name)
-            {
+            self.register_class_decl_header(decl)?;
+            self.register_class_decl_body(decl)
+        })()
+        .map_err(|err| err.with_span(&span))
+    }
+
+    fn register_class_decl_body(&mut self, decl: &ClassDecl) -> Result<(), TypeError> {
+        let span = decl.span;
+        (|| {
+            if self.class_info.contains_key(&decl.name) {
                 return Err(TypeError::DuplicateClass(decl.name.clone()));
-            }
-            if decl.params.is_empty() {
-                return Err(TypeError::InvalidClassArity {
-                    class: decl.name.clone(),
-                    got: decl.params.len(),
-                });
             }
             let params = decl.params.clone();
 
@@ -654,16 +694,32 @@ impl TypeSystem {
         let saved_declared = self.declared_values.clone();
 
         let result: Result<(), TypeError> = (|| {
-            #[derive(Clone)]
-            struct FnInfo {
-                decl: FnDecl,
-                expected: Type,
-                declared_preds: Vec<Predicate>,
-                scheme: Scheme,
-                ann_vars: BTreeMap<Symbol, TypeVar>,
-            }
+            let prepared = self.register_fn_decl_signatures(decls)?;
+            self.check_fn_decl_bodies(&prepared)?;
+            Ok(())
+        })();
 
-            let mut infos: Vec<FnInfo> = Vec::with_capacity(decls.len());
+        if result.is_err() {
+            self.env = saved_env;
+            self.declared_values = saved_declared;
+        }
+        result
+    }
+
+    pub fn register_fn_decl_signatures(
+        &mut self,
+        decls: &[FnDecl],
+    ) -> Result<Vec<PreparedFnDecl>, TypeError> {
+        if decls.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let saved_env = self.env.clone();
+        let saved_declared = self.declared_values.clone();
+
+        let result: Result<Vec<PreparedFnDecl>, TypeError> = (|| {
+            let mut infos = Vec::with_capacity(decls.len());
+            let mut schemes = Vec::with_capacity(decls.len());
             let mut seen_names = BTreeSet::new();
 
             for decl in decls {
@@ -752,112 +808,29 @@ impl TypeSystem {
                     let scheme = Scheme::new(vars, declared_preds.clone(), expected.clone());
                     reject_ambiguous_scheme(&scheme)?;
 
-                    Ok(FnInfo {
-                        decl: decl.clone(),
-                        expected,
-                        declared_preds,
+                    Ok((
+                        PreparedFnDecl {
+                            decl: decl.clone(),
+                            expected,
+                            declared_preds,
+                            ann_vars,
+                        },
                         scheme,
-                        ann_vars,
-                    })
+                    ))
                 })();
 
-                infos.push(info.map_err(|err| err.with_span(&span))?);
+                let (info, scheme) = info.map_err(|err| err.with_span(&span))?;
+                infos.push(info);
+                schemes.push((decl.name.name.clone(), scheme));
             }
 
             // Seed environment with all declared signatures first so fn bodies
             // can reference each other recursively (let-rec semantics).
-            for info in &infos {
-                self.env
-                    .extend(info.decl.name.name.clone(), info.scheme.clone());
+            for (name, scheme) in schemes {
+                self.env.extend(name, scheme);
             }
 
-            for info in infos {
-                let span = info.decl.span;
-                let mut lam_body = info.decl.body.clone();
-                let mut lam_end = lam_body.span().end;
-                for (param, ann) in info.decl.params.iter().rev() {
-                    let lam_constraints = Vec::new();
-                    let span = Span::from_begin_end(param.span.begin, lam_end);
-                    lam_body = Arc::new(Expr::Lam(
-                        span,
-                        Scope::new_sync(),
-                        param.clone(),
-                        Some(ann.clone()),
-                        lam_constraints,
-                        lam_body,
-                    ));
-                    lam_end = lam_body.span().end;
-                }
-
-                // Declaration validation happens before top-level `fn`s are lowered into
-                // synthetic `let`s. If one of these errors escapes without a span, later LSP
-                // fallbacks can attach it to the lowered expression, which may span the whole
-                // snippet. Use the original declaration span as the fallback; `with_span`
-                // preserves any more-specific span already produced inside the body.
-                let saved_type_vars = self.env.type_vars.clone();
-                self.env.type_vars = info.ann_vars.clone();
-                let inferred_result = infer_typed(self, lam_body.as_ref());
-                self.env.type_vars = saved_type_vars;
-                let (typed, preds, inferred) =
-                    inferred_result.map_err(|err| err.with_span(&span))?;
-                let s = unify(&inferred, &info.expected).map_err(|err| err.with_span(&span))?;
-                let preds = preds.apply(&s);
-                let inferred = inferred.apply(&s);
-                let declared_preds = info.declared_preds.apply(&s);
-                let expected = info.expected.apply(&s);
-
-                // Keep kind checks aligned with existing `inject_fn_decl` logic.
-                let var_arities: BTreeMap<TypeVarId, usize> = info
-                    .ann_vars
-                    .values()
-                    .map(|tv| (tv.id, max_head_app_arity_for_var(&expected, tv.id)))
-                    .collect();
-                for pred in &declared_preds {
-                    let _ =
-                        entails(&self.classes, &[], pred).map_err(|err| err.with_span(&span))?;
-                    let Some(expected_arities) = self.expected_class_param_arities(&pred.class)
-                    else {
-                        continue;
-                    };
-                    let args: Vec<Type> = if expected_arities.len() == 1 {
-                        vec![pred.typ.clone()]
-                    } else if let TypeKind::Tuple(parts) = pred.typ.as_ref() {
-                        if parts.len() != expected_arities.len() {
-                            continue;
-                        }
-                        parts.clone()
-                    } else {
-                        continue;
-                    };
-
-                    for (arg, expected_arity) in args.iter().zip(expected_arities.iter().copied()) {
-                        let got = type_term_remaining_arity(arg).or_else(|| match arg.as_ref() {
-                            TypeKind::Var(tv) => var_arities.get(&tv.id).copied(),
-                            _ => None,
-                        });
-                        let Some(got) = got else {
-                            continue;
-                        };
-                        if got != expected_arity {
-                            let err = TypeError::KindMismatch {
-                                class: pred.class.clone(),
-                                expected: expected_arity,
-                                got,
-                                typ: arg.to_string(),
-                            };
-                            return Err(err.with_span(&span));
-                        }
-                    }
-                }
-
-                check_non_ground_predicates_declared(&self.classes, &declared_preds, &preds)
-                    .map_err(|err| err.with_span(&span))?;
-
-                let _ = inferred;
-                let _ = typed;
-            }
-
-            Ok(())
+            Ok(infos)
         })();
 
         if result.is_err() {
@@ -865,6 +838,93 @@ impl TypeSystem {
             self.declared_values = saved_declared;
         }
         result
+    }
+
+    pub fn check_fn_decl_bodies(&mut self, infos: &[PreparedFnDecl]) -> Result<(), TypeError> {
+        for info in infos {
+            let span = info.decl.span;
+            let mut lam_body = info.decl.body.clone();
+            let mut lam_end = lam_body.span().end;
+            for (param, ann) in info.decl.params.iter().rev() {
+                let lam_constraints = Vec::new();
+                let span = Span::from_begin_end(param.span.begin, lam_end);
+                lam_body = Arc::new(Expr::Lam(
+                    span,
+                    Scope::new_sync(),
+                    param.clone(),
+                    Some(ann.clone()),
+                    lam_constraints,
+                    lam_body,
+                ));
+                lam_end = lam_body.span().end;
+            }
+
+            // Declaration validation happens before top-level `fn`s are lowered into
+            // synthetic `let`s. If one of these errors escapes without a span, later LSP
+            // fallbacks can attach it to the lowered expression, which may span the whole
+            // snippet. Use the original declaration span as the fallback; `with_span`
+            // preserves any more-specific span already produced inside the body.
+            let saved_type_vars = self.env.type_vars.clone();
+            self.env.type_vars = info.ann_vars.clone();
+            let inferred_result = infer_typed(self, lam_body.as_ref());
+            self.env.type_vars = saved_type_vars;
+            let (typed, preds, inferred) = inferred_result.map_err(|err| err.with_span(&span))?;
+            let s = unify(&inferred, &info.expected).map_err(|err| err.with_span(&span))?;
+            let preds = preds.apply(&s);
+            let inferred = inferred.apply(&s);
+            let declared_preds = info.declared_preds.apply(&s);
+            let expected = info.expected.apply(&s);
+
+            // Keep kind checks aligned with existing `inject_fn_decl` logic.
+            let var_arities: BTreeMap<TypeVarId, usize> = info
+                .ann_vars
+                .values()
+                .map(|tv| (tv.id, max_head_app_arity_for_var(&expected, tv.id)))
+                .collect();
+            for pred in &declared_preds {
+                let _ = entails(&self.classes, &[], pred).map_err(|err| err.with_span(&span))?;
+                let Some(expected_arities) = self.expected_class_param_arities(&pred.class) else {
+                    continue;
+                };
+                let args: Vec<Type> = if expected_arities.len() == 1 {
+                    vec![pred.typ.clone()]
+                } else if let TypeKind::Tuple(parts) = pred.typ.as_ref() {
+                    if parts.len() != expected_arities.len() {
+                        continue;
+                    }
+                    parts.clone()
+                } else {
+                    continue;
+                };
+
+                for (arg, expected_arity) in args.iter().zip(expected_arities.iter().copied()) {
+                    let got = type_term_remaining_arity(arg).or_else(|| match arg.as_ref() {
+                        TypeKind::Var(tv) => var_arities.get(&tv.id).copied(),
+                        _ => None,
+                    });
+                    let Some(got) = got else {
+                        continue;
+                    };
+                    if got != expected_arity {
+                        let err = TypeError::KindMismatch {
+                            class: pred.class.clone(),
+                            expected: expected_arity,
+                            got,
+                            typ: arg.to_string(),
+                        };
+                        return Err(err.with_span(&span));
+                    }
+                }
+            }
+
+            check_non_ground_predicates_declared(&self.classes, &declared_preds, &preds)
+                .map_err(|err| err.with_span(&span))?;
+
+            let _ = inferred;
+            let _ = typed;
+        }
+
+        Ok(())
     }
 
     pub fn inject_declare_fn_decl(&mut self, decl: &DeclareFnDecl) -> Result<(), TypeError> {
@@ -1034,6 +1094,18 @@ impl TypeSystem {
         }
     }
 
+    fn register_type_decl_header(&mut self, decl: &TypeDecl) -> Result<(), TypeError> {
+        if BuiltinTypeId::from_symbol(&decl.name).is_some() {
+            return Err(TypeError::ReservedTypeName(decl.name.clone()));
+        }
+        if self.adts.contains_key(&decl.name) {
+            return Err(TypeError::DuplicateType(decl.name.clone()));
+        }
+        let adt = AdtDecl::new(&decl.name, &decl.params, &mut self.supply);
+        self.adts.insert(decl.name.clone(), adt);
+        Ok(())
+    }
+
     pub fn adt_from_decl(&mut self, decl: &TypeDecl) -> Result<AdtDecl, TypeError> {
         let mut adt = AdtDecl::new(&decl.name, &decl.params, &mut self.supply);
         let mut param_map: BTreeMap<Symbol, TypeVar> = BTreeMap::new();
@@ -1052,9 +1124,34 @@ impl TypeSystem {
         Ok(adt)
     }
 
+    pub fn register_type_decls(&mut self, decls: &[TypeDecl]) -> Result<Vec<AdtDecl>, TypeError> {
+        let mut seen = BTreeSet::new();
+        for decl in decls {
+            let span = decl.span;
+            let result = (|| {
+                if !seen.insert(decl.name.clone()) {
+                    return Err(TypeError::DuplicateType(decl.name.clone()));
+                }
+                self.register_type_decl_header(decl)
+            })();
+            result.map_err(|err| err.with_span(&span))?;
+        }
+
+        let mut adts = Vec::with_capacity(decls.len());
+        for decl in decls {
+            let adt = self.adt_from_decl(decl)?;
+            self.register_adt(&adt);
+            adts.push(adt);
+        }
+        Ok(adts)
+    }
+
     pub fn register_type_decl(&mut self, decl: &TypeDecl) -> Result<(), TypeError> {
         if BuiltinTypeId::from_symbol(&decl.name).is_some() {
             return Err(TypeError::ReservedTypeName(decl.name.clone()));
+        }
+        if self.adts.contains_key(&decl.name) {
+            return Err(TypeError::DuplicateType(decl.name.clone()));
         }
         let adt = self.adt_from_decl(decl)?;
         self.register_adt(&adt);

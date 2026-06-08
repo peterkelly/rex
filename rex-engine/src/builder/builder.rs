@@ -1016,7 +1016,7 @@ where
     Ok(())
 }
 
-fn inject_fn_decls_parts<State>(
+fn inject_fn_runtime_parts<State>(
     env: &mut RootedEnvironment,
     type_system: &mut TypeSystem,
     runtime: &RuntimeRegistry<State>,
@@ -1029,10 +1029,6 @@ where
     if decls.is_empty() {
         return Ok(());
     }
-
-    type_system
-        .register_fn_decls(decls)
-        .map_err(EngineError::Type)?;
 
     let mut env_rec = env.clone();
     let mut slots = Vec::with_capacity(decls.len());
@@ -1123,43 +1119,61 @@ fn inject_decls_parts<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let mut pending_fns: Vec<FnDecl> = Vec::new();
-    for decl in decls {
-        if let Decl::Fn(fd) = decl {
-            pending_fns.push(fd.clone());
-            continue;
-        }
-        if !pending_fns.is_empty() {
-            inject_fn_decls_parts(env, type_system, runtime, heap, &pending_fns)?;
-            pending_fns.clear();
-        }
+    let mut type_decls = Vec::new();
+    let mut class_decls = Vec::new();
+    let mut declare_fn_decls = Vec::new();
+    let mut fn_decls = Vec::new();
+    let mut instance_decls = Vec::new();
 
+    for decl in decls {
         match decl {
-            Decl::Type(ty) => {
-                let adt = type_system.adt_from_decl(ty).map_err(EngineError::Type)?;
-                inject_adt_parts(type_system, runtime, adt)?;
-            }
-            Decl::Class(class_decl) => type_system
-                .register_class_decl(class_decl)
-                .map_err(EngineError::Type)?,
-            Decl::Instance(inst_decl) => {
-                let prepared = type_system
-                    .register_instance_decl(inst_decl)
-                    .map_err(EngineError::Type)?;
-                register_typeclass_instance_parts(type_system, env, runtime, inst_decl, &prepared)?;
-            }
-            Decl::Fn(..) => {}
-            Decl::DeclareFn(df) => {
-                type_system
-                    .inject_declare_fn_decl(df)
-                    .map_err(EngineError::Type)?;
-            }
+            Decl::Type(td) => type_decls.push(td.clone()),
+            Decl::Class(cd) => class_decls.push(cd.clone()),
+            Decl::DeclareFn(df) => declare_fn_decls.push(df.clone()),
+            Decl::Fn(fd) => fn_decls.push(fd.clone()),
+            Decl::Instance(id) => instance_decls.push(id.clone()),
             Decl::Import(..) => {}
         }
     }
-    if !pending_fns.is_empty() {
-        inject_fn_decls_parts(env, type_system, runtime, heap, &pending_fns)?;
+
+    let adts = type_system
+        .register_type_decls(&type_decls)
+        .map_err(EngineError::Type)?;
+    for adt in adts {
+        inject_adt_parts(type_system, runtime, adt)?;
     }
+
+    type_system
+        .register_class_decls(&class_decls)
+        .map_err(EngineError::Type)?;
+
+    for decl in &declare_fn_decls {
+        type_system
+            .inject_declare_fn_decl(decl)
+            .map_err(EngineError::Type)?;
+    }
+
+    let prepared_fns = type_system
+        .register_fn_decl_signatures(&fn_decls)
+        .map_err(EngineError::Type)?;
+
+    let mut prepared_instances = Vec::with_capacity(instance_decls.len());
+    for decl in &instance_decls {
+        let prepared = type_system
+            .register_instance_decl(decl)
+            .map_err(EngineError::Type)?;
+        prepared_instances.push((decl.clone(), prepared));
+    }
+
+    type_system
+        .check_fn_decl_bodies(&prepared_fns)
+        .map_err(EngineError::Type)?;
+    inject_fn_runtime_parts(env, type_system, runtime, heap, &fn_decls)?;
+
+    for (decl, prepared) in &prepared_instances {
+        register_typeclass_instance_parts(type_system, env, runtime, decl, prepared)?;
+    }
+
     Ok(())
 }
 

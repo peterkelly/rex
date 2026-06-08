@@ -19,6 +19,8 @@ pub enum TypeError {
     ReservedTypeName(Symbol),
     #[error("duplicate value definition `{0}`")]
     DuplicateValue(Symbol),
+    #[error("duplicate type definition `{0}`")]
+    DuplicateType(Symbol),
     #[error("duplicate class definition `{0}`")]
     DuplicateClass(Symbol),
     #[error("class `{class}` must have at least one type parameter (got {got})")]
