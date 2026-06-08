@@ -553,9 +553,7 @@ where
     engine.module_loader_mut().virtual_modules.insert(
         module_name.clone(),
         VirtualModule {
-            exports: exports.clone(),
             decls: compilation_unit.decls.clone(),
-            source: None,
         },
     );
 

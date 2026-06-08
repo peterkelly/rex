@@ -292,13 +292,10 @@ impl ModuleExports {
 /// Host-provided module staged in memory before the module system imports it.
 ///
 /// Virtual modules are used for injected modules and built-ins. They carry the
-/// public export table, the declarations that define those exports, and optional
-/// source text for diagnostics or documentation rendering.
+/// declarations that define the module surface used by import typechecking.
 #[derive(Clone)]
 pub struct VirtualModule {
-    pub exports: ModuleExports,
     pub decls: Vec<Decl>,
-    pub source: Option<String>,
 }
 
 /// Loaded module cached by the module system after compilation and evaluation.

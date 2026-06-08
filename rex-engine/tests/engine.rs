@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use rex_ast::{CompilationUnit, Decl, Expr, Symbol};
-use rex_engine::{Builder, CompileOptions, EngineError, Module, Value, registry_markdown};
+use rex_engine::{Builder, CompileOptions, EngineError, Module, Value};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
@@ -37,25 +37,6 @@ fn inject_globals(
     let mut module = Module::<()>::global();
     build(&mut module).unwrap();
     builder.inject_module(module).unwrap();
-}
-
-#[test]
-fn registry_markdown_lists_core_sections() {
-    let builder = Builder::with_prelude(()).unwrap();
-    let doc = registry_markdown(&builder);
-
-    assert!(doc.contains("# Builder Registry"));
-    assert!(doc.contains("## Module Index"));
-    assert!(doc.contains("## Modules"));
-    assert!(doc.contains("## ADTs"));
-    assert!(doc.contains("## Functions and Values"));
-    assert!(doc.contains("## Type Classes"));
-    assert!(doc.contains("## Native Implementations"));
-    assert!(doc.contains("[`std.prelude`](#module-std-prelude)"));
-    assert!(doc.contains("<a id=\"module-std-prelude\"></a>"));
-    assert!(doc.contains("### `std.prelude`"));
-    assert!(doc.contains("`List`"));
-    assert!(doc.contains("`Option`"));
 }
 
 #[tokio::test]

@@ -29,7 +29,6 @@ pub use builder::{
     core::Builder,
     core::NativeRegistration,
     export::{Export, ExportTarget, HostFnAsync, HostFnSync, NativeFuture},
-    markdown::registry_markdown,
 };
 pub use compiler::{CompileOptions, Compiler, program::CompiledProgram};
 pub use config::{

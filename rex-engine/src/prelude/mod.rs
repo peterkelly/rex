@@ -238,9 +238,7 @@ where
     engine.module_loader.virtual_modules.insert(
         PRELUDE_MODULE_NAME.to_string(),
         VirtualModule {
-            exports,
             decls: compilation_unit.decls.clone(),
-            source: None,
         },
     );
     engine

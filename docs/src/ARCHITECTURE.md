@@ -45,7 +45,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 
 `rex-engine` is organized internally around the same phases:
 
-- `builder/` owns builder-facing host/module registration and registry markdown.
+- `builder/` owns builder-facing host/module registration.
 - `compiler/` owns program preparation, import rewriting, typechecking, module loading state, and
   `CompiledProgram` construction.
 - `evaluator/` owns execution, scheduling, native dispatch, `Context`, and the runtime core.
