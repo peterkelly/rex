@@ -16,6 +16,34 @@ pub fn strip_type_span(mut err: TypeError) -> TypeError {
     err
 }
 
+pub async fn assert_invalid_let_rec_value_dependency(
+    source: &str,
+    binding: &str,
+    dependency: &str,
+) {
+    let err = match eval_source(Builder::with_prelude(()).unwrap(), source).await {
+        Ok((_heap, handle, ty)) => panic!(
+            "expected invalid let rec value dependency, got {} with type {ty}",
+            handle.display().unwrap()
+        ),
+        Err(err) => err,
+    };
+    let EngineError::Type(err) = err else {
+        panic!("expected type error, got {err:?}");
+    };
+    let err = strip_type_span(err);
+    assert!(
+        matches!(
+            err,
+            TypeError::InvalidLetRecValueDependency {
+                binding: ref actual_binding,
+                dependency: ref actual_dependency,
+            } if actual_binding.as_ref() == binding && actual_dependency.as_ref() == dependency
+        ),
+        "unexpected type error: {err:?}"
+    );
+}
+
 pub fn inject_globals<State: Clone + Send + Sync + 'static>(
     builder: &mut Builder<State>,
     build: impl FnOnce(&mut Module<State>) -> Result<(), EngineError>,

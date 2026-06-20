@@ -11,7 +11,7 @@ use crate::{
     },
     unification::{Subst, Unifier, compose_subst, subst_is_empty, unify},
 };
-use rex_ast::{Expr, Pattern, Symbol, TypeConstraint, TypeExpr};
+use rex_ast::{Expr, LetRecBinding, Pattern, Symbol, TypeConstraint, TypeExpr};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -439,6 +439,241 @@ fn collect_app_chain(expr: &Expr) -> (&Expr, Vec<&Expr>) {
     }
     args.reverse();
     (cur, args)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LetRecBindingKind {
+    Function,
+    Value,
+}
+
+fn let_rec_binding_kind(expr: &Expr) -> LetRecBindingKind {
+    let mut cur = expr;
+    while let Expr::Ann(_, inner, _) = cur {
+        cur = inner.as_ref();
+    }
+    if matches!(cur, Expr::Lam(..)) {
+        LetRecBindingKind::Function
+    } else {
+        LetRecBindingKind::Value
+    }
+}
+
+fn collect_pattern_vars(pat: &Pattern, out: &mut BTreeSet<Symbol>) {
+    match pat {
+        Pattern::Wildcard(..) => {}
+        Pattern::Var(var) => {
+            out.insert(var.name.clone());
+        }
+        Pattern::Named(_, _, args) => {
+            for arg in args {
+                collect_pattern_vars(arg, out);
+            }
+        }
+        Pattern::Tuple(_, elems) | Pattern::List(_, elems) => {
+            for elem in elems {
+                collect_pattern_vars(elem, out);
+            }
+        }
+        Pattern::Cons(_, head, tail) => {
+            collect_pattern_vars(head, out);
+            collect_pattern_vars(tail, out);
+        }
+        Pattern::Dict(_, fields) => {
+            for (_, pat) in fields {
+                collect_pattern_vars(pat, out);
+            }
+        }
+    }
+}
+
+fn collect_let_rec_refs(
+    expr: &Expr,
+    group_names: &BTreeSet<Symbol>,
+    bound: &BTreeSet<Symbol>,
+    out: &mut BTreeSet<Symbol>,
+) {
+    match expr {
+        Expr::Bool(..)
+        | Expr::Uint(..)
+        | Expr::Int(..)
+        | Expr::Float(..)
+        | Expr::String(..)
+        | Expr::Uuid(..)
+        | Expr::DateTime(..)
+        | Expr::Hole(..) => {}
+        Expr::Tuple(_, elems) | Expr::List(_, elems) => {
+            for elem in elems {
+                collect_let_rec_refs(elem, group_names, bound, out);
+            }
+        }
+        Expr::Dict(_, fields) => {
+            for field in fields.values() {
+                collect_let_rec_refs(field, group_names, bound, out);
+            }
+        }
+        Expr::RecordUpdate(_, base, updates) => {
+            collect_let_rec_refs(base, group_names, bound, out);
+            for update in updates.values() {
+                collect_let_rec_refs(update, group_names, bound, out);
+            }
+        }
+        Expr::Var(var) => {
+            if group_names.contains(&var.name) && !bound.contains(&var.name) {
+                out.insert(var.name.clone());
+            }
+        }
+        Expr::App(_, func, arg) => {
+            collect_let_rec_refs(func, group_names, bound, out);
+            collect_let_rec_refs(arg, group_names, bound, out);
+        }
+        Expr::Project(_, base, _) | Expr::Ann(_, base, _) => {
+            collect_let_rec_refs(base, group_names, bound, out);
+        }
+        Expr::Lam(_, scope, param, _, _, body) => {
+            for captured in scope.values() {
+                collect_let_rec_refs(captured, group_names, bound, out);
+            }
+            let mut body_bound = bound.clone();
+            body_bound.insert(param.name.clone());
+            collect_let_rec_refs(body, group_names, &body_bound, out);
+        }
+        Expr::Let(_, var, _, _, def, body) => {
+            collect_let_rec_refs(def, group_names, bound, out);
+            let mut body_bound = bound.clone();
+            body_bound.insert(var.name.clone());
+            collect_let_rec_refs(body, group_names, &body_bound, out);
+        }
+        Expr::LetRec(_, bindings, body) => {
+            let mut nested_bound = bound.clone();
+            for (var, _, _, _) in bindings {
+                nested_bound.insert(var.name.clone());
+            }
+            for (_, _, _, def) in bindings {
+                collect_let_rec_refs(def, group_names, &nested_bound, out);
+            }
+            collect_let_rec_refs(body, group_names, &nested_bound, out);
+        }
+        Expr::Ite(_, cond, then_expr, else_expr) => {
+            collect_let_rec_refs(cond, group_names, bound, out);
+            collect_let_rec_refs(then_expr, group_names, bound, out);
+            collect_let_rec_refs(else_expr, group_names, bound, out);
+        }
+        Expr::Match(_, scrutinee, arms) => {
+            collect_let_rec_refs(scrutinee, group_names, bound, out);
+            for (pat, arm) in arms {
+                let mut arm_bound = bound.clone();
+                collect_pattern_vars(pat, &mut arm_bound);
+                collect_let_rec_refs(arm, group_names, &arm_bound, out);
+            }
+        }
+    }
+}
+
+fn invalid_let_rec_value_dependency(
+    binding: &Symbol,
+    dependency: &Symbol,
+    def: &Expr,
+) -> TypeError {
+    TypeError::InvalidLetRecValueDependency {
+        binding: binding.clone(),
+        dependency: dependency.clone(),
+    }
+    .with_span(def.span())
+}
+
+fn function_reaches_uninitialized_binding(
+    func_index: usize,
+    value_index: usize,
+    kinds: &[LetRecBindingKind],
+    deps: &[BTreeSet<Symbol>],
+    binding_indices: &BTreeMap<Symbol, usize>,
+    visiting: &mut BTreeSet<usize>,
+) -> Option<Symbol> {
+    if !visiting.insert(func_index) {
+        return None;
+    }
+
+    for dep in &deps[func_index] {
+        let Some(&dep_index) = binding_indices.get(dep) else {
+            continue;
+        };
+        if dep_index >= value_index {
+            return Some(dep.clone());
+        }
+        if kinds[dep_index] == LetRecBindingKind::Function
+            && let Some(dep) = function_reaches_uninitialized_binding(
+                dep_index,
+                value_index,
+                kinds,
+                deps,
+                binding_indices,
+                visiting,
+            )
+        {
+            return Some(dep);
+        }
+    }
+
+    visiting.remove(&func_index);
+    None
+}
+
+fn validate_let_rec_bindings(bindings: &[LetRecBinding]) -> Result<(), TypeError> {
+    let group_names = bindings
+        .iter()
+        .map(|(var, _, _, _)| var.name.clone())
+        .collect::<BTreeSet<_>>();
+    let binding_indices = bindings
+        .iter()
+        .enumerate()
+        .map(|(index, (var, _, _, _))| (var.name.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let kinds = bindings
+        .iter()
+        .map(|(_, _, _, def)| let_rec_binding_kind(def))
+        .collect::<Vec<_>>();
+    let deps = bindings
+        .iter()
+        .map(|(_, _, _, def)| {
+            let mut refs = BTreeSet::new();
+            collect_let_rec_refs(def, &group_names, &BTreeSet::new(), &mut refs);
+            refs
+        })
+        .collect::<Vec<_>>();
+
+    for (index, (var, _, _, def)) in bindings.iter().enumerate() {
+        if kinds[index] != LetRecBindingKind::Value {
+            continue;
+        }
+
+        for dep in &deps[index] {
+            let Some(&dep_index) = binding_indices.get(dep) else {
+                continue;
+            };
+            if dep_index >= index {
+                return Err(invalid_let_rec_value_dependency(&var.name, dep, def));
+            }
+            if kinds[dep_index] == LetRecBindingKind::Function
+                && let Some(uninitialized) = function_reaches_uninitialized_binding(
+                    dep_index,
+                    index,
+                    &kinds,
+                    &deps,
+                    &binding_indices,
+                    &mut BTreeSet::new(),
+                )
+            {
+                return Err(invalid_let_rec_value_dependency(
+                    &var.name,
+                    &uninitialized,
+                    def,
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn predicate_can_hold_for_overload_arg(pred: &Predicate) -> bool {
@@ -1179,6 +1414,7 @@ fn infer_expr_type_inner(
             Ok((p_body, t_body))
         }
         Expr::LetRec(_, bindings, body) => {
+            validate_let_rec_bindings(bindings)?;
             let mut env_seed = env.clone();
             let mut known_seed = known.clone();
             let mut binding_tys = BTreeMap::new();
@@ -1674,6 +1910,7 @@ fn infer_expr(
                 Ok((p_body, t_body, typed))
             }
             Expr::LetRec(_, bindings, body) => {
+                validate_let_rec_bindings(bindings)?;
                 let mut env_seed = env.clone();
                 let mut known_seed = known.clone();
                 let mut binding_tys = BTreeMap::new();

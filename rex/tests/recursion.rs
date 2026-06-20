@@ -82,7 +82,7 @@ async fn mutual_list_cycle_let_rec() {
           case Empty -> 0;
         }
     "#;
-    assert_i32_result(expr, 2).await;
+    common::assert_invalid_let_rec_value_dependency(expr, "a", "b").await;
 }
 
 #[tokio::test]
@@ -94,7 +94,7 @@ async fn self_referential_list_let_rec() {
           case Empty -> 0;
         }
     "#;
-    assert_i32_result(expr, 1).await;
+    common::assert_invalid_let_rec_value_dependency(expr, "xs", "xs").await;
 }
 
 #[tokio::test]

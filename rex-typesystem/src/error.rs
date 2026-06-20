@@ -67,6 +67,10 @@ pub enum TypeError {
     FieldNotKnown { field: Symbol, typ: String },
     #[error("non-exhaustive match for {typ}: missing {missing:?}")]
     NonExhaustiveMatch { typ: String, missing: Vec<Symbol> },
+    #[error(
+        "let rec value binding `{binding}` cannot depend on `{dependency}` before it is initialized"
+    )]
+    InvalidLetRecValueDependency { binding: Symbol, dependency: Symbol },
     #[error("at {span}: {error}")]
     Spanned { span: Span, error: Box<TypeError> },
     #[error("internal error: {0}")]

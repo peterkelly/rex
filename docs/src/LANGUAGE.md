@@ -234,6 +234,12 @@ in
 Notes:
 
 - Bindings in `let rec` are separated by commas.
+- A binding whose right-hand side is a lambda is treated as a recursive function binding.
+- Other bindings are initialized like sequential `let` values and can only reference earlier
+  bindings in the same group.
+- Function bodies can reference any binding in the same group.
+- A value binding is rejected if it calls an earlier function whose body can reach a binding that
+  has not been initialized yet.
 
 ### If-Then-Else
 

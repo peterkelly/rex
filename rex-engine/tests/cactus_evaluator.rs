@@ -1189,28 +1189,6 @@ async fn gc_every_alloc_handles_native_returning_nested_data() {
 }
 
 #[tokio::test]
-async fn gc_every_alloc_handles_self_referential_data() {
-    let result = eval_i32(
-        r#"
-        let rec
-            xs = Cons 1 xs
-        in
-            match xs with {
-                case Cons h t ->
-                    (match t with {
-                        case Cons h2 _ -> h + h2;
-                        case Empty -> 0;
-                    });
-                case Empty -> 0;
-            }
-        "#,
-        builder_collecting_on_every_alloc(),
-    )
-    .await;
-    assert_eq!(result, 2);
-}
-
-#[tokio::test]
 async fn gc_every_alloc_handles_captured_closure_envs() {
     let result = eval_i32(
         r#"

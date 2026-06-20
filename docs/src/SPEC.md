@@ -156,6 +156,13 @@ Rules:
 
 - `let rec` entries are separated by commas.
 - `let rec` bindings must bind variables (not arbitrary patterns).
+- A syntactic lambda binding is a recursive function binding. Type annotations around the lambda do
+  not change this classification.
+- Non-lambda bindings are value bindings. They are initialized sequentially and may only reference
+  earlier bindings in the same `let rec` group.
+- Function bodies may reference any binding in the same `let rec` group.
+- A value binding is rejected if it depends on itself, a later binding, or an earlier function whose
+  body can reach a binding that is not initialized yet.
 
 ## Top-Level Declaration Terminators
 

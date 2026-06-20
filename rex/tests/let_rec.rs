@@ -1,7 +1,7 @@
 mod common;
 
 use rex::{
-    engine::{Builder, Value},
+    engine::Builder,
     typesystem::{BuiltinTypeId, Type, TypeKind},
 };
 
@@ -138,34 +138,80 @@ async fn let_rec_function_is_still_polymorphic() {
 }
 
 #[tokio::test]
-async fn let_rec_allows_self_referential_data_cycles() {
-    let (_heap, handle, ty) = common::eval_source(
+async fn let_rec_allows_sequential_value_bindings() {
+    let (heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
+        r#"
+        let rec
+            x = 1,
+            y = x + 1
+        in
+            y
+    "#,
+    )
+    .await
+    .unwrap();
+    common::assert_i32_or_var(&ty);
+    let expected = heap.alloc_i32(2).unwrap();
+    common::assert_handles_eq(&handle, &expected);
+}
+
+#[tokio::test]
+async fn let_rec_value_may_reference_earlier_function() {
+    let (heap, handle, ty) = common::eval_source(
+        Builder::with_prelude(()).unwrap(),
+        r#"
+        let rec
+            inc = \n -> n + 1,
+            y = inc 4
+        in
+            y
+    "#,
+    )
+    .await
+    .unwrap();
+    common::assert_i32_or_var(&ty);
+    let expected = heap.alloc_i32(5).unwrap();
+    common::assert_handles_eq(&handle, &expected);
+}
+
+#[tokio::test]
+async fn let_rec_function_may_reference_later_value() {
+    let (heap, handle, ty) = common::eval_source(
+        Builder::with_prelude(()).unwrap(),
+        r#"
+        let rec
+            f = \_ -> x,
+            x = 41
+        in
+            f 0
+    "#,
+    )
+    .await
+    .unwrap();
+    common::assert_i32_or_var(&ty);
+    let expected = heap.alloc_i32(41).unwrap();
+    common::assert_handles_eq(&handle, &expected);
+}
+
+#[tokio::test]
+async fn let_rec_rejects_self_referential_data_cycles() {
+    common::assert_invalid_let_rec_value_dependency(
         r#"
         let rec
             xs = Cons 1 xs
         in
             xs
     "#,
+        "xs",
+        "xs",
     )
     .await
-    .unwrap();
-    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
-    let Value::Adt(tag, args) = handle.value().unwrap() else {
-        panic!(
-            "expected list constructor, got {}",
-            handle.type_name().unwrap()
-        );
-    };
-    assert_eq!(tag.as_ref(), "Cons");
-    assert_eq!(args.len(), 2);
-    common::assert_handles_eq(&handle, &args[1]);
 }
 
 #[tokio::test]
-async fn let_rec_allows_mutual_data_cycles() {
-    let (_heap, handle, ty) = common::eval_source(
-        Builder::with_prelude(()).unwrap(),
+async fn let_rec_rejects_mutual_data_cycles() {
+    common::assert_invalid_let_rec_value_dependency(
         r#"
         let rec
             a = Cons 1 b,
@@ -173,38 +219,73 @@ async fn let_rec_allows_mutual_data_cycles() {
         in
             (a, b)
     "#,
+        "a",
+        "b",
     )
     .await
-    .unwrap();
-    assert_eq!(
-        ty,
-        Type::tuple(vec![
-            Type::list(Type::builtin(BuiltinTypeId::I32)),
-            Type::list(Type::builtin(BuiltinTypeId::I32)),
-        ])
-    );
-    let Value::Tuple(items) = handle.value().unwrap() else {
-        panic!("expected tuple, got {}", handle.type_name().unwrap());
-    };
-    assert_eq!(items.len(), 2);
-    let a_handle = items[0].clone();
-    let b_handle = items[1].clone();
+}
 
-    let Value::Adt(_, a_args) = a_handle.value().unwrap() else {
-        panic!(
-            "expected list constructor, got {}",
-            a_handle.type_name().unwrap()
-        );
-    };
-    assert_eq!(a_args.len(), 2);
+#[tokio::test]
+async fn let_rec_rejects_forward_value_reference() {
+    common::assert_invalid_let_rec_value_dependency(
+        r#"
+        let rec
+            x = y,
+            y = 1
+        in
+            x
+    "#,
+        "x",
+        "y",
+    )
+    .await
+}
 
-    let Value::Adt(_, b_args) = b_handle.value().unwrap() else {
-        panic!(
-            "expected list constructor, got {}",
-            b_handle.type_name().unwrap()
-        );
-    };
-    assert_eq!(b_args.len(), 2);
-    common::assert_handles_eq(&a_args[1], &b_handle);
-    common::assert_handles_eq(&b_args[1], &a_handle);
+#[tokio::test]
+async fn let_rec_rejects_value_reference_to_later_function() {
+    common::assert_invalid_let_rec_value_dependency(
+        r#"
+        let rec
+            x = f 1,
+            f = \n -> n
+        in
+            x
+    "#,
+        "x",
+        "f",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn let_rec_rejects_value_calling_function_that_reaches_uninitialized_function() {
+    common::assert_invalid_let_rec_value_dependency(
+        r#"
+        let rec
+            f = \n -> g n,
+            x = f 4,
+            g = \n -> n + 1
+        in
+            x
+    "#,
+        "x",
+        "g",
+    )
+    .await
+}
+
+#[tokio::test]
+async fn let_rec_rejects_value_calling_function_that_reaches_uninitialized_value() {
+    common::assert_invalid_let_rec_value_dependency(
+        r#"
+        let rec
+            f = \_ -> x,
+            x = f 0
+        in
+            x
+    "#,
+        "x",
+        "x",
+    )
+    .await
 }
