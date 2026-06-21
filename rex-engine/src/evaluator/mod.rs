@@ -178,34 +178,54 @@ fn cell_type(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Type, EngineError> {
             elements,
         } => {
             let elements_cell = heap.get(elements)?;
-            let Cell::Data(elems) = elements_cell else {
-                return Err(EngineError::NativeType {
-                    expected: "data".into(),
-                    got: elements_cell.cell_type_name().into(),
-                });
-            };
-            if *start > *end || *end > elems.len() {
-                return Err(EngineError::NativeType {
-                    expected: format!("valid list slice within len {}", elems.len()),
-                    got: format!("start {start}, end {end}"),
-                });
-            }
-            let first = elems
-                .get(*start)
-                .ok_or_else(|| EngineError::UnknownType(Symbol::intern("list")))?;
-            let elem_ty = pointer_type(first)?;
-            for elem in elems.iter().take(*end).skip(*start + 1) {
-                let ty = pointer_type(elem)?;
-                if ty != elem_ty {
-                    return Err(EngineError::NativeType {
-                        expected: elem_ty.to_string(),
-                        got: ty.to_string(),
-                    });
+            match elements_cell {
+                Cell::Data(elems) => {
+                    if *start > *end || *end > elems.len() {
+                        return Err(EngineError::NativeType {
+                            expected: format!("valid list slice within len {}", elems.len()),
+                            got: format!("start {start}, end {end}"),
+                        });
+                    }
+                    let first = elems
+                        .get(*start)
+                        .ok_or_else(|| EngineError::UnknownType(Symbol::intern("list")))?;
+                    let elem_ty = pointer_type(first)?;
+                    for elem in elems.iter().take(*end).skip(*start + 1) {
+                        let ty = pointer_type(elem)?;
+                        if ty != elem_ty {
+                            return Err(EngineError::NativeType {
+                                expected: elem_ty.to_string(),
+                                got: ty.to_string(),
+                            });
+                        }
+                    }
+                    Ok(Type::app(Type::builtin(BuiltinTypeId::List), elem_ty))
                 }
+                Cell::BinaryData(bytes) => {
+                    if *start > *end || *end > bytes.len() {
+                        return Err(EngineError::NativeType {
+                            expected: format!("valid binary list slice within len {}", bytes.len()),
+                            got: format!("start {start}, end {end}"),
+                        });
+                    }
+                    if start == end {
+                        return Err(EngineError::UnknownType(Symbol::intern("list")));
+                    }
+                    Ok(Type::list(Type::builtin(BuiltinTypeId::U8)))
+                }
+                _ => Err(EngineError::NativeType {
+                    expected: "list slice backing data".into(),
+                    got: elements_cell.cell_type_name().into(),
+                }),
             }
-            Ok(Type::app(Type::builtin(BuiltinTypeId::List), elem_ty))
         }
-        Cell::Data(..) => Err(EngineError::UnknownType(Symbol::intern("data"))),
+        Cell::Data(..) | Cell::BinaryData(..) => {
+            Err(EngineError::UnknownType(Symbol::intern(match cell {
+                Cell::Data(..) => "data",
+                Cell::BinaryData(..) => "binary_data",
+                _ => unreachable!(),
+            })))
+        }
         Cell::Dict(map) => {
             let first = map
                 .values()

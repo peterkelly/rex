@@ -179,6 +179,10 @@ fn list_values(value: &Value) -> Vec<Handle> {
             elements,
         } => match elements.value().unwrap() {
             Value::Data(values) => values[*start..*end].to_vec(),
+            Value::BinaryData(values) => values[*start..*end]
+                .iter()
+                .map(|value| elements.heap().alloc_u8(*value).unwrap())
+                .collect(),
             _ => panic!("expected list backing data"),
         },
         _ => panic!("expected list value"),

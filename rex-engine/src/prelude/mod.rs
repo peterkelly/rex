@@ -537,6 +537,25 @@ fn list_range_from_items(
             }
             heap.handle(heap.alloc_ptr_list_slice(slice_start, slice_end, elements)?)
         }
+        ListItems::BinarySlice {
+            elements,
+            start: base_start,
+            end: base_end,
+            ..
+        } => {
+            let slice_start = base_start
+                .checked_add(start)
+                .ok_or_else(|| EngineError::Internal("list slice start overflow".into()))?;
+            let slice_end = base_start
+                .checked_add(end)
+                .ok_or_else(|| EngineError::Internal("list slice end overflow".into()))?;
+            if slice_end > base_end {
+                return Err(EngineError::Internal(
+                    "list slice range exceeds backing slice".into(),
+                ));
+            }
+            heap.handle(heap.alloc_ptr_list_slice(slice_start, slice_end, elements)?)
+        }
         ListItems::Pointers(values) => {
             heap.handle(heap.alloc_ptr_list(values[start..end].to_vec())?)
         }

@@ -594,6 +594,11 @@ as a slice over contiguous heap data. That choice is not exposed to Rex code:
 list constructors, list literals, pattern matching, and prelude collection
 functions all operate on the same `List a` abstraction.
 
+For `Vec<u8>`, Rex uses a binary data backing so host byte buffers do not need
+one heap allocation per byte. The Rex type is still `List u8`, and host
+functions accepting `Vec<u8>` can read lists backed by binary data, ordinary
+list data, or cons cells followed by either backing.
+
 ```rex
 match bytes with {
     case Cons head _ -> head;

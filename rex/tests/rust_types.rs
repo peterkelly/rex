@@ -140,6 +140,95 @@ async fn host_vecs_pattern_match_as_lists() {
 }
 
 #[tokio::test]
+async fn host_vec_u8_returns_binary_backed_list() {
+    fn return_bytes(_state: &()) -> Result<Vec<u8>, EngineError> {
+        Ok(vec![3, 4, 5])
+    }
+
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
+        module.export("return_bytes", return_bytes)
+    })
+    .unwrap();
+
+    let (result, _heap, ty) = eval_expr(builder, "return_bytes").await;
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::U8)));
+    let Value::ListSlice {
+        start,
+        end,
+        elements,
+    } = result.value().unwrap()
+    else {
+        panic!("expected list slice");
+    };
+    assert_eq!(start, 0);
+    assert_eq!(end, 3);
+    let Value::BinaryData(bytes) = elements.value().unwrap() else {
+        panic!("expected binary data backing");
+    };
+    assert_eq!(bytes, vec![3, 4, 5]);
+}
+
+#[tokio::test]
+async fn host_vec_u8_arguments_decode_binary_and_hybrid_lists() {
+    fn return_bytes(_state: &()) -> Result<Vec<u8>, EngineError> {
+        Ok(vec![10, 11, 12, 13])
+    }
+
+    fn accept_bytes(_state: &(), bytes: Vec<u8>) -> Result<String, EngineError> {
+        Ok(format!("{bytes:?}"))
+    }
+
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
+        module.export("return_bytes", return_bytes)?;
+        module.export("accept_bytes", accept_bytes)
+    })
+    .unwrap();
+
+    let (result, heap, ty) = eval_expr(
+        builder,
+        r#"
+        (
+          accept_bytes return_bytes,
+          accept_bytes (slice 1 3 return_bytes),
+          accept_bytes (Cons (1 is u8) (slice 1 4 return_bytes)),
+          match return_bytes with {
+            case Cons head tail -> (head, length tail);
+            case Empty -> (0 is u8, 0);
+          }
+        )
+        "#,
+    )
+    .await;
+
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String),
+            Type::tuple(vec![
+                Type::builtin(BuiltinTypeId::U8),
+                Type::builtin(BuiltinTypeId::I32),
+            ]),
+        ])
+    );
+    common::assert_handles_eq(
+        &result,
+        &heap
+            .alloc_tuple(vec![
+                heap.alloc_string("[10, 11, 12, 13]".to_string()).unwrap(),
+                heap.alloc_string("[11, 12]".to_string()).unwrap(),
+                heap.alloc_string("[1, 11, 12, 13]".to_string()).unwrap(),
+                heap.alloc_tuple(vec![heap.alloc_u8(10).unwrap(), heap.alloc_i32(3).unwrap()])
+                    .unwrap(),
+            ])
+            .unwrap(),
+    );
+}
+
+#[tokio::test]
 async fn option_prelude() {
     let builder = Builder::with_prelude(()).unwrap();
     let (result, heap, ty) = eval_expr(

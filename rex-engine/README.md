@@ -107,6 +107,8 @@ For explicit control, use:
 
 Rust `Vec<T>` values convert to Rex `List T`. Runtime lists may inspect as linked
 `Value::Cons`/`Value::Empty` values or as vector-backed `Value::ListSlice` values.
+For `Vec<u8>`, the slice can use `Value::BinaryData` backing to avoid allocating
+one cell per byte while preserving the same `List u8` behavior.
 
 ## Type Defaults
 

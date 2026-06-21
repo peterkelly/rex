@@ -1,5 +1,6 @@
 //! Core value representation for Rex.
 
+use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -190,6 +191,7 @@ pub enum Value {
         elements: Handle,
     },
     Data(Vec<Handle>),
+    BinaryData(Vec<u8>),
     Dict(BTreeMap<Symbol, Handle>),
     Adt(Symbol, Vec<Handle>),
     Uninitialized(Symbol),
@@ -219,6 +221,7 @@ impl Value {
             Value::Tuple(..) => "tuple",
             Value::Empty | Value::Cons(..) | Value::ListSlice { .. } => "list",
             Value::Data(..) => "data",
+            Value::BinaryData(..) => "binary_data",
             Value::Dict(..) => "dict",
             Value::Adt(..) => "adt",
             Value::Uninitialized(..) => "uninitialized",
@@ -503,6 +506,7 @@ enum ValueSeed {
         elements: Pointer,
     },
     Data(Vec<Pointer>),
+    BinaryData(Vec<u8>),
     Dict(BTreeMap<Symbol, Pointer>),
     Adt(Symbol, Vec<Pointer>),
     Uninitialized(Symbol),
@@ -542,6 +546,7 @@ impl ValueSeed {
                 elements: *elements,
             },
             Cell::Data(values) => Self::Data(values.clone()),
+            Cell::BinaryData(values) => Self::BinaryData(values.clone()),
             Cell::Dict(values) => Self::Dict(values.clone()),
             Cell::Adt(name, args) => Self::Adt(name.clone(), args.clone()),
             Cell::Uninitialized(name) => Self::Uninitialized(name.clone()),
@@ -911,6 +916,10 @@ impl Heap {
         handle_from_pointer(self, self.alloc_ptr_data(pointers)?)
     }
 
+    pub fn alloc_binary_data(&self, values: Vec<u8>) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_binary_data(values)?)
+    }
+
     pub fn alloc_list_slice(
         &self,
         start: usize,
@@ -959,6 +968,7 @@ impl Heap {
                 elements,
             } => self.alloc_list_slice(start, end, elements),
             Value::Data(values) => self.alloc_data(values),
+            Value::BinaryData(values) => self.alloc_binary_data(values),
             Value::Dict(values) => self.alloc_dict(values),
             Value::Adt(name, args) => self.alloc_adt(name, args),
             Value::Uninitialized(_)
@@ -1020,6 +1030,7 @@ impl Heap {
                 elements: self.handle(elements)?,
             },
             ValueSeed::Data(values) => Value::Data(self.handles_from_pointers(&values)?),
+            ValueSeed::BinaryData(values) => Value::BinaryData(values),
             ValueSeed::Dict(values) => {
                 let mut out = BTreeMap::new();
                 for (name, pointer) in values {
@@ -1125,14 +1136,23 @@ impl Heap {
     }
 
     pub(crate) fn pointer_as_list(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
-        self.with_access(|heap| {
-            let cell = heap.get(pointer)?;
-            list_to_vec(heap, cell)
-        })
+        let elements = self.with_access(|heap| list_elements_from_pointer(heap, *pointer))?;
+        materialize_list_elements(self, elements)
     }
 
     pub(crate) fn list_items(&self, pointer: Pointer) -> Result<ListItems, EngineError> {
-        self.with_access(|heap| list_items_from_pointer(heap, pointer))
+        match self.with_access(|heap| list_items_from_pointer(heap, pointer))? {
+            ListItemsSeed::Ready(items) => Ok(items),
+            ListItemsSeed::Elements(elements) => {
+                if elements
+                    .iter()
+                    .all(|element| matches!(element, ListElement::Pointer(_)))
+                {
+                    return list_elements_to_pointer_vec(elements).map(ListItems::Pointers);
+                }
+                materialize_list_elements(self, elements).map(ListItems::Pointers)
+            }
+        }
     }
 
     pub(crate) fn list_head_tail(
@@ -1143,21 +1163,14 @@ impl Heap {
             let cell = heap.get(pointer)?;
             match cell {
                 Cell::Empty => Ok(None),
-                Cell::Cons(head, tail) => Ok(Some((*head, None, *tail))),
+                Cell::Cons(head, tail) => Ok(Some((ListElement::Pointer(*head), None, *tail))),
                 Cell::ListSlice {
                     start,
                     end,
                     elements,
                 } => {
-                    let values = heap.get(elements)?.cell_as_data()?;
-                    validate_list_slice_bounds(values.len(), *start, *end)?;
-                    if start >= end {
+                    let Some(head) = list_slice_head_element(heap, elements, *start, *end)? else {
                         return Ok(None);
-                    }
-                    let Some(head) = values.get(*start).copied() else {
-                        return Err(EngineError::Internal(
-                            "list slice head index out of bounds".into(),
-                        ));
                     };
                     Ok(Some((head, Some((start + 1, *end)), *elements)))
                 }
@@ -1170,12 +1183,30 @@ impl Heap {
         else {
             return Ok(None);
         };
+        let head = match head {
+            ListElement::Pointer(pointer) => pointer,
+            ListElement::U8(value) => {
+                let elements_root = self.temp_roots(vec![elements])?;
+                let head = self.alloc_ptr_u8(value)?;
+                let elements = elements_root.get(0)?;
+                let tail = match tail_index {
+                    Some((start, end)) => {
+                        let roots = self.temp_roots(vec![head, elements])?;
+                        let tail = self.alloc_ptr_list_slice(start, end, roots.get(1)?)?;
+                        let head = roots.get(0)?;
+                        return Ok(Some((head, tail)));
+                    }
+                    None => elements,
+                };
+                return Ok(Some((head, tail)));
+            }
+        };
         let tail = match tail_index {
             Some((start, end)) => {
                 // Creating the tail slice can trigger copying GC. The head was
-                // read from the backing Data cell before that allocation, so it
-                // must be temporarily rooted or the returned pointer may refer
-                // to the pre-collection location.
+                // read from the backing data cell before that allocation, so
+                // it must be temporarily rooted or the returned pointer may
+                // refer to the pre-collection location.
                 let head_root = self.temp_roots(vec![head])?;
                 let tail = self.alloc_ptr_list_slice(start, end, elements)?;
                 let head = head_root.get(0)?;
@@ -1298,13 +1329,17 @@ impl Heap {
         self.alloc_cell(Cell::Data(values))
     }
 
+    pub(crate) fn alloc_ptr_binary_data(&self, values: Vec<u8>) -> Result<Pointer, EngineError> {
+        self.alloc_cell(Cell::BinaryData(values))
+    }
+
     pub(crate) fn alloc_ptr_list_slice(
         &self,
         start: usize,
         end: usize,
         elements: Pointer,
     ) -> Result<Pointer, EngineError> {
-        let len = self.with_access(|heap| Ok(heap.get(&elements)?.cell_as_data()?.len()))?;
+        let len = self.with_access(|heap| list_slice_backing_len(heap.get(&elements)?))?;
         validate_list_slice_bounds(len, start, end)?;
         if start == end {
             return self.alloc_ptr_empty();
@@ -1326,6 +1361,16 @@ impl Heap {
             .map(|index| roots.get(index))
             .collect::<Result<Vec<_>, _>>()?;
         let data = self.alloc_ptr_data(values)?;
+        let data = self.temp_roots(vec![data])?;
+        self.alloc_ptr_list_slice(0, len, data.get(0)?)
+    }
+
+    pub(crate) fn alloc_ptr_binary_list(&self, values: Vec<u8>) -> Result<Pointer, EngineError> {
+        if values.is_empty() {
+            return self.alloc_ptr_empty();
+        }
+        let len = values.len();
+        let data = self.alloc_ptr_binary_data(values)?;
         let data = self.temp_roots(vec![data])?;
         self.alloc_ptr_list_slice(0, len, data.get(0)?)
     }
@@ -1698,6 +1743,7 @@ pub(crate) enum Cell {
         elements: Pointer,
     },
     Data(Vec<Pointer>),
+    BinaryData(Vec<u8>),
     Dict(BTreeMap<Symbol, Pointer>),
     Adt(Symbol, Vec<Pointer>),
     Uninitialized(Symbol),
@@ -1727,6 +1773,7 @@ impl Cell {
             Cell::Tuple(..) => "tuple",
             Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. } => "list",
             Cell::Data(..) => "data",
+            Cell::BinaryData(..) => "binary_data",
             Cell::Dict(..) => "dict",
             Cell::Adt(..) => "adt",
             Cell::Uninitialized(..) => "uninitialized",
@@ -1907,6 +1954,7 @@ fn trace_cell_pointers(cell: &Cell, out: &mut Vec<Pointer>) {
         | Cell::String(_)
         | Cell::Uuid(_)
         | Cell::DateTime(_)
+        | Cell::BinaryData(_)
         | Cell::Empty
         | Cell::Uninitialized(_) => {}
     }
@@ -1956,6 +2004,7 @@ fn rewrite_cell_pointers(
         | Cell::String(_)
         | Cell::Uuid(_)
         | Cell::DateTime(_)
+        | Cell::BinaryData(_)
         | Cell::Empty
         | Cell::Uninitialized(_) => Ok(()),
     }
@@ -2111,12 +2160,7 @@ fn cell_debug_inner(
             format!("({})", items.join(", "))
         }
         Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. } => {
-            let values = list_to_vec(heap, cell)?;
-            let items = values
-                .iter()
-                .map(|pointer| pointer_debug_inner(heap, pointer, active))
-                .collect::<Result<Vec<_>, _>>()?;
-            format!("[{}]", items.join(", "))
+            format_list_debug(heap, cell, active)?
         }
         Cell::Data(values) => {
             let items = values
@@ -2125,6 +2169,7 @@ fn cell_debug_inner(
                 .collect::<Result<Vec<_>, _>>()?;
             format!("<data {}>", items.join(", "))
         }
+        Cell::BinaryData(values) => format!("<binary data {} bytes>", values.len()),
         Cell::Dict(values) => {
             let mut items = values.iter().collect::<Vec<_>>();
             items.sort_by(|(lhs, _), (rhs, _)| lhs.as_ref().cmp(rhs.as_ref()));
@@ -2244,12 +2289,7 @@ fn cell_display_inner(
             format!("({})", items.join(", "))
         }
         Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. } => {
-            let values = list_to_vec(heap, cell)?;
-            let items = values
-                .iter()
-                .map(|pointer| pointer_display_inner(heap, pointer, active, opts))
-                .collect::<Result<Vec<_>, _>>()?;
-            format!("[{}]", items.join(", "))
+            format_list_display(heap, cell, active, opts)?
         }
         Cell::Data(values) => {
             let items = values
@@ -2258,6 +2298,7 @@ fn cell_display_inner(
                 .collect::<Result<Vec<_>, _>>()?;
             format!("<data {}>", items.join(", "))
         }
+        Cell::BinaryData(values) => format!("<binary data {} bytes>", values.len()),
         Cell::Dict(values) => {
             let mut items = values.iter().collect::<Vec<_>>();
             items.sort_by(|(lhs, _), (rhs, _)| lhs.as_ref().cmp(rhs.as_ref()));
@@ -2398,22 +2439,11 @@ fn cell_eq_inner(
             }
             Ok(true)
         }
+        (Cell::BinaryData(lhs), Cell::BinaryData(rhs)) => Ok(lhs == rhs),
         (
             Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. },
             Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. },
-        ) => {
-            let lhs = list_to_vec(heap, lhs)?;
-            let rhs = list_to_vec(heap, rhs)?;
-            if lhs.len() != rhs.len() {
-                return Ok(false);
-            }
-            for (lhs, rhs) in lhs.iter().zip(rhs.iter()) {
-                if !pointer_eq_inner(heap, lhs, rhs, seen)? {
-                    return Ok(false);
-                }
-            }
-            Ok(true)
-        }
+        ) => list_cells_eq_inner(heap, lhs, rhs, seen),
         (Cell::Dict(lhs), Cell::Dict(rhs)) => {
             if lhs.len() != rhs.len() {
                 return Ok(false);
@@ -2479,25 +2509,84 @@ fn validate_list_slice_bounds(
     Ok(())
 }
 
-pub(crate) fn list_to_vec(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Vec<Pointer>, EngineError> {
-    if let Cell::ListSlice {
-        start,
-        end,
-        elements,
-    } = cell
-    {
-        let values = heap.get(elements)?.cell_as_data()?;
-        validate_list_slice_bounds(values.len(), *start, *end)?;
-        return Ok(values[*start..*end].to_vec());
+fn list_slice_backing_len(cell: &Cell) -> Result<usize, EngineError> {
+    match cell {
+        Cell::Data(values) => Ok(values.len()),
+        Cell::BinaryData(values) => Ok(values.len()),
+        _ => Err(EngineError::NativeType {
+            expected: "list slice backing data".into(),
+            got: cell.cell_type_name().into(),
+        }),
     }
+}
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ListElement {
+    Pointer(Pointer),
+    U8(u8),
+}
+
+fn append_list_slice_elements(
+    heap: &HeapAccess<'_>,
+    elements: &Pointer,
+    start: usize,
+    end: usize,
+    out: &mut Vec<ListElement>,
+) -> Result<(), EngineError> {
+    match heap.get(elements)? {
+        Cell::Data(values) => {
+            validate_list_slice_bounds(values.len(), start, end)?;
+            out.extend(values[start..end].iter().copied().map(ListElement::Pointer));
+            Ok(())
+        }
+        Cell::BinaryData(values) => {
+            validate_list_slice_bounds(values.len(), start, end)?;
+            out.extend(values[start..end].iter().copied().map(ListElement::U8));
+            Ok(())
+        }
+        cell => Err(EngineError::NativeType {
+            expected: "list slice backing data".into(),
+            got: cell.cell_type_name().into(),
+        }),
+    }
+}
+
+fn list_slice_head_element(
+    heap: &HeapAccess<'_>,
+    elements: &Pointer,
+    start: usize,
+    end: usize,
+) -> Result<Option<ListElement>, EngineError> {
+    if start >= end {
+        return Ok(None);
+    }
+    match heap.get(elements)? {
+        Cell::Data(values) => {
+            validate_list_slice_bounds(values.len(), start, end)?;
+            Ok(values.get(start).copied().map(ListElement::Pointer))
+        }
+        Cell::BinaryData(values) => {
+            validate_list_slice_bounds(values.len(), start, end)?;
+            Ok(values.get(start).copied().map(ListElement::U8))
+        }
+        cell => Err(EngineError::NativeType {
+            expected: "list slice backing data".into(),
+            got: cell.cell_type_name().into(),
+        }),
+    }
+}
+
+fn list_elements_from_cell(
+    heap: &HeapAccess<'_>,
+    cell: &Cell,
+) -> Result<Vec<ListElement>, EngineError> {
     let mut out = Vec::new();
     let mut cursor = cell;
     loop {
         match cursor {
             Cell::Empty => return Ok(out),
             Cell::Cons(head, tail) => {
-                out.push(*head);
+                out.push(ListElement::Pointer(*head));
                 cursor = heap.get(tail)?;
             }
             Cell::ListSlice {
@@ -2505,9 +2594,7 @@ pub(crate) fn list_to_vec(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Vec<Poin
                 end,
                 elements,
             } => {
-                let values = heap.get(elements)?.cell_as_data()?;
-                validate_list_slice_bounds(values.len(), *start, *end)?;
-                out.extend_from_slice(&values[*start..*end]);
+                append_list_slice_elements(heap, elements, *start, *end, &mut out)?;
                 return Ok(out);
             }
             _ => {
@@ -2520,12 +2607,174 @@ pub(crate) fn list_to_vec(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Vec<Poin
     }
 }
 
+fn list_elements_from_pointer(
+    heap: &HeapAccess<'_>,
+    pointer: Pointer,
+) -> Result<Vec<ListElement>, EngineError> {
+    let cell = heap.get(&pointer)?;
+    list_elements_from_cell(heap, cell)
+}
+
+enum MaterializedListElement {
+    RootedPointer(usize),
+    RootedByte(usize),
+}
+
+fn materialize_list_elements(
+    heap: &Heap,
+    elements: Vec<ListElement>,
+) -> Result<Vec<Pointer>, EngineError> {
+    let pointer_values = elements
+        .iter()
+        .filter_map(|element| match element {
+            ListElement::Pointer(pointer) => Some(*pointer),
+            ListElement::U8(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let pointer_roots = heap.temp_roots(pointer_values)?;
+    let mut next_pointer_root = 0;
+    let mut byte_roots = Vec::new();
+    let mut materialized = Vec::with_capacity(elements.len());
+
+    for element in elements {
+        match element {
+            ListElement::Pointer(_) => {
+                materialized.push(MaterializedListElement::RootedPointer(next_pointer_root));
+                next_pointer_root += 1;
+            }
+            ListElement::U8(value) => {
+                let pointer = heap.alloc_ptr_u8(value)?;
+                byte_roots.push(heap.temp_roots(vec![pointer])?);
+                materialized.push(MaterializedListElement::RootedByte(byte_roots.len() - 1));
+            }
+        }
+    }
+
+    materialized
+        .into_iter()
+        .map(|element| match element {
+            MaterializedListElement::RootedPointer(index) => pointer_roots.get(index),
+            MaterializedListElement::RootedByte(index) => byte_roots[index].get(0),
+        })
+        .collect()
+}
+
+fn list_elements_to_pointer_vec(elements: Vec<ListElement>) -> Result<Vec<Pointer>, EngineError> {
+    elements
+        .into_iter()
+        .map(|element| match element {
+            ListElement::Pointer(pointer) => Ok(pointer),
+            ListElement::U8(_) => Err(EngineError::NativeType {
+                expected: "pointer-backed list".into(),
+                got: "binary-backed list".into(),
+            }),
+        })
+        .collect()
+}
+
+pub(crate) fn list_to_vec(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Vec<Pointer>, EngineError> {
+    list_elements_to_pointer_vec(list_elements_from_cell(heap, cell)?)
+}
+
+fn collect_list_u8(heap: &Heap, pointer: &Pointer) -> Result<Vec<u8>, EngineError> {
+    let elements = heap.with_access(|heap| list_elements_from_pointer(heap, *pointer))?;
+    let mut out = Vec::with_capacity(elements.len());
+    for element in elements {
+        match element {
+            ListElement::Pointer(pointer) => out.push(heap.pointer_as_u8(&pointer)?),
+            ListElement::U8(value) => out.push(value),
+        }
+    }
+    Ok(out)
+}
+
+fn format_list_debug(
+    heap: &HeapAccess<'_>,
+    cell: &Cell,
+    active: &mut HashSet<PointerKey>,
+) -> Result<String, EngineError> {
+    let items = list_elements_from_cell(heap, cell)?
+        .into_iter()
+        .map(|element| match element {
+            ListElement::Pointer(pointer) => pointer_debug_inner(heap, &pointer, active),
+            ListElement::U8(value) => Ok(format!("{value}u8")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(format!("[{}]", items.join(", ")))
+}
+
+fn format_list_display(
+    heap: &HeapAccess<'_>,
+    cell: &Cell,
+    active: &mut HashSet<PointerKey>,
+    opts: ValueDisplayOptions,
+) -> Result<String, EngineError> {
+    let items = list_elements_from_cell(heap, cell)?
+        .into_iter()
+        .map(|element| match element {
+            ListElement::Pointer(pointer) => pointer_display_inner(heap, &pointer, active, opts),
+            ListElement::U8(value) => {
+                if opts.include_numeric_suffixes {
+                    Ok(format!("{value}u8"))
+                } else {
+                    Ok(value.to_string())
+                }
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(format!("[{}]", items.join(", ")))
+}
+
+fn list_element_eq_inner(
+    heap: &HeapAccess<'_>,
+    lhs: ListElement,
+    rhs: ListElement,
+    seen: &mut HashSet<PointerPairKey>,
+) -> Result<bool, EngineError> {
+    match (lhs, rhs) {
+        (ListElement::Pointer(lhs), ListElement::Pointer(rhs)) => {
+            pointer_eq_inner(heap, &lhs, &rhs, seen)
+        }
+        (ListElement::U8(lhs), ListElement::U8(rhs)) => Ok(lhs == rhs),
+        (ListElement::U8(lhs), ListElement::Pointer(rhs))
+        | (ListElement::Pointer(rhs), ListElement::U8(lhs)) => match heap.get(&rhs)? {
+            Cell::U8(rhs) => Ok(lhs == *rhs),
+            _ => Ok(false),
+        },
+    }
+}
+
+fn list_cells_eq_inner(
+    heap: &HeapAccess<'_>,
+    lhs: &Cell,
+    rhs: &Cell,
+    seen: &mut HashSet<PointerPairKey>,
+) -> Result<bool, EngineError> {
+    let lhs = list_elements_from_cell(heap, lhs)?;
+    let rhs = list_elements_from_cell(heap, rhs)?;
+    if lhs.len() != rhs.len() {
+        return Ok(false);
+    }
+    for (lhs, rhs) in lhs.into_iter().zip(rhs) {
+        if !list_element_eq_inner(heap, lhs, rhs, seen)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ListItems {
     Slice {
         elements: Pointer,
         start: usize,
         end: usize,
+    },
+    BinarySlice {
+        elements: Pointer,
+        start: usize,
+        end: usize,
+        bytes: Arc<[u8]>,
     },
     Pointers(Vec<Pointer>),
 }
@@ -2538,6 +2787,7 @@ impl ListItems {
     pub(crate) fn len(&self) -> usize {
         match self {
             Self::Slice { start, end, .. } => end - start,
+            Self::BinarySlice { start, end, .. } => end - start,
             Self::Pointers(values) => values.len(),
         }
     }
@@ -2570,6 +2820,20 @@ impl ListItems {
                     })
                 })
             }
+            Self::BinarySlice {
+                start, end, bytes, ..
+            } => {
+                let len = end - start;
+                if index >= len {
+                    return Err(EngineError::Internal(
+                        "list item index out of bounds".into(),
+                    ));
+                }
+                let value = bytes.get(index).copied().ok_or_else(|| {
+                    EngineError::Internal("binary list slice index out of bounds".into())
+                })?;
+                heap.alloc_ptr_u8(value)
+            }
             Self::Pointers(values) => values
                 .get(index)
                 .copied()
@@ -2579,7 +2843,9 @@ impl ListItems {
 
     pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         match self {
-            Self::Slice { elements, .. } => out.push(*elements),
+            Self::Slice { elements, .. } | Self::BinarySlice { elements, .. } => {
+                out.push(*elements);
+            }
             Self::Pointers(values) => out.extend(values.iter().copied()),
         }
     }
@@ -2589,7 +2855,7 @@ impl ListItems {
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
         match self {
-            Self::Slice { elements, .. } => {
+            Self::Slice { elements, .. } | Self::BinarySlice { elements, .. } => {
                 *elements = rewrite(*elements)?;
                 Ok(())
             }
@@ -2603,27 +2869,48 @@ impl ListItems {
     }
 }
 
+enum ListItemsSeed {
+    Ready(ListItems),
+    Elements(Vec<ListElement>),
+}
+
 fn list_items_from_pointer(
     heap: &HeapAccess<'_>,
     pointer: Pointer,
-) -> Result<ListItems, EngineError> {
+) -> Result<ListItemsSeed, EngineError> {
     let cell = heap.get(&pointer)?;
     match cell {
-        Cell::Empty => Ok(ListItems::Pointers(Vec::new())),
+        Cell::Empty => Ok(ListItemsSeed::Ready(ListItems::Pointers(Vec::new()))),
         Cell::ListSlice {
             start,
             end,
             elements,
-        } => {
-            let values = heap.get(elements)?.cell_as_data()?;
-            validate_list_slice_bounds(values.len(), *start, *end)?;
-            Ok(ListItems::Slice {
-                elements: *elements,
-                start: *start,
-                end: *end,
-            })
-        }
-        Cell::Cons(..) => Ok(ListItems::Pointers(list_to_vec(heap, cell)?)),
+        } => match heap.get(elements)? {
+            Cell::Data(values) => {
+                validate_list_slice_bounds(values.len(), *start, *end)?;
+                Ok(ListItemsSeed::Ready(ListItems::Slice {
+                    elements: *elements,
+                    start: *start,
+                    end: *end,
+                }))
+            }
+            Cell::BinaryData(values) => {
+                validate_list_slice_bounds(values.len(), *start, *end)?;
+                Ok(ListItemsSeed::Ready(ListItems::BinarySlice {
+                    elements: *elements,
+                    start: *start,
+                    end: *end,
+                    bytes: Arc::from(&values[*start..*end]),
+                }))
+            }
+            cell => Err(EngineError::NativeType {
+                expected: "list slice backing data".into(),
+                got: cell.cell_type_name().into(),
+            }),
+        },
+        Cell::Cons(..) => Ok(ListItemsSeed::Elements(list_elements_from_cell(
+            heap, cell,
+        )?)),
         _ => Err(EngineError::NativeType {
             expected: "list".into(),
             got: cell.cell_type_name().into(),
@@ -2775,8 +3062,16 @@ impl IntoPointer for &str {
     }
 }
 
-impl<T: IntoPointer> IntoPointer for Vec<T> {
+impl<T: IntoPointer + 'static> IntoPointer for Vec<T> {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
+        if TypeId::of::<T>() == TypeId::of::<u8>() {
+            let boxed: Box<dyn Any> = Box::new(self);
+            let bytes = boxed
+                .downcast::<Vec<u8>>()
+                .map_err(|_| EngineError::Internal("Vec<u8> TypeId downcast failed".into()))?;
+            return heap.alloc_ptr_binary_list(*bytes);
+        }
+
         let mut roots = Vec::new();
         for value in self {
             let pointer = value.into_pointer(heap)?;
@@ -2865,8 +3160,16 @@ impl IntoRex for &str {
     }
 }
 
-impl<T: IntoRex> IntoRex for Vec<T> {
+impl<T: IntoRex + 'static> IntoRex for Vec<T> {
     fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
+        if TypeId::of::<T>() == TypeId::of::<u8>() {
+            let boxed: Box<dyn Any> = Box::new(self);
+            let bytes = boxed
+                .downcast::<Vec<u8>>()
+                .map_err(|_| EngineError::Internal("Vec<u8> TypeId downcast failed".into()))?;
+            return handle_from_pointer(heap, heap.alloc_ptr_binary_list(*bytes)?);
+        }
+
         let values = self
             .into_iter()
             .map(|value| value.into_rex(heap))
@@ -2879,10 +3182,19 @@ impl<T: IntoRex> IntoRex for Vec<T> {
     }
 }
 
-impl<T: FromRex> FromRex for Vec<T> {
+impl<T: FromRex + 'static> FromRex for Vec<T> {
     fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
         let heap = handle.heap();
         let pointer = handle.pointer()?;
+        if TypeId::of::<T>() == TypeId::of::<u8>() {
+            let bytes = collect_list_u8(heap, &pointer)?;
+            let boxed: Box<dyn Any> = Box::new(bytes);
+            return boxed
+                .downcast::<Vec<T>>()
+                .map(|values| *values)
+                .map_err(|_| EngineError::Internal("Vec<u8> TypeId downcast failed".into()));
+        }
+
         let pointers = heap.pointer_as_list(&pointer)?;
         let mut out = Vec::with_capacity(pointers.len());
         for pointer in pointers {
@@ -2992,9 +3304,18 @@ impl FromPointer for Cell {
 
 impl<T> FromPointer for Vec<T>
 where
-    T: FromPointer,
+    T: FromPointer + 'static,
 {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        if TypeId::of::<T>() == TypeId::of::<u8>() {
+            let bytes = collect_list_u8(heap, pointer)?;
+            let boxed: Box<dyn Any> = Box::new(bytes);
+            return boxed
+                .downcast::<Vec<T>>()
+                .map(|values| *values)
+                .map_err(|_| EngineError::Internal("Vec<u8> TypeId downcast failed".into()));
+        }
+
         let xs = heap.pointer_as_list(pointer)?;
         let mut ys = Vec::with_capacity(xs.len());
         for x in &xs {
@@ -3415,6 +3736,171 @@ mod tests {
         assert_eq!(start, 1);
         assert_eq!(end, 3);
         assert_eq!(elements, original_data);
+    }
+
+    fn binary_slice(heap: &Heap, values: &[u8], start: usize, end: usize) -> Handle {
+        let data = heap
+            .alloc_binary_data(values.to_vec())
+            .expect("binary data should allocate");
+        heap.alloc_list_slice(start, end, data)
+            .expect("binary slice should allocate")
+    }
+
+    fn data_u8_slice(heap: &Heap, values: &[u8], start: usize, end: usize) -> Handle {
+        let values = values
+            .iter()
+            .map(|value| heap.alloc_u8(*value).expect("u8 should allocate"))
+            .collect::<Vec<_>>();
+        let data = heap.alloc_data(values).expect("data should allocate");
+        heap.alloc_list_slice(start, end, data)
+            .expect("data slice should allocate")
+    }
+
+    fn cons_u8_prefix(heap: &Heap, prefix: &[u8], tail: Handle) -> Handle {
+        let mut list = tail;
+        for value in prefix.iter().rev() {
+            let head = heap.alloc_u8(*value).expect("u8 should allocate");
+            list = heap.alloc_cons(head, list).expect("cons should allocate");
+        }
+        list
+    }
+
+    fn assert_vec_u8(handle: &Handle, expected: &[u8]) {
+        assert_eq!(
+            Vec::<u8>::from_rex(handle).expect("Vec<u8> should decode"),
+            expected
+        );
+    }
+
+    #[test]
+    fn vec_u8_into_rex_uses_binary_data_backing() {
+        let heap = Heap::new();
+        let bytes = vec![1u8, 2, 3, 4]
+            .into_rex(&heap)
+            .expect("Vec<u8> should convert");
+
+        let Cell::ListSlice {
+            start,
+            end,
+            elements,
+        } = heap
+            .clone_cell(&bytes.pointer().expect("bytes pointer"))
+            .expect("list cell should exist")
+        else {
+            panic!("expected binary-backed list slice");
+        };
+        assert_eq!(start, 0);
+        assert_eq!(end, 4);
+        let Cell::BinaryData(backing) = heap
+            .clone_cell(&elements)
+            .expect("binary data cell should exist")
+        else {
+            panic!("expected binary data backing");
+        };
+        assert_eq!(backing, vec![1, 2, 3, 4]);
+        assert_eq!(
+            bytes
+                .display_with(ValueDisplayOptions {
+                    include_numeric_suffixes: true,
+                    ..ValueDisplayOptions::default()
+                })
+                .expect("binary list should display"),
+            "[1u8, 2u8, 3u8, 4u8]"
+        );
+    }
+
+    #[test]
+    fn binary_list_head_tail_shares_binary_backing_across_gc() {
+        let heap = Heap::new();
+        let bytes = vec![7u8, 8, 9]
+            .into_rex(&heap)
+            .expect("Vec<u8> should convert");
+
+        heap.set_collect_on_every_alloc(true)
+            .expect("enable gc every alloc");
+        let (head, tail) = heap
+            .list_head_tail(&bytes.pointer().expect("bytes pointer"))
+            .expect("head/tail should decode")
+            .expect("list should be non-empty");
+
+        assert_eq!(heap.pointer_as_u8(&head).expect("head should be u8"), 7);
+        let Cell::ListSlice {
+            start,
+            end,
+            elements,
+        } = heap.clone_cell(&tail).expect("tail cell should exist")
+        else {
+            panic!("expected binary tail list slice");
+        };
+        assert_eq!(start, 1);
+        assert_eq!(end, 3);
+        let Cell::BinaryData(backing) = heap
+            .clone_cell(&elements)
+            .expect("binary data cell should exist")
+        else {
+            panic!("expected binary data backing");
+        };
+        assert_eq!(backing, vec![7, 8, 9]);
+        let tail = heap.handle(tail).expect("tail should be rootable");
+        assert_vec_u8(&tail, &[8, 9]);
+    }
+
+    #[test]
+    fn vec_u8_from_rex_decodes_all_list_backing_permutations() {
+        let heap = Heap::new();
+
+        let empty = Vec::<u8>::new()
+            .into_rex(&heap)
+            .expect("empty Vec<u8> should convert");
+        assert_vec_u8(&empty, &[]);
+
+        let binary_full = binary_slice(&heap, &[10, 11, 12, 13], 0, 4);
+        assert_vec_u8(&binary_full, &[10, 11, 12, 13]);
+
+        let binary_sub = binary_slice(&heap, &[10, 11, 12, 13, 14], 1, 4);
+        assert_vec_u8(&binary_sub, &[11, 12, 13]);
+
+        let data_full = data_u8_slice(&heap, &[20, 21, 22], 0, 3);
+        assert_vec_u8(&data_full, &[20, 21, 22]);
+
+        let data_sub = data_u8_slice(&heap, &[20, 21, 22, 23], 1, 3);
+        assert_vec_u8(&data_sub, &[21, 22]);
+
+        let cons_only = cons_u8_prefix(&heap, &[1, 2], heap.alloc_empty().expect("empty list"));
+        assert_vec_u8(&cons_only, &[1, 2]);
+
+        let cons_then_data =
+            cons_u8_prefix(&heap, &[1, 2], data_u8_slice(&heap, &[30, 31, 32], 1, 3));
+        assert_vec_u8(&cons_then_data, &[1, 2, 31, 32]);
+
+        let cons_then_binary =
+            cons_u8_prefix(&heap, &[1, 2], binary_slice(&heap, &[40, 41, 42, 43], 1, 4));
+        assert_vec_u8(&cons_then_binary, &[1, 2, 41, 42, 43]);
+    }
+
+    #[test]
+    fn binary_and_data_backed_u8_lists_compare_and_view_as_lists() {
+        let heap = Heap::new();
+        let binary = binary_slice(&heap, &[1, 2, 3, 4], 1, 3);
+        let data = data_u8_slice(&heap, &[2, 3], 0, 2);
+
+        assert!(
+            binary.value_eq(&data).expect("lists should compare"),
+            "binary-backed and data-backed lists should compare by elements"
+        );
+        assert_eq!(
+            binary
+                .display_with(ValueDisplayOptions {
+                    include_numeric_suffixes: true,
+                    ..ValueDisplayOptions::default()
+                })
+                .expect("binary list should display"),
+            "[2u8, 3u8]"
+        );
+        let values = binary.as_list().expect("binary list should materialize");
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0].as_u8().expect("first byte"), 2);
+        assert_eq!(values[1].as_u8().expect("second byte"), 3);
     }
 
     #[test]
