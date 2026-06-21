@@ -137,7 +137,7 @@ async fn derive_struct_roundtrip_value() {
         MyStruct {
             x = true,
             y = 42,
-            tags = to_array ["a", "b", "c"],
+            tags = ["a", "b", "c"],
             props = { a = 1, b = 2 },
             inner = MyInnerStruct { x = false, y = 7 },
             pair = (1, "hi", true),
@@ -178,7 +178,7 @@ async fn derive_struct_eval_json_matches_rust_serde_json() {
         MyStruct {
             x = true,
             y = 42,
-            tags = to_array ["a", "b", "c"],
+            tags = ["a", "b", "c"],
             props = { a = 1, b = 2 },
             inner = MyInnerStruct { x = false, y = 7 },
             pair = (1, "hi", true),
@@ -309,7 +309,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
         bump_y (MyStruct {
             x = true,
             y = 42,
-            tags = to_array ["a", "b", "c"],
+            tags = ["a", "b", "c"],
             props = { a = 1, b = 2 },
             inner = MyInnerStruct { x = false, y = 7 },
             pair = (1, "hi", true),
@@ -500,13 +500,13 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
 }
 
 #[test]
-fn derive_vec_fields_serialize_and_deserialize_as_arrays() {
-    fn array_from_values(heap: &Heap, values: &[i32]) -> Handle {
+fn derive_vec_fields_serialize_and_deserialize_as_lists() {
+    fn list_from_values(heap: &Heap, values: &[i32]) -> Handle {
         let items = values
             .iter()
             .map(|value| heap.alloc_i32(*value).unwrap())
             .collect();
-        heap.alloc_array(items).unwrap()
+        heap.alloc_list(items).unwrap()
     }
 
     fn assert_values(values: Vec<i32>, expected: &[i32]) {
@@ -516,7 +516,7 @@ fn derive_vec_fields_serialize_and_deserialize_as_arrays() {
             adt.variants[0].args,
             vec![Type::record(vec![(
                 Symbol::intern("values"),
-                Type::array(Type::builtin(BuiltinTypeId::I32)),
+                Type::list(Type::builtin(BuiltinTypeId::I32)),
             )])]
         );
 
@@ -534,13 +534,11 @@ fn derive_vec_fields_serialize_and_deserialize_as_arrays() {
         let Value::Dict(fields) = args[0].value().unwrap() else {
             panic!("expected record payload");
         };
-        let array_handle = fields
+        let list_handle = fields
             .get(&Symbol::intern("values"))
             .expect("expected `values` field");
-        let Value::Array(array_items) = array_handle.value().unwrap() else {
-            panic!("expected array field");
-        };
-        let actual = array_items
+        let list_items = list_handle.as_list().unwrap();
+        let actual = list_items
             .iter()
             .map(|item| item.to_rust::<i32>().unwrap())
             .collect::<Vec<_>>();
@@ -548,7 +546,7 @@ fn derive_vec_fields_serialize_and_deserialize_as_arrays() {
         assert_eq!(actual, expected);
 
         let mut fields = std::collections::BTreeMap::new();
-        fields.insert(Symbol::intern("values"), array_from_values(&heap, expected));
+        fields.insert(Symbol::intern("values"), list_from_values(&heap, expected));
         let handle = heap
             .alloc_adt(
                 Symbol::intern("VecFieldSnapshot"),

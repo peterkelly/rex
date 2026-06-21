@@ -166,17 +166,18 @@ macro_rules! assert_pointer_eq {
 }
 
 fn list_values(value: &Value) -> Vec<Handle> {
-    let mut out = Vec::new();
-    let mut cur = value.clone();
-    loop {
-        match &cur {
-            Value::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => return out,
-            Value::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
-                out.push(args[0].clone());
-                cur = args[1].value().unwrap();
-            }
-            _ => panic!("expected list value"),
+    match value {
+        Value::Empty => Vec::new(),
+        Value::Cons(head, tail) => {
+            let mut out = vec![head.clone()];
+            out.extend(list_values(&tail.value().unwrap()));
+            out
         }
+        Value::ListSlice { index, elements } => match elements.value().unwrap() {
+            Value::Data(values) => values.into_iter().skip(*index).collect(),
+            _ => panic!("expected list backing data"),
+        },
+        _ => panic!("expected list value"),
     }
 }
 
@@ -572,7 +573,7 @@ async fn typed_native_injection_uses_handle_conversions() {
             Ok(HandleOnlyI32(value.0 + 1))
         })?;
         module.export(
-            "shift_handle_only_array",
+            "shift_handle_only_list",
             |_: &(), values: Vec<HandleOnlyI32>| {
                 Ok(values
                     .into_iter()
@@ -583,7 +584,7 @@ async fn typed_native_injection_uses_handle_conversions() {
         Ok(())
     });
 
-    let expr = parse("(bump_handle_only 41, shift_handle_only_array (to_array [1, 2, 3]))");
+    let expr = parse("(bump_handle_only 41, shift_handle_only_list [1, 2, 3])");
     let compiler = builder.build_compiler();
     let program = CompilationUnit {
         decls: Vec::new(),
@@ -600,7 +601,7 @@ async fn typed_native_injection_uses_handle_conversions() {
         ty,
         Type::tuple(vec![
             Type::builtin(BuiltinTypeId::I32),
-            Type::array(Type::builtin(BuiltinTypeId::I32)),
+            Type::list(Type::builtin(BuiltinTypeId::I32)),
         ])
     );
 
@@ -609,10 +610,9 @@ async fn typed_native_injection_uses_handle_conversions() {
     };
     assert_eq!(items[0].to_rust::<i32>().unwrap(), 42);
 
-    let Value::Array(shifted) = items[1].value().unwrap() else {
-        panic!("expected array");
-    };
-    let shifted = shifted
+    let shifted = items[1]
+        .as_list()
+        .unwrap()
         .iter()
         .map(|item| item.to_rust::<i32>().unwrap())
         .collect::<Vec<_>>();
@@ -1378,7 +1378,7 @@ async fn eval_result_filter_pipeline() {
 }
 
 #[tokio::test]
-async fn eval_array_combinators() {
+async fn eval_list_combinators_for_host_vecs() {
     let mut builder = Builder::with_prelude(()).unwrap();
     inject_globals(&mut builder, |module| {
         module.export_value("arr", vec![1i32, 2i32, 3i32])
@@ -1399,50 +1399,46 @@ async fn eval_array_combinators() {
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
     let value = pval!(builder, value);
     match value {
-        Value::Tuple(xs) => {
-            let xs = pvals!(builder, xs);
-            assert_eq!(xs.len(), 5);
-            match &xs[0] {
-                Value::Array(vals) => {
+        Value::Tuple(items) => {
+            let viewed = pvals!(builder, items);
+            assert_eq!(viewed.len(), 5);
+            match &viewed[0] {
+                value if value.value_type_name() == "list" => {
+                    let vals = items[0].as_list().unwrap();
                     let vals = pvals!(builder, vals);
                     assert_eq!(vals.len(), 3);
                     assert!(matches!(vals[0], Value::I32(2)));
                     assert!(matches!(vals[1], Value::I32(3)));
                     assert!(matches!(vals[2], Value::I32(4)));
                 }
-                _ => panic!("expected mapped array"),
+                _ => panic!("expected mapped list"),
             }
-            assert!(matches!(xs[1], Value::I32(6)));
-            match &xs[2] {
-                Value::Array(vals) => {
+            assert!(matches!(viewed[1], Value::I32(6)));
+            match &viewed[2] {
+                value if value.value_type_name() == "list" => {
+                    let vals = items[2].as_list().unwrap();
                     let vals = pvals!(builder, vals);
                     assert_eq!(vals.len(), 2);
                     assert!(matches!(vals[0], Value::I32(1)));
                     assert!(matches!(vals[1], Value::I32(2)));
                 }
-                _ => panic!("expected taken array"),
+                _ => panic!("expected taken list"),
             }
-            match &xs[3] {
-                Value::Array(vals) => {
+            match &viewed[3] {
+                value if value.value_type_name() == "list" => {
+                    let vals = items[3].as_list().unwrap();
                     let vals = pvals!(builder, vals);
                     assert_eq!(vals.len(), 2);
                     assert!(matches!(vals[0], Value::I32(2)));
                     assert!(matches!(vals[1], Value::I32(3)));
                 }
-                _ => panic!("expected skipped array"),
+                _ => panic!("expected skipped list"),
             }
-            match &xs[4] {
+            match &viewed[4] {
                 Value::Tuple(parts) => {
-                    let parts = pvals!(builder, parts);
                     assert_eq!(parts.len(), 2);
-                    match &parts[0] {
-                        Value::Array(vals) => assert_eq!(vals.len(), 3),
-                        _ => panic!("expected unzipped left array"),
-                    }
-                    match &parts[1] {
-                        Value::Array(vals) => assert_eq!(vals.len(), 3),
-                        _ => panic!("expected unzipped right array"),
-                    }
+                    assert_eq!(parts[0].type_name().unwrap(), "list");
+                    assert_eq!(parts[1].type_name().unwrap(), "list");
                 }
                 _ => panic!("expected unzipped tuple"),
             }

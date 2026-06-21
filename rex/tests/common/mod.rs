@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use rex::{
-    ast::{CompilationUnit, Symbol},
+    ast::CompilationUnit,
     engine::{
         Builder, CompileOptions, EngineError, Handle, Heap, Module, Value, ValueDisplayOptions,
     },
@@ -90,27 +90,11 @@ pub fn tuple_items(value: &Handle) -> Vec<Handle> {
 }
 
 pub fn list_elements(list: &Handle) -> Vec<Handle> {
-    let mut out = Vec::new();
-    let mut cur = list.clone();
-    loop {
-        match cur.value().unwrap() {
-            Value::Adt(tag, _args) if tag.as_ref() == "Empty" => return out,
-            Value::Adt(tag, args) if tag.as_ref() == "Cons" => {
-                assert_eq!(args.len(), 2, "Cons must have exactly two fields");
-                out.push(args[0].clone());
-                cur = args[1].clone();
-            }
-            other => panic!("expected list, got {}", other.value_type_name()),
-        }
-    }
+    list.as_list().unwrap()
 }
 
 pub fn list_from_handles(heap: &Heap, values: Vec<Handle>) -> Result<Handle, EngineError> {
-    let mut list = heap.alloc_adt(Symbol::intern("Empty"), vec![])?;
-    for value in values.into_iter().rev() {
-        list = heap.alloc_adt(Symbol::intern("Cons"), vec![value, list])?;
-    }
-    Ok(list)
+    heap.alloc_list(values)
 }
 
 pub fn assert_handles_eq(lhs: &Handle, rhs: &Handle) {

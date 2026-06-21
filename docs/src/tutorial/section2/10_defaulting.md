@@ -17,7 +17,6 @@ Built-in types with `Default`:
 - `f32`, `f64`
 - `string`
 - `List a`
-- `Array a`
 - `Option a`
 - `Result a e` (when `Default a` is available)
 

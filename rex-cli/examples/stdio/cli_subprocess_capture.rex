@@ -12,7 +12,7 @@ import std.io;
 
 let p = process.spawn (process.SpawnOptions {
   cmd = "sh",
-  args = to_array ["-c", "printf hi; printf err 1>&2; exit 7"]
+  args = ["-c", "printf hi; printf err 1>&2; exit 7"]
 }) in
 let code = process.wait p in
 let forward =

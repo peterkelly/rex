@@ -21,7 +21,7 @@ use crate::{
         FrValueState, FrVar, Frame,
     },
     util::{is_function_type, split_fun},
-    value::{Cell, Closure, Collection, Handle, Heap, HeapAccess, Pointer, TempRoots, list_to_vec},
+    value::{Cell, Closure, Collection, Handle, Heap, HeapAccess, Pointer, TempRoots},
 };
 use rex_ast::{Pattern, Symbol};
 use rex_typesystem::{
@@ -666,11 +666,7 @@ where
         _ => return frame_kind_error("list"),
     };
     if elems.is_empty() {
-        return Ok(EvalControl::Return(
-            runtime
-                .heap
-                .alloc_ptr_adt(Symbol::intern("Empty"), vec![])?,
-        ));
+        return Ok(EvalControl::Return(runtime.heap.alloc_ptr_empty()?));
     }
 
     frame.state = FrSequenceState::EvalItem;
@@ -1275,21 +1271,47 @@ where
         Frame::Match(mut frame) => match frame.state {
             FrMatchState::EvalScrutinee => {
                 frame.scrutinee_value = Some(value);
-                for idx in frame.next_arm_index..frame.arms.len() {
-                    let arm = &frame.arms[idx];
-                    if let Some(bindings) = match_pattern_ptr(&runtime.heap, &arm.pattern, &value) {
-                        let env = frame.env.extend_many(bindings);
-                        let expr = Arc::clone(&arm.expr);
-                        frame.next_arm_index = idx;
-                        frame.matched_env = Some(env.clone());
-                        frame.state = FrMatchState::EvalArm;
+                runtime
+                    .heap
+                    .replace_frame(&frame_ptr, Frame::Match(frame))?;
+                let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
+                loop {
+                    let current_frame_ptr = roots.get(0)?;
+                    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+                        Frame::Match(frame) => frame,
+                        _ => return frame_kind_error("match"),
+                    };
+                    let value = current_frame.scrutinee_value.ok_or_else(|| {
+                        EngineError::Internal("match frame missing scrutinee".into())
+                    })?;
+                    if current_frame.next_arm_index >= current_frame.arms.len() {
+                        return Err(EngineError::MatchFailure);
+                    }
+                    let idx = current_frame.next_arm_index;
+                    let arm = &current_frame.arms[idx];
+                    let matched = match_pattern_ptr(&runtime.heap, &arm.pattern, &value);
+                    let current_frame_ptr = roots.get(0)?;
+                    let mut current_frame =
+                        match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+                            Frame::Match(frame) => frame,
+                            _ => return frame_kind_error("match"),
+                        };
+                    if let Some(bindings) = matched {
+                        let env = current_frame.env.extend_many(bindings);
+                        let expr = Arc::clone(&current_frame.arms[idx].expr);
+                        current_frame.next_arm_index = idx;
+                        current_frame.matched_env = Some(env.clone());
+                        current_frame.state = FrMatchState::EvalArm;
                         runtime
                             .heap
-                            .replace_frame(&frame_ptr, Frame::Match(frame))?;
+                            .replace_frame(&current_frame_ptr, Frame::Match(current_frame))?;
                         return Ok(EvalControl::Push { expr, env });
                     }
+                    current_frame.next_arm_index += 1;
+                    runtime
+                        .heap
+                        .replace_frame(&current_frame_ptr, Frame::Match(current_frame))?;
                 }
-                Err(EngineError::MatchFailure)
             }
             FrMatchState::EvalArm => Ok(EvalControl::Return(value)),
             _ => unexpected_child_result("match"),
@@ -1664,16 +1686,6 @@ fn match_pattern_ptr(
     pat: &Pattern,
     value: &Pointer,
 ) -> Option<BTreeMap<Symbol, Pointer>> {
-    heap.with_access(|heap| Ok(match_pattern_ptr_with_access(heap, pat, value)))
-        .ok()
-        .flatten()
-}
-
-fn match_pattern_ptr_with_access(
-    heap: &HeapAccess<'_>,
-    pat: &Pattern,
-    value: &Pointer,
-) -> Option<BTreeMap<Symbol, Pointer>> {
     match pat {
         Pattern::Wildcard(..) => Some(BTreeMap::new()),
         Pattern::Var(var) => {
@@ -1682,74 +1694,124 @@ fn match_pattern_ptr_with_access(
             Some(bindings)
         }
         Pattern::Named(_, name, ps) => {
-            let v = heap.get(value).ok()?;
-            match v {
-                Cell::Adt(vname, args)
-                    if runtime_ctor_matches(vname, &name.to_dotted_symbol())
-                        && args.len() == ps.len() =>
-                {
-                    match_patterns_with_access(heap, ps, args)
+            let expected = name.to_dotted_symbol();
+            if let Some(args) = heap
+                .with_access(|heap| {
+                    let v = heap.get(value)?;
+                    match v {
+                        Cell::Adt(vname, args)
+                            if runtime_ctor_matches(vname, &expected) && args.len() == ps.len() =>
+                        {
+                            Ok(Some(args.clone()))
+                        }
+                        _ => Ok(None),
+                    }
+                })
+                .ok()
+                .flatten()
+            {
+                return match_patterns(heap, ps, &args);
+            }
+
+            match expected
+                .as_ref()
+                .rsplit('.')
+                .next()
+                .unwrap_or(expected.as_ref())
+            {
+                "Empty" if ps.is_empty() => heap
+                    .list_items(*value)
+                    .ok()
+                    .filter(|items| items.is_empty())
+                    .map(|_| BTreeMap::new()),
+                "Cons" if ps.len() == 2 => {
+                    let (head, tail) = heap.list_head_tail(value).ok().flatten()?;
+                    match_patterns(heap, ps, &[head, tail])
                 }
                 _ => None,
             }
         }
         Pattern::Tuple(_, ps) => {
-            let v = heap.get(value).ok()?;
-            match v {
-                Cell::Tuple(xs) if xs.len() == ps.len() => match_patterns_with_access(heap, ps, xs),
-                _ => None,
-            }
+            let xs = heap
+                .with_access(|heap| match heap.get(value)? {
+                    Cell::Tuple(xs) if xs.len() == ps.len() => Ok(Some(xs.clone())),
+                    _ => Ok(None),
+                })
+                .ok()
+                .flatten()?;
+            match_patterns(heap, ps, &xs)
         }
         Pattern::List(_, ps) => {
-            let v = heap.get(value).ok()?;
-            let values = list_to_vec(heap, v).ok()?;
+            let values = heap.pointer_as_list(value).ok()?;
             if values.len() == ps.len() {
-                match_patterns_with_access(heap, ps, &values)
+                match_patterns(heap, ps, &values)
             } else {
                 None
             }
         }
         Pattern::Cons(_, head, tail) => {
-            let v = heap.get(value).ok()?;
-            match v {
-                Cell::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
-                    let mut left = match_pattern_ptr_with_access(heap, head, &args[0])?;
-                    let right = match_pattern_ptr_with_access(heap, tail, &args[1])?;
-                    left.extend(right);
-                    Some(left)
-                }
-                _ => None,
-            }
+            let (head_value, tail_value) = heap.list_head_tail(value).ok().flatten()?;
+            match_patterns(
+                heap,
+                &[head.as_ref().clone(), tail.as_ref().clone()],
+                &[head_value, tail_value],
+            )
         }
         Pattern::Dict(_, fields) => {
-            let v = heap.get(value).ok()?;
-            match v {
-                Cell::Dict(map) => {
-                    let mut bindings = BTreeMap::new();
-                    for (key, pat) in fields {
-                        let v = map.get(key)?;
-                        let sub = match_pattern_ptr_with_access(heap, pat, v)?;
-                        bindings.extend(sub);
+            let values = heap
+                .with_access(|heap| {
+                    let v = heap.get(value)?;
+                    let Cell::Dict(map) = v else {
+                        return Ok(None);
+                    };
+                    let mut values = Vec::with_capacity(fields.len());
+                    for (key, _) in fields {
+                        let Some(pointer) = map.get(key) else {
+                            return Ok(None);
+                        };
+                        values.push(*pointer);
                     }
-                    Some(bindings)
-                }
-                _ => None,
-            }
+                    Ok(Some(values))
+                })
+                .ok()
+                .flatten()?;
+            let patterns = fields
+                .iter()
+                .map(|(_, pattern)| pattern.clone())
+                .collect::<Vec<_>>();
+            match_patterns(heap, &patterns, &values)
         }
     }
 }
 
-fn match_patterns_with_access(
-    heap: &HeapAccess<'_>,
+fn match_patterns(
+    heap: &Heap,
     patterns: &[Pattern],
     values: &[Pointer],
 ) -> Option<BTreeMap<Symbol, Pointer>> {
+    let value_roots = heap.temp_roots(values.to_vec()).ok()?;
     let mut bindings = BTreeMap::new();
-    for (p, v) in patterns.iter().zip(values.iter()) {
-        let sub = match_pattern_ptr_with_access(heap, p, v)?;
+    for (index, p) in patterns.iter().enumerate() {
+        let binding_roots = heap
+            .temp_roots(bindings.values().copied().collect::<Vec<_>>())
+            .ok()?;
+        refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
+        let value = value_roots.get(index).ok()?;
+        let sub = match_pattern_ptr(heap, p, &value)?;
+        refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
         bindings.extend(sub);
     }
     Some(bindings)
+}
+
+fn refresh_bindings_from_roots(
+    bindings: &mut BTreeMap<Symbol, Pointer>,
+    roots: &TempRoots,
+) -> Option<()> {
+    for (index, pointer) in bindings.values_mut().enumerate() {
+        *pointer = roots.get(index).ok()?;
+    }
+    Some(())
 }
 
 fn runtime_ctor_matches(actual: &Symbol, expected: &Symbol) -> bool {

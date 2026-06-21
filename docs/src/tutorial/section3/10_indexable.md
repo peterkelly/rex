@@ -8,7 +8,7 @@ class yourself).
 Learn how to pull elements out of common containers with a single API:
 
 - lists
-- arrays
+- tuples
 
 Example uses:
 
@@ -18,8 +18,8 @@ Example uses:
 
 ## How it works
 
-- Lists and arrays have `Indexable (List a, a)` / `Indexable (Array a, a)` instances.
-- Tuples use numeric projection like `.0` and `.1` instead of `get`.
+- Lists have `Indexable (List a, a)` instances.
+- Tuples can use either `get` or numeric projection like `.0` and `.1`.
 
 ## A more guided example
 

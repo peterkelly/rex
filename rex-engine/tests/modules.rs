@@ -2220,8 +2220,8 @@ async fn std_json_roundtrip_nested() {
               case Err _ -> -1;
             },
 
-          arr: Array (Result i32 string) =
-            prim_array_from_list [Ok (1 is i32), Err "bad", Ok (3 is i32)],
+          arr: List (Result i32 string) =
+            [Ok (1 is i32), Err "bad", Ok (3 is i32)],
 
           arr_ok =
             match (Json.from_json (Json.to_json arr)) with {
@@ -2289,7 +2289,7 @@ async fn std_json_decode_errors_have_useful_messages() {
 
           bad_list_elem =
             let v =
-              Json.Array (prim_array_from_list [Json.Number (prim_to_f64 (1 is i32)), Json.String "oops"])
+              Json.Array [Json.Number (prim_to_f64 (1 is i32)), Json.String "oops"]
             in
             match (Json.from_json v) with {
               case Ok xs -> let _xs: List i32 = xs in "unexpected ok";
@@ -2397,11 +2397,11 @@ async fn std_json_show_renders_valid_json() {
               a = Json.Number (prim_to_f64 (1 is i32)),
               b = Json.String "a\"b\\c\n",
               c =
-                Json.Array (prim_array_from_list [
+                Json.Array [
                   Json.Null,
                   Json.Bool true,
                   Json.Number (prim_to_f64 (0.0 / 0.0))
-                ])
+                ]
             }
         in
           show v
@@ -2445,7 +2445,7 @@ async fn std_json_parse_and_from_string_roundtrip() {
             Json.Object {
               a = Json.Number (prim_to_f64 (1 is i32)),
               b = Json.String "a\"b\\c\n",
-              c = Json.Array (prim_array_from_list [Json.Null, Json.Bool true])
+              c = Json.Array [Json.Null, Json.Bool true]
             },
 
           parsed_ok =

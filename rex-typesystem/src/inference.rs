@@ -376,12 +376,7 @@ fn improve_indexable(preds: &[Predicate]) -> Result<Subst, TypeError> {
 fn indexable_elem_subst(container: &Type, elem: &Type) -> Result<Subst, TypeError> {
     match container.as_ref() {
         TypeKind::App(head, arg) => match head.as_ref() {
-            TypeKind::Con(tc)
-                if matches!(
-                    tc.builtin_id(),
-                    Some(BuiltinTypeId::List | BuiltinTypeId::Array)
-                ) =>
-            {
+            TypeKind::Con(tc) if matches!(tc.builtin_id(), Some(BuiltinTypeId::List)) => {
                 unify(elem, arg)
             }
             _ => Ok(Subst::new_sync()),
@@ -720,16 +715,6 @@ fn narrow_overload_candidates(
     out
 }
 
-fn unary_app_arg(typ: &Type, ctor_name: &str) -> Option<Type> {
-    let TypeKind::App(head, arg) = typ.as_ref() else {
-        return None;
-    };
-    let TypeKind::Con(tc) = head.as_ref() else {
-        return None;
-    };
-    (tc.name_str() == ctor_name && tc.arity() == 1).then(|| arg.clone())
-}
-
 fn infer_app_arg_type(
     unifier: &mut Unifier,
     supply: &mut TypeVarSupply,
@@ -910,42 +895,12 @@ fn apply_typed_app_arg(
     unifier: &mut Unifier,
     supply: &mut TypeVarSupply,
     state: &mut TypedAppState,
-    expected_arg: Option<Type>,
     p_arg: Vec<Predicate>,
     arg_ty: Type,
     typed_arg: TypedExpr,
 ) -> Result<(), TypeError> {
-    let mut arg_ty = unifier.apply_type(&arg_ty);
-    let mut typed_arg = typed_arg;
+    let arg_ty = unifier.apply_type(&arg_ty);
 
-    if let Some(expected_arg) = expected_arg {
-        let expected_arg = unifier.apply_type(&expected_arg);
-        if let (Some(expected_elem), Some(arg_elem)) = (
-            unary_app_arg(&expected_arg, "Array"),
-            unary_app_arg(&arg_ty, "List"),
-        ) {
-            unifier.unify(&expected_elem, &arg_elem)?;
-            let elem_ty = unifier.apply_type(&expected_elem);
-            let list_ty = Type::list(elem_ty.clone());
-            let array_ty = Type::array(elem_ty);
-            let coercion_ty = Type::fun(list_ty, array_ty.clone());
-            // FIXME: This hardcodes a standard-prelude primitive into the
-            // generic type system. Replace it with a structured typed coercion
-            // or an explicit host-configured coercion hook.
-            let coercion_fn = TypedExpr::new(
-                coercion_ty,
-                TypedExprKind::Var {
-                    name: Symbol::intern("prim_array_from_list"),
-                    overloads: vec![],
-                },
-            );
-            typed_arg = TypedExpr::new(
-                array_ty.clone(),
-                TypedExprKind::App(Arc::new(coercion_fn), Arc::new(typed_arg)),
-            );
-            arg_ty = array_ty;
-        }
-    }
     if let Some(candidates) = state.overload_candidates.take() {
         let candidates = candidates
             .into_iter()
@@ -990,15 +945,7 @@ fn infer_typed_app_expr_arg(
     let expected_arg = app_arg_hint(unifier, &state.func_ty);
     let (p_arg, arg_ty, typed_arg) =
         infer_app_arg_typed(unifier, supply, env, adts, known, expected_arg.clone(), arg)?;
-    apply_typed_app_arg(
-        unifier,
-        supply,
-        state,
-        expected_arg,
-        p_arg,
-        arg_ty,
-        typed_arg,
-    )
+    apply_typed_app_arg(unifier, supply, state, p_arg, arg_ty, typed_arg)
 }
 
 fn collect_tail_app_chain(expr: &Expr) -> Option<(&Expr, Vec<TailAppFrame<'_>>)> {
@@ -1039,16 +986,7 @@ fn infer_tail_app_chain_typed(
         for arg in frame.prefix_args {
             infer_typed_app_expr_arg(unifier, supply, env, adts, known, &mut state, arg)?;
         }
-        let expected_arg = app_arg_hint(unifier, &state.func_ty);
-        apply_typed_app_arg(
-            unifier,
-            supply,
-            &mut state,
-            expected_arg,
-            Vec::new(),
-            tail_ty,
-            typed_tail,
-        )?;
+        apply_typed_app_arg(unifier, supply, &mut state, Vec::new(), tail_ty, typed_tail)?;
         preds.extend(state.preds);
         tail_ty = state.func_ty;
         typed_tail = state.typed;

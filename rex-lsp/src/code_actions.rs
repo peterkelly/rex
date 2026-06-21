@@ -174,27 +174,6 @@ pub(crate) fn code_actions_for_diagnostic(
         }
     }
 
-    if is_array_list_unification_error(&diagnostic.message) {
-        let selected_range =
-            if !range_is_empty(request_range) && range_is_usable_for_text(text, request_range) {
-                request_range
-            } else {
-                target_range
-            };
-        if let Some(selected) = text_for_range(text, selected_range) {
-            let trimmed = selected.trim();
-            if !trimmed.is_empty() && !trimmed.starts_with("to_list") {
-                actions.push(code_action_replace(
-                    "Convert expression to list with `to_list`".to_string(),
-                    uri,
-                    selected_range,
-                    format!("to_list ({selected})"),
-                    diagnostic.clone(),
-                ));
-            }
-        }
-    }
-
     if is_function_value_unification_error(&diagnostic.message)
         && let Some(selected) = text_for_range(text, target_range)
     {
@@ -471,22 +450,6 @@ pub(crate) fn list_inner_type(typ: &str) -> Option<&str> {
     }
     typ.strip_prefix("(List ")
         .and_then(|rest| rest.strip_suffix(')'))
-}
-
-pub fn is_array_list_unification_error(message: &str) -> bool {
-    let Some(rest) = message.strip_prefix("types do not unify: ") else {
-        return false;
-    };
-    let Some((left, right)) = rest.split_once(" vs ") else {
-        return false;
-    };
-    let left = left.trim();
-    let right = right.trim();
-    let left_has_array = left.contains("Array");
-    let left_has_list = left.contains("List");
-    let right_has_array = right.contains("Array");
-    let right_has_list = right.contains("List");
-    (left_has_array && right_has_list) || (left_has_list && right_has_array)
 }
 
 pub fn is_function_value_unification_error(message: &str) -> bool {

@@ -467,20 +467,8 @@ instance Eq datetime where {
 }
 
 instance<a> Eq (List a) <= Eq a where {
-    == = \xs ys ->
-        match xs with {
-            case [] ->
-                (match ys with {
-                    case [] -> true;
-                    case _ -> false;
-                });
-            case x::xs1 ->
-                (match ys with {
-                    case y::ys1 -> if x == y then xs1 == ys1 else false;
-                    case [] -> false;
-                });
-        };
-    != = \xs ys -> if xs == ys then false else true;
+    == = prim_list_eq;
+    != = prim_list_ne;
 }
 
 instance<a> Eq (Option a) <= Eq a where {
@@ -498,11 +486,6 @@ instance<a> Eq (Option a) <= Eq a where {
                 });
         };
     != = \x y -> if x == y then false else true;
-}
-
-instance<a> Eq (Array a) <= Eq a where {
-    == = prim_array_eq;
-    != = prim_array_ne;
 }
 
 instance<a,e> Eq (Result a e) <= Eq a, Eq e where {
@@ -721,10 +704,6 @@ instance<a> Default (List a) where {
     default = [];
 }
 
-instance<a> Default (Array a) where {
-    default = prim_array_from_list [];
-}
-
 instance<a> Default (Option a) where {
     default = None;
 }
@@ -743,18 +722,6 @@ instance<a> Show (List a) <= Show a where {
                 in
                     "[" + foldl step (show x) xs1 + "]";
         };
-}
-
-instance<a> Show (Array a) <= Show a where {
-    show = \xs ->
-        let
-            step = \out x ->
-                if out == "<array "
-                    then out + show x
-                    else out + ", " + show x,
-            out = foldl step "<array " xs
-        in
-            out + ">";
 }
 
 instance<a> Show (Option a) <= Show a where {
@@ -782,10 +749,6 @@ instance Functor Option where {
     map = prim_map;
 }
 
-instance Functor Array where {
-    map = prim_map;
-}
-
 instance<e> Functor (Result e) where {
     map = prim_map;
 }
@@ -802,11 +765,6 @@ instance Applicative Option <= Functor Option where {
             case Some f -> map f xx;
             case None -> None;
         };
-}
-
-instance Applicative Array <= Functor Array where {
-    pure = prim_array_singleton;
-    ap = \ff xx -> prim_flat_map (\f -> prim_map f xx) ff;
 }
 
 instance<e> Applicative (Result e) <= Functor (Result e) where {
@@ -826,10 +784,6 @@ instance Monad Option <= Applicative Option where {
     bind = prim_flat_map;
 }
 
-instance Monad Array <= Applicative Array where {
-    bind = prim_flat_map;
-}
-
 instance<e> Monad (Result e) <= Applicative (Result e) where {
     bind = prim_flat_map;
 }
@@ -846,12 +800,6 @@ instance Foldable Option where {
     fold = prim_fold;
 }
 
-instance Foldable Array where {
-    foldl = prim_foldl;
-    foldr = prim_foldr;
-    fold = prim_fold;
-}
-
 instance Filterable List <= Functor List where {
     filter = prim_filter;
     filter_map = prim_filter_map;
@@ -862,19 +810,7 @@ instance Filterable Option <= Functor Option where {
     filter_map = prim_filter_map;
 }
 
-instance Filterable Array <= Functor Array where {
-    filter = prim_filter;
-    filter_map = prim_filter_map;
-}
-
 instance Sequence List <= Functor List, Foldable List where {
-    take = prim_take;
-    skip = prim_skip;
-    zip = prim_zip;
-    unzip = prim_unzip;
-}
-
-instance Sequence Array <= Functor Array, Foldable Array where {
     take = prim_take;
     skip = prim_skip;
     zip = prim_zip;
@@ -889,10 +825,6 @@ instance Alternative Option <= Applicative Option where {
     or_else = prim_or_else;
 }
 
-instance Alternative Array <= Applicative Array where {
-    or_else = prim_or_else;
-}
-
 instance<e> Alternative (Result e) <= Applicative (Result e) where {
     or_else = prim_or_else;
 }
@@ -902,8 +834,5 @@ instance<a> Indexable (List a, a) where {
     get = prim_get;
 }
 
-instance<a> Indexable (Array a, a) where {
-    get = prim_get;
-}
 
 0

@@ -14,7 +14,7 @@ The derive generates:
 - an ADT declaration suitable for injection through a `Builder`
 - ADT-family discovery so `inject_rex` registers all reachable acyclic derived dependencies
 
-Derived fields of type `Vec<T>` are represented as `Array T` and convert to/from Rex runtime arrays.
+Derived fields of type `Vec<T>` are represented as `List T` and convert to/from Rex lists.
 
 The derive does not implement `rex::engine::RexDefault`; `inject_rex_with_default` is available
 only when the type already provides that trait.

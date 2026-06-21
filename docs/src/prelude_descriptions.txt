@@ -3,9 +3,8 @@
 # - type:<type name>
 # - class:<class name>
 # - fn:<function name>
-type:Array	Fixed-size indexed sequence.
 type:Dict	Dictionary/record-like mapping from field labels to values.
-type:List	Immutable singly linked list.
+type:List	Immutable ordered sequence.
 type:Option	Optional value (`Some` or `None`).
 type:Result	Result value (`Ok` or `Err`) for success/failure flows.
 type:bool	Boolean truth value.
@@ -88,8 +87,6 @@ fn:pure	Lift a plain value into an applicative context.
 fn:skip	Drop the first `n` elements.
 fn:sum	Sum all elements in a foldable container.
 fn:take	Keep only the first `n` elements.
-fn:to_array	Convert a list to an array.
-fn:to_list	Convert an array to a list.
 fn:unwrap	Extract the inner value from `Some`/`Ok`, or raise an error for `None`/`Err`.
 fn:unzip	Split a container of pairs into a pair of containers.
 fn:zero	Additive identity.

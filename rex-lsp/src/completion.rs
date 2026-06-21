@@ -99,7 +99,6 @@ pub(crate) fn type_doc(word: &str) -> Option<&'static str> {
         "f64" => Some("64-bit float."),
         "List" => Some("List type constructor."),
         "Dict" => Some("Dictionary type constructor."),
-        "Array" => Some("Array type constructor."),
         "Option" => Some("Optional type constructor."),
         "Result" => Some("Result type constructor."),
         _ => None,

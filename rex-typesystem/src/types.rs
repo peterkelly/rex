@@ -34,7 +34,6 @@ pub enum BuiltinTypeId {
     Uuid,
     DateTime,
     List,
-    Array,
     Dict,
     Option,
     Promise,
@@ -63,7 +62,6 @@ impl BuiltinTypeId {
             Self::Uuid => "uuid",
             Self::DateTime => "datetime",
             Self::List => "List",
-            Self::Array => "Array",
             Self::Dict => "Dict",
             Self::Option => "Option",
             Self::Promise => "Promise",
@@ -73,7 +71,7 @@ impl BuiltinTypeId {
 
     pub fn arity(self) -> usize {
         match self {
-            Self::List | Self::Array | Self::Dict | Self::Option | Self::Promise => 1,
+            Self::List | Self::Dict | Self::Option | Self::Promise => 1,
             Self::Result => 2,
             _ => 0,
         }
@@ -100,7 +98,6 @@ impl BuiltinTypeId {
             "uuid" => Some(Self::Uuid),
             "datetime" => Some(Self::DateTime),
             "List" => Some(Self::List),
-            "Array" => Some(Self::Array),
             "Dict" => Some(Self::Dict),
             "Option" => Some(Self::Option),
             "Promise" => Some(Self::Promise),
@@ -272,10 +269,6 @@ impl Type {
 
     pub fn list(elem: impl Into<Type>) -> Type {
         Type::app(Type::builtin(BuiltinTypeId::List), elem)
-    }
-
-    pub fn array(elem: impl Into<Type>) -> Type {
-        Type::app(Type::builtin(BuiltinTypeId::Array), elem)
     }
 
     pub fn dict(elem: impl Into<Type>) -> Type {
@@ -1231,7 +1224,7 @@ impl RexType for DateTime<Utc> {
 
 impl<T: RexType> RexType for Vec<T> {
     fn rex_type() -> Type {
-        Type::app(Type::builtin(BuiltinTypeId::Array), T::rex_type())
+        Type::app(Type::builtin(BuiltinTypeId::List), T::rex_type())
     }
 }
 

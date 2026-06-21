@@ -35,9 +35,8 @@ fn runtime_ctor(name: &Symbol) -> Symbol {
 /// type information exists.
 ///
 /// Important behavior:
-/// - JSON arrays targeting `Array a` become Rex runtime arrays.
 /// - JSON arrays targeting tuple types become tuples.
-/// - JSON arrays targeting `List a` become list ADTs (`Cons`/`Empty`).
+/// - JSON arrays targeting `List a` become Rex lists.
 pub fn json_to_rex(
     heap: &Heap,
     json: &Value,
@@ -240,32 +239,13 @@ fn json_to_handle_for_con(
             _ => Err(error(format!("expected result object JSON, got {}", json))),
         },
 
-        // IMPORTANT: JSON arrays map to runtime arrays, not lists.
-        ("Array", [elem_t]) => match json {
-            Value::Array(items) => {
-                let mut out = Vec::with_capacity(items.len());
-                for item in items {
-                    out.push(json_to_rex(heap, item, elem_t, ts)?);
-                }
-                heap.alloc_array(out)
-            }
-            _ => Err(error(format!(
-                "expected array JSON for Array, got {}",
-                json
-            ))),
-        },
-
         ("List", [elem_t]) => match json {
             Value::Array(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
                     out.push(json_to_rex(heap, item, elem_t, ts)?);
                 }
-                let mut list = heap.alloc_adt(Symbol::intern("Empty"), vec![])?;
-                for p in out.into_iter().rev() {
-                    list = heap.alloc_adt(Symbol::intern("Cons"), vec![p, list])?;
-                }
-                Ok(list)
+                heap.alloc_list(out)
             }
             _ => Err(error(format!("expected array JSON for List, got {}", json))),
         },
@@ -365,17 +345,8 @@ fn handle_to_json_for_con(
             }
         }
 
-        ("Array", [elem_t]) => {
-            let items = handle.as_array()?;
-            let mut out = Vec::with_capacity(items.len());
-            for item in &items {
-                out.push(rex_to_json(item, elem_t, ts)?);
-            }
-            Ok(Value::Array(out))
-        }
-
         ("List", [elem_t]) => {
-            let items = list_to_vec(handle)?;
+            let items = handle.as_list()?;
             let mut out = Vec::with_capacity(items.len());
             for item in &items {
                 out.push(rex_to_json(item, elem_t, ts)?);
@@ -673,26 +644,6 @@ fn instantiate_type(t: &Type, subst: &BTreeMap<usize, Type>) -> Type {
                 .iter()
                 .map(|(k, v)| (k.clone(), instantiate_type(v, subst))),
         ),
-    }
-}
-
-fn list_to_vec(handle: &Handle) -> Result<Vec<Handle>, EngineError> {
-    let mut out = Vec::new();
-    let mut cur = handle.clone();
-    loop {
-        let (tag, args) = cur.as_adt()?;
-        if tag.as_ref() == "Empty" && args.is_empty() {
-            return Ok(out);
-        }
-        if tag.as_ref() == "Cons" && args.len() == 2 {
-            out.push(args[0].clone());
-            cur = args[1].clone();
-            continue;
-        }
-        return Err(error(format!(
-            "expected list ADT chain (Cons/Empty), found constructor `{}`",
-            tag
-        )));
     }
 }
 

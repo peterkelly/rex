@@ -4,8 +4,7 @@ This crate implements a Hindley-Milner style type system with parametric polymor
 
 ## Features
 
-- **Types**: primitives (`u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `uuid`, `datetime`), tuples, functions, dictionaries (`Dict a`), arrays, and registered user constructors.
-- **Arrays**: host-native `Array a` values intended for performance and supported by the same collection combinators via type classes.
+- **Types**: primitives (`u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `uuid`, `datetime`), tuples, functions, lists (`List a`), dictionaries (`Dict a`), and registered user constructors.
 - **Schemes**: quantified types with class constraints.
 - **Type classes**: class hierarchy for additive/multiplicative monoids, semiring, additive group, ring, and field, plus instance resolution with superclass propagation.
 - **Utilities**: substitution, unification (with occurs check), instantiation, and generalization helpers.
@@ -77,7 +76,7 @@ environment, the engine registers these classes and operators before running inf
 
 - `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `bind`, `ap`, `or_else`
 - `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`
-These are type-class constrained and work for `List`, `Array`, `Option`, and `Result` where applicable.
+These are type-class constrained and work for `List`, `Option`, and `Result` where applicable.
 
 ### Option/Result Helpers
 

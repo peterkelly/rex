@@ -39,8 +39,7 @@ async fn vec_from_value() {
     })
     .unwrap();
 
-    let (result, heap, ty) =
-        eval_expr(builder, r#"accept_vec (prim_array_from_list [1, 2, 3])"#).await;
+    let (result, heap, ty) = eval_expr(builder, r#"accept_vec [1, 2, 3]"#).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     common::assert_handles_eq(
         &result,
@@ -85,11 +84,11 @@ async fn vec_to_value() {
     .unwrap();
 
     let (result, heap, ty) = eval_expr(builder, r#"return_vec "hello""#).await;
-    assert_eq!(ty, Type::array(Type::builtin(BuiltinTypeId::I32)));
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
     common::assert_handles_eq(
         &result,
         &heap
-            .alloc_array(vec![
+            .alloc_list(vec![
                 heap.alloc_i32(0).unwrap(),
                 heap.alloc_i32(1).unwrap(),
                 heap.alloc_i32(2).unwrap(),
@@ -113,17 +112,11 @@ async fn vec_rex_type() {
     .unwrap();
 
     let ty = infer_type(builder, r#"return_vec "hello""#).await;
-    assert_eq!(
-        ty,
-        Type::app(
-            Type::builtin(BuiltinTypeId::Array),
-            Type::builtin(BuiltinTypeId::I32)
-        )
-    );
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
 }
 
 #[tokio::test]
-async fn to_list_allows_pattern_matching_host_arrays() {
+async fn host_vecs_pattern_match_as_lists() {
     fn return_vec(_state: &(), input: String) -> Result<Vec<i32>, EngineError> {
         Ok((0..input.len()).map(|i| i as i32).collect())
     }
@@ -136,7 +129,7 @@ async fn to_list_allows_pattern_matching_host_arrays() {
 
     let (result, heap, ty) = eval_expr(
         builder,
-        r#"match (to_list (return_vec "abc")) with {
+        r#"match (return_vec "abc") with {
             case Cons x _ -> x;
             case Empty -> -1;
         }"#,

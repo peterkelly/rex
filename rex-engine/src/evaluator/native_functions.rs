@@ -14,7 +14,7 @@ use crate::{
         FrNativeCall, FrNativeCallState, Frame, NativeUnaryShape, rewrite_entries,
         rewrite_map_values, rewrite_option, rewrite_pointer, rewrite_slice, trace_option,
     },
-    value::{Collection, Pointer, TempRoots},
+    value::{Collection, ListItems, Pointer, TempRoots},
 };
 use rex_ast::Symbol;
 use rex_typesystem::types::{BuiltinTypeId, Type, TypeKind, TypedExpr, TypedExprKind};
@@ -72,7 +72,7 @@ where
                     Frame::NativeCall(frame) => frame,
                     _ => return frame_kind_error("native call"),
                 };
-                let child_spec = current_frame.task.scheduled_child_spec(index)?;
+                let child_spec = current_frame.task.scheduled_child_spec(runtime, index)?;
                 let current_frame_ptr = roots.get(0)?;
                 let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
                     current_frame_ptr,
@@ -255,12 +255,19 @@ impl NativeTask {
         }
     }
 
-    fn scheduled_child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
+    fn scheduled_child_spec<State>(
+        &self,
+        runtime: &RuntimeCore<State>,
+        index: usize,
+    ) -> Result<NativeChildSpec, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
         match self {
-            NativeTask::SequenceMap(task) => task.child_spec(index),
-            NativeTask::SequenceFilter(task) => task.child_spec(index),
-            NativeTask::SequenceFilterMap(task) => task.child_spec(index),
-            NativeTask::SequenceFlatMap(task) => task.child_spec(index),
+            NativeTask::SequenceMap(task) => task.child_spec(runtime, index),
+            NativeTask::SequenceFilter(task) => task.child_spec(runtime, index),
+            NativeTask::SequenceFilterMap(task) => task.child_spec(runtime, index),
+            NativeTask::SequenceFlatMap(task) => task.child_spec(runtime, index),
             NativeTask::DictMap(task) => task.child_spec(index),
             _ => Err(EngineError::Internal(
                 "native task does not have scheduled child specs".into(),
@@ -502,7 +509,7 @@ pub(crate) struct NativeSequenceMap {
     pub func: Pointer,
     pub func_type: Type,
     pub elem_type: Type,
-    pub values: Vec<Pointer>,
+    pub values: ListItems,
     pub shape: NativeSequenceShape,
     pub children: Vec<Pointer>,
     pub output: Vec<Option<Pointer>>,
@@ -512,7 +519,7 @@ pub(crate) struct NativeSequenceMap {
 impl Collection for NativeSequenceMap {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.push(self.func);
-        out.extend(self.values.iter().copied());
+        self.values.trace_pointers(out);
         out.extend(self.children.iter().copied());
         out.extend(self.output.iter().flatten().copied());
     }
@@ -522,7 +529,7 @@ impl Collection for NativeSequenceMap {
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
         rewrite_pointer(&mut self.func, rewrite)?;
-        rewrite_slice(&mut self.values, rewrite)?;
+        self.values.rewrite_pointers(rewrite)?;
         rewrite_slice(&mut self.children, rewrite)?;
         rewrite_options(&mut self.output, rewrite)
     }
@@ -602,10 +609,15 @@ where
 }
 
 impl NativeSequenceMap {
-    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
-        let value = self.values.get(index).copied().ok_or_else(|| {
-            EngineError::Internal("native sequence map child index out of bounds".into())
-        })?;
+    fn child_spec<State>(
+        &self,
+        runtime: &RuntimeCore<State>,
+        index: usize,
+    ) -> Result<NativeChildSpec, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
+        let value = self.values.get(&runtime.heap, index)?;
         native_apply_spec(
             self.func,
             self.func_type.clone(),
@@ -620,7 +632,7 @@ pub(crate) struct NativeSequenceFilter {
     pub func: Pointer,
     pub func_type: Type,
     pub elem_type: Type,
-    pub values: Vec<Pointer>,
+    pub values: ListItems,
     pub shape: NativeSequenceShape,
     pub children: Vec<Pointer>,
     pub keep: Vec<Option<bool>>,
@@ -630,7 +642,7 @@ pub(crate) struct NativeSequenceFilter {
 impl Collection for NativeSequenceFilter {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.push(self.func);
-        out.extend(self.values.iter().copied());
+        self.values.trace_pointers(out);
         out.extend(self.children.iter().copied());
     }
 
@@ -639,7 +651,7 @@ impl Collection for NativeSequenceFilter {
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
         rewrite_pointer(&mut self.func, rewrite)?;
-        rewrite_slice(&mut self.values, rewrite)?;
+        self.values.rewrite_pointers(rewrite)?;
         rewrite_slice(&mut self.children, rewrite)
     }
 }
@@ -695,9 +707,9 @@ where
         })?;
         if self.remaining == 0 {
             let mut output = Vec::new();
-            for (value, keep) in self.values.iter().copied().zip(&self.keep) {
+            for (index, keep) in self.keep.iter().enumerate() {
                 match keep {
-                    Some(true) => output.push(value),
+                    Some(true) => output.push(self.values.get(&runtime.heap, index)?),
                     Some(false) => {}
                     None => {
                         return Err(EngineError::Internal(
@@ -721,10 +733,15 @@ where
 }
 
 impl NativeSequenceFilter {
-    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
-        let value = self.values.get(index).copied().ok_or_else(|| {
-            EngineError::Internal("native sequence filter child index out of bounds".into())
-        })?;
+    fn child_spec<State>(
+        &self,
+        runtime: &RuntimeCore<State>,
+        index: usize,
+    ) -> Result<NativeChildSpec, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
+        let value = self.values.get(&runtime.heap, index)?;
         native_apply_spec(
             self.func,
             self.func_type.clone(),
@@ -739,7 +756,7 @@ pub(crate) struct NativeSequenceFilterMap {
     pub func: Pointer,
     pub func_type: Type,
     pub elem_type: Type,
-    pub values: Vec<Pointer>,
+    pub values: ListItems,
     pub shape: NativeSequenceShape,
     pub children: Vec<Pointer>,
     pub output: Vec<Option<Option<Pointer>>>,
@@ -749,7 +766,7 @@ pub(crate) struct NativeSequenceFilterMap {
 impl Collection for NativeSequenceFilterMap {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.push(self.func);
-        out.extend(self.values.iter().copied());
+        self.values.trace_pointers(out);
         out.extend(self.children.iter().copied());
         out.extend(
             self.output
@@ -765,7 +782,7 @@ impl Collection for NativeSequenceFilterMap {
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
         rewrite_pointer(&mut self.func, rewrite)?;
-        rewrite_slice(&mut self.values, rewrite)?;
+        self.values.rewrite_pointers(rewrite)?;
         rewrite_slice(&mut self.children, rewrite)?;
         rewrite_nested_options(&mut self.output, rewrite)
     }
@@ -848,10 +865,15 @@ where
 }
 
 impl NativeSequenceFilterMap {
-    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
-        let value = self.values.get(index).copied().ok_or_else(|| {
-            EngineError::Internal("native sequence filter_map child index out of bounds".into())
-        })?;
+    fn child_spec<State>(
+        &self,
+        runtime: &RuntimeCore<State>,
+        index: usize,
+    ) -> Result<NativeChildSpec, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
+        let value = self.values.get(&runtime.heap, index)?;
         native_apply_spec(
             self.func,
             self.func_type.clone(),
@@ -866,7 +888,7 @@ pub(crate) struct NativeSequenceFlatMap {
     pub func: Pointer,
     pub func_type: Type,
     pub elem_type: Type,
-    pub values: Vec<Pointer>,
+    pub values: ListItems,
     pub shape: NativeSequenceShape,
     pub children: Vec<Pointer>,
     pub output: Vec<Option<Vec<Pointer>>>,
@@ -876,7 +898,7 @@ pub(crate) struct NativeSequenceFlatMap {
 impl Collection for NativeSequenceFlatMap {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.push(self.func);
-        out.extend(self.values.iter().copied());
+        self.values.trace_pointers(out);
         out.extend(self.children.iter().copied());
         out.extend(self.output.iter().flatten().flatten().copied());
     }
@@ -886,7 +908,7 @@ impl Collection for NativeSequenceFlatMap {
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
         rewrite_pointer(&mut self.func, rewrite)?;
-        rewrite_slice(&mut self.values, rewrite)?;
+        self.values.rewrite_pointers(rewrite)?;
         rewrite_slice(&mut self.children, rewrite)?;
         rewrite_option_vecs(&mut self.output, rewrite)
     }
@@ -968,10 +990,15 @@ where
 }
 
 impl NativeSequenceFlatMap {
-    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
-        let value = self.values.get(index).copied().ok_or_else(|| {
-            EngineError::Internal("native sequence flat_map child index out of bounds".into())
-        })?;
+    fn child_spec<State>(
+        &self,
+        runtime: &RuntimeCore<State>,
+        index: usize,
+    ) -> Result<NativeChildSpec, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
+        let value = self.values.get(&runtime.heap, index)?;
         native_apply_spec(
             self.func,
             self.func_type.clone(),
@@ -1226,7 +1253,7 @@ pub(crate) struct NativeFold {
     pub func_type: Type,
     pub acc_type: Type,
     pub elem_type: Type,
-    pub values: Vec<Pointer>,
+    pub values: ListItems,
     pub acc: Pointer,
     pub order: NativeFoldOrder,
     pub state: NativeFoldState,
@@ -1237,7 +1264,7 @@ pub(crate) struct NativeFold {
 impl Collection for NativeFold {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.push(self.func);
-        out.extend(self.values.iter().copied());
+        self.values.trace_pointers(out);
         out.push(self.acc);
         trace_option(self.step, out);
     }
@@ -1247,7 +1274,7 @@ impl Collection for NativeFold {
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
         rewrite_pointer(&mut self.func, rewrite)?;
-        rewrite_slice(&mut self.values, rewrite)?;
+        self.values.rewrite_pointers(rewrite)?;
         rewrite_pointer(&mut self.acc, rewrite)?;
         rewrite_option(&mut self.step, rewrite)
     }
@@ -1282,7 +1309,7 @@ where
             NativeFoldState::ApplyFirst => {
                 self.step = Some(value);
                 self.state = NativeFoldState::ApplySecond;
-                self.apply_second()
+                self.apply_second(runtime)
             }
             NativeFoldState::ApplySecond => {
                 self.acc = value;
@@ -1304,16 +1331,13 @@ where
 }
 
 impl NativeFold {
-    fn apply_first<State>(
-        self: &NativeFold,
-        _runtime: &RuntimeCore<State>,
-    ) -> Result<NativeStep, EngineError>
+    fn apply_first<State>(&self, runtime: &RuntimeCore<State>) -> Result<NativeStep, EngineError>
     where
         State: Clone + Send + Sync + 'static,
     {
         let arg = match self.order {
             NativeFoldOrder::Left => self.acc,
-            NativeFoldOrder::Right => self.values[self.next_index],
+            NativeFoldOrder::Right => self.value_at(runtime, self.next_index)?,
         };
         let arg_type = match self.order {
             NativeFoldOrder::Left => self.acc_type.clone(),
@@ -1322,12 +1346,15 @@ impl NativeFold {
         native_apply_step(self.func, self.func_type.clone(), arg, arg_type)
     }
 
-    fn apply_second(self: &NativeFold) -> Result<NativeStep, EngineError> {
+    fn apply_second<State>(&self, runtime: &RuntimeCore<State>) -> Result<NativeStep, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
         let step = self
             .step
             .ok_or_else(|| EngineError::Internal("native fold missing step function".into()))?;
         let arg = match self.order {
-            NativeFoldOrder::Left => self.values[self.next_index],
+            NativeFoldOrder::Left => self.value_at(runtime, self.next_index)?,
             NativeFoldOrder::Right => self.acc,
         };
         let arg_type = match self.order {
@@ -1336,6 +1363,25 @@ impl NativeFold {
         };
         let step_type = Type::fun(arg_type.clone(), self.acc_type.clone());
         native_apply_step(step, step_type, arg, arg_type)
+    }
+
+    fn value_at<State>(
+        &self,
+        runtime: &RuntimeCore<State>,
+        index: usize,
+    ) -> Result<Pointer, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
+        let index = match self.order {
+            NativeFoldOrder::Left => index,
+            NativeFoldOrder::Right => {
+                self.values.len().checked_sub(index + 1).ok_or_else(|| {
+                    EngineError::Internal("native fold index out of bounds".into())
+                })?
+            }
+        };
+        self.values.get(&runtime.heap, index)
     }
 }
 
@@ -1547,8 +1593,8 @@ pub enum NativeArrayEqState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeArrayEq {
     pub elem_type: Type,
-    pub xs: Vec<Pointer>,
-    pub ys: Vec<Pointer>,
+    pub xs: ListItems,
+    pub ys: ListItems,
     pub state: NativeArrayEqState,
     pub next_index: usize,
     pub step: Option<Pointer>,
@@ -1557,8 +1603,8 @@ pub struct NativeArrayEq {
 
 impl Collection for NativeArrayEq {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.extend(self.xs.iter().copied());
-        out.extend(self.ys.iter().copied());
+        self.xs.trace_pointers(out);
+        self.ys.trace_pointers(out);
         trace_option(self.step, out);
     }
 
@@ -1566,8 +1612,8 @@ impl Collection for NativeArrayEq {
         &mut self,
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
-        rewrite_slice(&mut self.xs, rewrite)?;
-        rewrite_slice(&mut self.ys, rewrite)?;
+        self.xs.rewrite_pointers(rewrite)?;
+        self.ys.rewrite_pointers(rewrite)?;
         rewrite_option(&mut self.step, rewrite)
     }
 }
@@ -1604,7 +1650,7 @@ where
             NativeArrayEqState::ApplyFirst => {
                 self.step = Some(value);
                 self.state = NativeArrayEqState::ApplySecond;
-                self.apply_second()
+                self.apply_second(runtime)
             }
             NativeArrayEqState::ApplySecond => {
                 if !runtime.heap.pointer_as_bool(&value)? {
@@ -1618,7 +1664,7 @@ where
                 self.state = NativeArrayEqState::ApplyFirst;
                 self.apply_first(runtime)
             }
-            _ => unexpected_child_result("native array equality"),
+            _ => unexpected_child_result("native list equality"),
         }
     }
 
@@ -1640,23 +1686,26 @@ impl NativeArrayEq {
             self.elem_type.clone(),
             Type::fun(self.elem_type.clone(), bool_ty),
         );
-        let lhs = self.xs[self.next_index];
+        let lhs = self.xs.get(&runtime.heap, self.next_index)?;
         let roots = runtime.heap.temp_roots(vec![lhs])?;
         let eq = overloaded_pointer(runtime, "==", eq_ty.clone())?;
         let lhs = roots.get(0)?;
         native_apply_step(eq, eq_ty, lhs, self.elem_type.clone())
     }
 
-    fn apply_second(&self) -> Result<NativeStep, EngineError> {
+    fn apply_second<State>(&self, runtime: &RuntimeCore<State>) -> Result<NativeStep, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
         let step = self
             .step
-            .ok_or_else(|| EngineError::Internal("native array equality missing step".into()))?;
+            .ok_or_else(|| EngineError::Internal("native list equality missing step".into()))?;
         let bool_ty = Type::builtin(BuiltinTypeId::Bool);
         let step_ty = Type::fun(self.elem_type.clone(), bool_ty);
         native_apply_step(
             step,
             step_ty,
-            self.ys[self.next_index],
+            self.ys.get(&runtime.heap, self.next_index)?,
             self.elem_type.clone(),
         )
     }
@@ -1678,7 +1727,7 @@ impl NativeArrayEq {
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeSum {
     pub elem_type: Type,
-    pub values: Vec<Pointer>,
+    pub values: ListItems,
     pub acc: Option<Pointer>,
     pub plus: Option<Pointer>,
     pub state: NativeFoldState,
@@ -1688,7 +1737,7 @@ pub struct NativeSum {
 
 impl Collection for NativeSum {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.extend(self.values.iter().copied());
+        self.values.trace_pointers(out);
         trace_option(self.acc, out);
         trace_option(self.plus, out);
         trace_option(self.step, out);
@@ -1698,7 +1747,7 @@ impl Collection for NativeSum {
         &mut self,
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
-        rewrite_slice(&mut self.values, rewrite)?;
+        self.values.rewrite_pointers(rewrite)?;
         rewrite_option(&mut self.acc, rewrite)?;
         rewrite_option(&mut self.plus, rewrite)?;
         rewrite_option(&mut self.step, rewrite)
@@ -1719,10 +1768,11 @@ where
                 self.elem_type.clone(),
             ));
         }
-        self.acc = Some(self.values[0]);
+        let first = self.values.get(&runtime.heap, 0)?;
+        self.acc = Some(first);
         self.next_index = 1;
         if self.next_index == self.values.len() {
-            return Ok(NativeStep::Return(self.values[0]));
+            return Ok(NativeStep::Return(first));
         }
         self.state = NativeFoldState::ApplyFirst;
         self.apply_first_may_allocate(runtime)
@@ -1742,7 +1792,7 @@ where
             NativeFoldState::ApplyFirst => {
                 self.step = Some(value);
                 self.state = NativeFoldState::ApplySecond;
-                self.apply_second()
+                self.apply_second(_runtime)
             }
             NativeFoldState::ApplySecond => {
                 self.acc = Some(value);
@@ -1800,7 +1850,10 @@ impl NativeSum {
         native_apply_step(plus, plus_ty, acc, self.elem_type.clone())
     }
 
-    fn apply_second(&self) -> Result<NativeStep, EngineError> {
+    fn apply_second<State>(&self, runtime: &RuntimeCore<State>) -> Result<NativeStep, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
         let step = self
             .step
             .ok_or_else(|| EngineError::Internal("native sum missing step".into()))?;
@@ -1808,7 +1861,7 @@ impl NativeSum {
         native_apply_step(
             step,
             step_ty,
-            self.values[self.next_index],
+            self.values.get(&runtime.heap, self.next_index)?,
             self.elem_type.clone(),
         )
     }
@@ -1826,7 +1879,7 @@ pub enum NativeMeanState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeMean {
     pub elem_type: Type,
-    pub values: Vec<Pointer>,
+    pub values: ListItems,
     pub len: usize,
     pub acc: Option<Pointer>,
     pub state: NativeMeanState,
@@ -1837,7 +1890,7 @@ pub struct NativeMean {
 
 impl Collection for NativeMean {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.extend(self.values.iter().copied());
+        self.values.trace_pointers(out);
         trace_option(self.acc, out);
         trace_option(self.step, out);
         trace_option(self.len_value, out);
@@ -1847,7 +1900,7 @@ impl Collection for NativeMean {
         &mut self,
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
-        rewrite_slice(&mut self.values, rewrite)?;
+        self.values.rewrite_pointers(rewrite)?;
         rewrite_option(&mut self.acc, rewrite)?;
         rewrite_option(&mut self.step, rewrite)?;
         rewrite_option(&mut self.len_value, rewrite)
@@ -1865,7 +1918,7 @@ where
         if self.values.is_empty() {
             return Err(EngineError::EmptySequence);
         }
-        self.acc = Some(self.values[0]);
+        self.acc = Some(self.values.get(&runtime.heap, 0)?);
         self.next_index = 1;
         if self.next_index == self.values.len() {
             self.state = NativeMeanState::ApplyDivFirst;
@@ -1888,7 +1941,7 @@ where
             NativeMeanState::ApplyPlusFirst => {
                 self.step = Some(value);
                 self.state = NativeMeanState::ApplyPlusSecond;
-                self.apply_plus_second()
+                self.apply_plus_second(runtime)
             }
             NativeMeanState::ApplyPlusSecond => {
                 self.acc = Some(value);
@@ -1940,7 +1993,13 @@ impl NativeMean {
         native_apply_step(plus, plus_ty, acc, self.elem_type.clone())
     }
 
-    fn apply_plus_second(&self) -> Result<NativeStep, EngineError> {
+    fn apply_plus_second<State>(
+        &self,
+        runtime: &RuntimeCore<State>,
+    ) -> Result<NativeStep, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
         let step = self
             .step
             .ok_or_else(|| EngineError::Internal("native mean missing addition step".into()))?;
@@ -1948,7 +2007,7 @@ impl NativeMean {
         native_apply_step(
             step,
             step_ty,
-            self.values[self.next_index],
+            self.values.get(&runtime.heap, self.next_index)?,
             self.elem_type.clone(),
         )
     }
@@ -1994,7 +2053,6 @@ impl NativeMean {
 #[derive(Clone, Debug, PartialEq)]
 pub enum NativeSequenceShape {
     List,
-    Array,
 }
 
 fn alloc_native_sequence<State>(
@@ -2007,7 +2065,6 @@ where
 {
     match shape {
         NativeSequenceShape::List => runtime.heap.alloc_ptr_list(values),
-        NativeSequenceShape::Array => runtime.heap.alloc_ptr_array(values),
     }
 }
 
@@ -2021,7 +2078,6 @@ where
 {
     match shape {
         NativeSequenceShape::List => runtime.heap.pointer_as_list(&pointer),
-        NativeSequenceShape::Array => runtime.heap.pointer_as_array(&pointer),
     }
 }
 

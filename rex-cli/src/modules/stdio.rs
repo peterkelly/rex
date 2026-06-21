@@ -418,7 +418,7 @@ pub(crate) fn inject_cli_io_natives(builder: &mut Builder) -> Result<(), EngineE
         &mut module,
         "read_dir",
         string_type(),
-        array_of(string_type()),
+        list_of(string_type()),
         |path: String| {
             Arc::new(move |ctx| {
                 let path = path.clone();
@@ -596,7 +596,7 @@ pub(crate) fn inject_cli_io_natives(builder: &mut Builder) -> Result<(), EngineE
         &mut module,
         "read_all",
         i32_type(),
-        array_of(u8_type()),
+        list_of(u8_type()),
         |fd: i32| {
             Arc::new(move |ctx| {
                 async move {
@@ -619,7 +619,7 @@ pub(crate) fn inject_cli_io_natives(builder: &mut Builder) -> Result<(), EngineE
         &mut module,
         "write_all",
         i32_type(),
-        array_of(u8_type()),
+        list_of(u8_type()),
         unit_type(),
         |fd: i32, bytes: Vec<u8>| {
             Arc::new(move |ctx| {
@@ -896,8 +896,8 @@ fn io_of(inner: Type) -> Type {
     Type::app(Type::user_con("IO", 1), inner)
 }
 
-fn array_of(inner: Type) -> Type {
-    Type::app(Type::builtin(BuiltinTypeId::Array), inner)
+fn list_of(inner: Type) -> Type {
+    Type::list(inner)
 }
 
 fn unit_type() -> Type {

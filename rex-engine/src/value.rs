@@ -182,7 +182,10 @@ pub enum Value {
     Uuid(Uuid),
     DateTime(DateTime<Utc>),
     Tuple(Vec<Handle>),
-    Array(Vec<Handle>),
+    Empty,
+    Cons(Handle, Handle),
+    ListSlice { index: usize, elements: Handle },
+    Data(Vec<Handle>),
     Dict(BTreeMap<Symbol, Handle>),
     Adt(Symbol, Vec<Handle>),
     Uninitialized(Symbol),
@@ -210,9 +213,9 @@ impl Value {
             Value::Uuid(..) => "uuid",
             Value::DateTime(..) => "datetime",
             Value::Tuple(..) => "tuple",
-            Value::Array(..) => "array",
+            Value::Empty | Value::Cons(..) | Value::ListSlice { .. } => "list",
+            Value::Data(..) => "data",
             Value::Dict(..) => "dict",
-            Value::Adt(name, ..) if name.as_ref() == "Empty" || name.as_ref() == "Cons" => "list",
             Value::Adt(..) => "adt",
             Value::Uninitialized(..) => "uninitialized",
             Value::Frame => "frame",
@@ -390,13 +393,6 @@ impl Handle {
         }
     }
 
-    pub fn as_array(&self) -> Result<Vec<Handle>, EngineError> {
-        match self.value()? {
-            Value::Array(values) => Ok(values),
-            _ => Err(self.type_error("array")),
-        }
-    }
-
     pub fn as_list(&self) -> Result<Vec<Handle>, EngineError> {
         let pointer = self.pointer()?;
         self.heap()
@@ -495,7 +491,10 @@ enum ValueSeed {
     Uuid(Uuid),
     DateTime(DateTime<Utc>),
     Tuple(Vec<Pointer>),
-    Array(Vec<Pointer>),
+    Empty,
+    Cons(Pointer, Pointer),
+    ListSlice { index: usize, elements: Pointer },
+    Data(Vec<Pointer>),
     Dict(BTreeMap<Symbol, Pointer>),
     Adt(Symbol, Vec<Pointer>),
     Uninitialized(Symbol),
@@ -523,7 +522,13 @@ impl ValueSeed {
             Cell::Uuid(value) => Self::Uuid(*value),
             Cell::DateTime(value) => Self::DateTime(*value),
             Cell::Tuple(values) => Self::Tuple(values.clone()),
-            Cell::Array(values) => Self::Array(values.clone()),
+            Cell::Empty => Self::Empty,
+            Cell::Cons(head, tail) => Self::Cons(*head, *tail),
+            Cell::ListSlice { index, elements } => Self::ListSlice {
+                index: *index,
+                elements: *elements,
+            },
+            Cell::Data(values) => Self::Data(values.clone()),
             Cell::Dict(values) => Self::Dict(values.clone()),
             Cell::Adt(name, args) => Self::Adt(name.clone(), args.clone()),
             Cell::Uninitialized(name) => Self::Uninitialized(name.clone()),
@@ -873,14 +878,29 @@ impl Heap {
         handle_from_pointer(self, self.alloc_ptr_tuple(pointers)?)
     }
 
-    pub fn alloc_array(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
-        let pointers = self.pointers_from_handles(values)?;
-        handle_from_pointer(self, self.alloc_ptr_array(pointers)?)
-    }
-
     pub fn alloc_list(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
         let pointers = self.pointers_from_handles(values)?;
         handle_from_pointer(self, self.alloc_ptr_list(pointers)?)
+    }
+
+    pub fn alloc_empty(&self) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_empty()?)
+    }
+
+    pub fn alloc_cons(&self, head: Handle, tail: Handle) -> Result<Handle, EngineError> {
+        let head = head.pointer_for_heap(self)?;
+        let tail = tail.pointer_for_heap(self)?;
+        handle_from_pointer(self, self.alloc_ptr_cons(head, tail)?)
+    }
+
+    pub fn alloc_data(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
+        let pointers = self.pointers_from_handles(values)?;
+        handle_from_pointer(self, self.alloc_ptr_data(pointers)?)
+    }
+
+    pub fn alloc_list_slice(&self, index: usize, elements: Handle) -> Result<Handle, EngineError> {
+        let elements = elements.pointer_for_heap(self)?;
+        handle_from_pointer(self, self.alloc_ptr_list_slice(index, elements)?)
     }
 
     pub fn alloc_dict(&self, values: BTreeMap<Symbol, Handle>) -> Result<Handle, EngineError> {
@@ -913,7 +933,10 @@ impl Heap {
             Value::Uuid(value) => self.alloc_uuid(value),
             Value::DateTime(value) => self.alloc_datetime(value),
             Value::Tuple(values) => self.alloc_tuple(values),
-            Value::Array(values) => self.alloc_array(values),
+            Value::Empty => self.alloc_empty(),
+            Value::Cons(head, tail) => self.alloc_cons(head, tail),
+            Value::ListSlice { index, elements } => self.alloc_list_slice(index, elements),
+            Value::Data(values) => self.alloc_data(values),
             Value::Dict(values) => self.alloc_dict(values),
             Value::Adt(name, args) => self.alloc_adt(name, args),
             Value::Uninitialized(_)
@@ -963,7 +986,13 @@ impl Heap {
             ValueSeed::Uuid(value) => Value::Uuid(value),
             ValueSeed::DateTime(value) => Value::DateTime(value),
             ValueSeed::Tuple(values) => Value::Tuple(self.handles_from_pointers(&values)?),
-            ValueSeed::Array(values) => Value::Array(self.handles_from_pointers(&values)?),
+            ValueSeed::Empty => Value::Empty,
+            ValueSeed::Cons(head, tail) => Value::Cons(self.handle(head)?, self.handle(tail)?),
+            ValueSeed::ListSlice { index, elements } => Value::ListSlice {
+                index,
+                elements: self.handle(elements)?,
+            },
+            ValueSeed::Data(values) => Value::Data(self.handles_from_pointers(&values)?),
             ValueSeed::Dict(values) => {
                 let mut out = BTreeMap::new();
                 for (name, pointer) in values {
@@ -1050,10 +1079,6 @@ impl Heap {
         self.with_access(|heap| heap.get(pointer)?.cell_as_tuple())
     }
 
-    pub(crate) fn pointer_as_array(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
-        self.with_access(|heap| heap.get(pointer)?.cell_as_array())
-    }
-
     pub(crate) fn pointer_as_dict(
         &self,
         pointer: &Pointer,
@@ -1077,6 +1102,51 @@ impl Heap {
             let cell = heap.get(pointer)?;
             list_to_vec(heap, cell)
         })
+    }
+
+    pub(crate) fn list_items(&self, pointer: Pointer) -> Result<ListItems, EngineError> {
+        self.with_access(|heap| list_items_from_pointer(heap, pointer))
+    }
+
+    pub(crate) fn list_head_tail(
+        &self,
+        pointer: &Pointer,
+    ) -> Result<Option<(Pointer, Pointer)>, EngineError> {
+        let Some((head, tail_index, elements)) = self.with_access(|heap| {
+            let cell = heap.get(pointer)?;
+            match cell {
+                Cell::Empty => Ok(None),
+                Cell::Cons(head, tail) => Ok(Some((*head, None, *tail))),
+                Cell::ListSlice { index, elements } => {
+                    let values = heap.get(elements)?.cell_as_data()?;
+                    let Some(head) = values.get(*index).copied() else {
+                        return Ok(None);
+                    };
+                    Ok(Some((head, Some(index + 1), *elements)))
+                }
+                _ => Err(EngineError::NativeType {
+                    expected: "list".into(),
+                    got: cell.cell_type_name().into(),
+                }),
+            }
+        })?
+        else {
+            return Ok(None);
+        };
+        let tail = match tail_index {
+            Some(index) => {
+                // Creating the tail slice can trigger copying GC. The head was
+                // read from the backing Data cell before that allocation, so it
+                // must be temporarily rooted or the returned pointer may refer
+                // to the pre-collection location.
+                let head_root = self.temp_roots(vec![head])?;
+                let tail = self.alloc_ptr_list_slice(index, elements)?;
+                let head = head_root.get(0)?;
+                return Ok(Some((head, tail)));
+            }
+            None => elements,
+        };
+        Ok(Some((head, tail)))
     }
 
     pub(crate) fn alloc_ptr_bool(&self, value: bool) -> Result<Pointer, EngineError> {
@@ -1160,10 +1230,6 @@ impl Heap {
         self.alloc_cell(Cell::Tuple(values))
     }
 
-    pub(crate) fn alloc_ptr_array(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
-        self.alloc_cell(Cell::Array(values))
-    }
-
     pub(crate) fn alloc_ptr_dict(
         &self,
         values: BTreeMap<Symbol, Pointer>,
@@ -1179,14 +1245,41 @@ impl Heap {
         self.alloc_cell(Cell::Adt(name, args))
     }
 
+    pub(crate) fn alloc_ptr_empty(&self) -> Result<Pointer, EngineError> {
+        self.alloc_cell(Cell::Empty)
+    }
+
+    pub(crate) fn alloc_ptr_cons(
+        &self,
+        head: Pointer,
+        tail: Pointer,
+    ) -> Result<Pointer, EngineError> {
+        self.alloc_cell(Cell::Cons(head, tail))
+    }
+
+    pub(crate) fn alloc_ptr_data(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
+        self.alloc_cell(Cell::Data(values))
+    }
+
+    pub(crate) fn alloc_ptr_list_slice(
+        &self,
+        index: usize,
+        elements: Pointer,
+    ) -> Result<Pointer, EngineError> {
+        self.alloc_cell(Cell::ListSlice { index, elements })
+    }
+
     pub(crate) fn alloc_ptr_list(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
-        let roots = self.temp_roots(values)?;
-        let mut list = self.alloc_ptr_adt(Symbol::intern("Empty"), vec![])?;
-        for index in (0..roots.len()).rev() {
-            let value = roots.get(index)?;
-            list = self.alloc_ptr_adt(Symbol::intern("Cons"), vec![value, list])?;
+        if values.is_empty() {
+            return self.alloc_ptr_empty();
         }
-        Ok(list)
+        let roots = self.temp_roots(values)?;
+        let values = (0..roots.len())
+            .map(|index| roots.get(index))
+            .collect::<Result<Vec<_>, _>>()?;
+        let data = self.alloc_ptr_data(values)?;
+        let data = self.temp_roots(vec![data])?;
+        self.alloc_ptr_list_slice(0, data.get(0)?)
     }
 
     pub(crate) fn alloc_ptr_closure(
@@ -1549,7 +1642,10 @@ pub(crate) enum Cell {
     Uuid(Uuid),
     DateTime(DateTime<Utc>),
     Tuple(Vec<Pointer>),
-    Array(Vec<Pointer>),
+    Empty,
+    Cons(Pointer, Pointer),
+    ListSlice { index: usize, elements: Pointer },
+    Data(Vec<Pointer>),
     Dict(BTreeMap<Symbol, Pointer>),
     Adt(Symbol, Vec<Pointer>),
     Uninitialized(Symbol),
@@ -1577,9 +1673,9 @@ impl Cell {
             Cell::Uuid(..) => "uuid",
             Cell::DateTime(..) => "datetime",
             Cell::Tuple(..) => "tuple",
-            Cell::Array(..) => "array",
+            Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. } => "list",
+            Cell::Data(..) => "data",
             Cell::Dict(..) => "dict",
-            Cell::Adt(name, ..) if name.as_ref() == "Empty" || name.as_ref() == "Cons" => "list",
             Cell::Adt(..) => "adt",
             Cell::Uninitialized(..) => "uninitialized",
             Cell::Frame(..) => "frame",
@@ -1701,10 +1797,10 @@ impl Cell {
         }
     }
 
-    pub(crate) fn cell_as_array(&self) -> Result<Vec<Pointer>, EngineError> {
+    pub(crate) fn cell_as_data(&self) -> Result<Vec<Pointer>, EngineError> {
         match self {
-            Cell::Array(v) => Ok(v.clone()),
-            _ => Err(self.cell_type_error("array")),
+            Cell::Data(v) => Ok(v.clone()),
+            _ => Err(self.cell_type_error("data")),
         }
     }
 
@@ -1732,9 +1828,14 @@ impl Cell {
 
 fn trace_cell_pointers(cell: &Cell, out: &mut Vec<Pointer>) {
     match cell {
-        Cell::Tuple(values) | Cell::Array(values) | Cell::Adt(_, values) => {
+        Cell::Tuple(values) | Cell::Data(values) | Cell::Adt(_, values) => {
             out.extend(values.iter().copied());
         }
+        Cell::Cons(head, tail) => {
+            out.push(*head);
+            out.push(*tail);
+        }
+        Cell::ListSlice { elements, .. } => out.push(*elements),
         Cell::Dict(values) => out.extend(values.values().copied()),
         Cell::Frame(frame) => frame.trace_pointers(out),
         Cell::Closure(closure) => closure.env.trace_pointers(out),
@@ -1754,6 +1855,7 @@ fn trace_cell_pointers(cell: &Cell, out: &mut Vec<Pointer>) {
         | Cell::String(_)
         | Cell::Uuid(_)
         | Cell::DateTime(_)
+        | Cell::Empty
         | Cell::Uninitialized(_) => {}
     }
 }
@@ -1763,10 +1865,19 @@ fn rewrite_cell_pointers(
     rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
 ) -> Result<(), EngineError> {
     match cell {
-        Cell::Tuple(values) | Cell::Array(values) | Cell::Adt(_, values) => {
+        Cell::Tuple(values) | Cell::Data(values) | Cell::Adt(_, values) => {
             for pointer in values {
                 *pointer = rewrite(*pointer)?;
             }
+            Ok(())
+        }
+        Cell::Cons(head, tail) => {
+            *head = rewrite(*head)?;
+            *tail = rewrite(*tail)?;
+            Ok(())
+        }
+        Cell::ListSlice { elements, .. } => {
+            *elements = rewrite(*elements)?;
             Ok(())
         }
         Cell::Dict(values) => {
@@ -1793,6 +1904,7 @@ fn rewrite_cell_pointers(
         | Cell::String(_)
         | Cell::Uuid(_)
         | Cell::DateTime(_)
+        | Cell::Empty
         | Cell::Uninitialized(_) => Ok(()),
     }
 }
@@ -1946,12 +2058,20 @@ fn cell_debug_inner(
                 .collect::<Result<Vec<_>, _>>()?;
             format!("({})", items.join(", "))
         }
-        Cell::Array(values) => {
+        Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. } => {
+            let values = list_to_vec(heap, cell)?;
             let items = values
                 .iter()
                 .map(|pointer| pointer_debug_inner(heap, pointer, active))
                 .collect::<Result<Vec<_>, _>>()?;
-            format!("<array {}>", items.join(", "))
+            format!("[{}]", items.join(", "))
+        }
+        Cell::Data(values) => {
+            let items = values
+                .iter()
+                .map(|pointer| pointer_debug_inner(heap, pointer, active))
+                .collect::<Result<Vec<_>, _>>()?;
+            format!("<data {}>", items.join(", "))
         }
         Cell::Dict(values) => {
             let mut items = values.iter().collect::<Vec<_>>();
@@ -1969,19 +2089,11 @@ fn cell_debug_inner(
             format!("{{{}}}", items.join(", "))
         }
         Cell::Adt(name, args) => {
-            if let Some(values) = list_to_vec_opt(heap, cell)? {
-                let items = values
-                    .iter()
-                    .map(|pointer| pointer_debug_inner(heap, pointer, active))
-                    .collect::<Result<Vec<_>, _>>()?;
-                format!("[{}]", items.join(", "))
-            } else {
-                let mut rendered = vec![name.to_string()];
-                for pointer in args {
-                    rendered.push(pointer_debug_inner(heap, pointer, active)?);
-                }
-                rendered.join(" ")
+            let mut rendered = vec![name.to_string()];
+            for pointer in args {
+                rendered.push(pointer_debug_inner(heap, pointer, active)?);
             }
+            rendered.join(" ")
         }
         Cell::Uninitialized(name) => format!("<uninitialized:{name}>"),
         Cell::Frame(frame) => format!("<frame:{frame:?}>"),
@@ -2079,12 +2191,20 @@ fn cell_display_inner(
                 .collect::<Result<Vec<_>, _>>()?;
             format!("({})", items.join(", "))
         }
-        Cell::Array(values) => {
+        Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. } => {
+            let values = list_to_vec(heap, cell)?;
             let items = values
                 .iter()
                 .map(|pointer| pointer_display_inner(heap, pointer, active, opts))
                 .collect::<Result<Vec<_>, _>>()?;
-            format!("<array {}>", items.join(", "))
+            format!("[{}]", items.join(", "))
+        }
+        Cell::Data(values) => {
+            let items = values
+                .iter()
+                .map(|pointer| pointer_display_inner(heap, pointer, active, opts))
+                .collect::<Result<Vec<_>, _>>()?;
+            format!("<data {}>", items.join(", "))
         }
         Cell::Dict(values) => {
             let mut items = values.iter().collect::<Vec<_>>();
@@ -2102,19 +2222,11 @@ fn cell_display_inner(
             format!("{{{}}}", items.join(", "))
         }
         Cell::Adt(name, args) => {
-            if let Some(values) = list_to_vec_opt(heap, cell)? {
-                let items = values
-                    .iter()
-                    .map(|pointer| pointer_display_inner(heap, pointer, active, opts))
-                    .collect::<Result<Vec<_>, _>>()?;
-                format!("[{}]", items.join(", "))
-            } else {
-                let mut rendered = vec![maybe_strip_snippet_qualifier(name.as_ref(), opts)];
-                for pointer in args {
-                    rendered.push(pointer_display_inner(heap, pointer, active, opts)?);
-                }
-                rendered.join(" ")
+            let mut rendered = vec![maybe_strip_snippet_qualifier(name.as_ref(), opts)];
+            for pointer in args {
+                rendered.push(pointer_display_inner(heap, pointer, active, opts)?);
             }
+            rendered.join(" ")
         }
         Cell::Uninitialized(name) => format!("<uninitialized:{name}>"),
         Cell::Frame(frame) => format!("<frame:{frame:?}>"),
@@ -2223,7 +2335,23 @@ fn cell_eq_inner(
         (Cell::String(lhs), Cell::String(rhs)) => Ok(lhs == rhs),
         (Cell::Uuid(lhs), Cell::Uuid(rhs)) => Ok(lhs == rhs),
         (Cell::DateTime(lhs), Cell::DateTime(rhs)) => Ok(lhs == rhs),
-        (Cell::Tuple(lhs), Cell::Tuple(rhs)) | (Cell::Array(lhs), Cell::Array(rhs)) => {
+        (Cell::Tuple(lhs), Cell::Tuple(rhs)) | (Cell::Data(lhs), Cell::Data(rhs)) => {
+            if lhs.len() != rhs.len() {
+                return Ok(false);
+            }
+            for (lhs, rhs) in lhs.iter().zip(rhs.iter()) {
+                if !pointer_eq_inner(heap, lhs, rhs, seen)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        (
+            Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. },
+            Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. },
+        ) => {
+            let lhs = list_to_vec(heap, lhs)?;
+            let rhs = list_to_vec(heap, rhs)?;
             if lhs.len() != rhs.len() {
                 return Ok(false);
             }
@@ -2275,35 +2403,30 @@ pub(crate) fn pointer_eq(heap: &Heap, lhs: &Pointer, rhs: &Pointer) -> Result<bo
     })
 }
 
-fn list_to_vec_opt(
-    heap: &HeapAccess<'_>,
-    cell: &Cell,
-) -> Result<Option<Vec<Pointer>>, EngineError> {
-    let mut out = Vec::new();
-    let mut cursor = cell;
-    loop {
-        match cursor {
-            Cell::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => {
-                return Ok(Some(out));
-            }
-            Cell::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
-                out.push(args[0]);
-                cursor = heap.get(&args[1])?;
-            }
-            _ => return Ok(None),
-        }
-    }
-}
-
 pub(crate) fn list_to_vec(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Vec<Pointer>, EngineError> {
+    if let Cell::ListSlice { index, elements } = cell {
+        let values = heap.get(elements)?.cell_as_data()?;
+        if *index >= values.len() {
+            return Ok(Vec::new());
+        }
+        return Ok(values[*index..].to_vec());
+    }
+
     let mut out = Vec::new();
     let mut cursor = cell;
     loop {
         match cursor {
-            Cell::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => return Ok(out),
-            Cell::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
-                out.push(args[0]);
-                cursor = heap.get(&args[1])?;
+            Cell::Empty => return Ok(out),
+            Cell::Cons(head, tail) => {
+                out.push(*head);
+                cursor = heap.get(tail)?;
+            }
+            Cell::ListSlice { index, elements } => {
+                let values = heap.get(elements)?.cell_as_data()?;
+                if *index < values.len() {
+                    out.extend_from_slice(&values[*index..]);
+                }
+                return Ok(out);
             }
             _ => {
                 return Err(EngineError::NativeType {
@@ -2312,6 +2435,104 @@ pub(crate) fn list_to_vec(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Vec<Poin
                 });
             }
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ListItems {
+    Slice {
+        elements: Pointer,
+        start: usize,
+        len: usize,
+    },
+    Pointers(Vec<Pointer>),
+}
+
+impl ListItems {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Slice { len, .. } => *len,
+            Self::Pointers(values) => values.len(),
+        }
+    }
+
+    pub(crate) fn get(&self, heap: &Heap, index: usize) -> Result<Pointer, EngineError> {
+        match self {
+            Self::Slice {
+                elements,
+                start,
+                len,
+            } => {
+                if index >= *len {
+                    return Err(EngineError::Internal(
+                        "list item index out of bounds".into(),
+                    ));
+                }
+                heap.with_access(|heap| {
+                    let values = heap.get(elements)?.cell_as_data()?;
+                    values.get(start + index).copied().ok_or_else(|| {
+                        EngineError::Internal("list slice backing index out of bounds".into())
+                    })
+                })
+            }
+            Self::Pointers(values) => values
+                .get(index)
+                .copied()
+                .ok_or_else(|| EngineError::Internal("list item index out of bounds".into())),
+        }
+    }
+
+    pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+        match self {
+            Self::Slice { elements, .. } => out.push(*elements),
+            Self::Pointers(values) => out.extend(values.iter().copied()),
+        }
+    }
+
+    pub(crate) fn rewrite_pointers(
+        &mut self,
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+    ) -> Result<(), EngineError> {
+        match self {
+            Self::Slice { elements, .. } => {
+                *elements = rewrite(*elements)?;
+                Ok(())
+            }
+            Self::Pointers(values) => {
+                for pointer in values {
+                    *pointer = rewrite(*pointer)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+fn list_items_from_pointer(
+    heap: &HeapAccess<'_>,
+    pointer: Pointer,
+) -> Result<ListItems, EngineError> {
+    let cell = heap.get(&pointer)?;
+    match cell {
+        Cell::Empty => Ok(ListItems::Pointers(Vec::new())),
+        Cell::ListSlice { index, elements } => {
+            let values = heap.get(elements)?.cell_as_data()?;
+            let len = values.len().saturating_sub(*index);
+            Ok(ListItems::Slice {
+                elements: *elements,
+                start: *index,
+                len,
+            })
+        }
+        Cell::Cons(..) => Ok(ListItems::Pointers(list_to_vec(heap, cell)?)),
+        _ => Err(EngineError::NativeType {
+            expected: "list".into(),
+            got: cell.cell_type_name().into(),
+        }),
     }
 }
 
@@ -2470,7 +2691,7 @@ impl<T: IntoPointer> IntoPointer for Vec<T> {
             .iter()
             .map(|root| root.get(0))
             .collect::<Result<Vec<_>, _>>()?;
-        heap.alloc_ptr_array(ptrs)
+        heap.alloc_ptr_list(ptrs)
     }
 }
 
@@ -2559,7 +2780,7 @@ impl<T: IntoRex> IntoRex for Vec<T> {
             .iter()
             .map(Handle::pointer)
             .collect::<Result<Vec<_>, _>>()?;
-        handle_from_pointer(heap, heap.alloc_ptr_array(pointers)?)
+        handle_from_pointer(heap, heap.alloc_ptr_list(pointers)?)
     }
 }
 
@@ -2567,7 +2788,7 @@ impl<T: FromRex> FromRex for Vec<T> {
     fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
         let heap = handle.heap();
         let pointer = handle.pointer()?;
-        let pointers = heap.pointer_as_array(&pointer)?;
+        let pointers = heap.pointer_as_list(&pointer)?;
         let mut out = Vec::with_capacity(pointers.len());
         for pointer in pointers {
             let child = heap.handle(pointer)?;
@@ -2679,7 +2900,7 @@ where
     T: FromPointer,
 {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
-        let xs = heap.pointer_as_array(pointer)?;
+        let xs = heap.pointer_as_list(pointer)?;
         let mut ys = Vec::with_capacity(xs.len());
         for x in &xs {
             ys.push(T::from_pointer(heap, x)?);
@@ -3036,6 +3257,61 @@ mod tests {
                 .expect("last i32"),
             2047
         );
+    }
+
+    #[test]
+    fn alloc_ptr_list_uses_vector_backed_slice_representation() {
+        let heap = Heap::new();
+        let values = [1, 2, 3]
+            .into_iter()
+            .map(|value| heap.alloc_ptr_i32(value).expect("alloc_i32 should succeed"))
+            .collect::<Vec<_>>();
+
+        let list = heap
+            .alloc_ptr_list(values.clone())
+            .expect("list allocation should succeed");
+        let Cell::ListSlice { index, elements } =
+            heap.clone_cell(&list).expect("list cell should exist")
+        else {
+            panic!("expected vector-backed list slice");
+        };
+        assert_eq!(index, 0);
+        let Cell::Data(backing) = heap.clone_cell(&elements).expect("data cell should exist")
+        else {
+            panic!("expected list data backing");
+        };
+        assert_eq!(backing, values);
+    }
+
+    #[test]
+    fn list_slice_tail_shares_data_backing() {
+        let heap = Heap::new();
+        let values = [1, 2, 3]
+            .into_iter()
+            .map(|value| heap.alloc_ptr_i32(value).expect("alloc_i32 should succeed"))
+            .collect::<Vec<_>>();
+        let list = heap
+            .alloc_ptr_list(values)
+            .expect("list allocation should succeed");
+        let Cell::ListSlice {
+            elements: original_data,
+            ..
+        } = heap.clone_cell(&list).expect("list cell should exist")
+        else {
+            panic!("expected vector-backed list slice");
+        };
+
+        let (_head, tail) = heap
+            .list_head_tail(&list)
+            .expect("head/tail should decode")
+            .expect("list should be non-empty");
+        let Cell::ListSlice { index, elements } =
+            heap.clone_cell(&tail).expect("tail cell should exist")
+        else {
+            panic!("expected tail list slice");
+        };
+        assert_eq!(index, 1);
+        assert_eq!(elements, original_data);
     }
 
     #[test]

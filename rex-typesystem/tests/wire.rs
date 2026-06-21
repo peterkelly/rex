@@ -89,7 +89,6 @@ fn unary_builtin_containers_serialize_arguments() {
     let elem = Type::builtin(BuiltinTypeId::I32);
     let wire_types = vec![
         WireType::from_type(&Type::list(elem.clone())),
-        WireType::from_type(&Type::array(elem.clone())),
         WireType::from_type(&Type::dict(elem.clone())),
         WireType::from_type(&Type::option(elem.clone())),
         WireType::from_type(&Type::promise(elem.clone())),
@@ -101,11 +100,6 @@ fn unary_builtin_containers_serialize_arguments() {
             {
                 "kind": "builtin",
                 "name": "List",
-                "args": [{ "kind": "builtin", "name": "i32" }]
-            },
-            {
-                "kind": "builtin",
-                "name": "Array",
                 "args": [{ "kind": "builtin", "name": "i32" }]
             },
             {
@@ -127,8 +121,8 @@ fn unary_builtin_containers_serialize_arguments() {
     );
 
     assert_eq!(
-        wire_types[1].to_type().expect("decode Array"),
-        Type::array(elem)
+        wire_types[0].to_type().expect("decode List"),
+        Type::list(elem)
     );
 }
 
@@ -456,7 +450,7 @@ fn monomorphic_scheme_serializes_without_empty_vars_or_constraints() {
 #[test]
 fn scheme_roundtrips_quantified_vars_and_constraints() {
     let a = TypeVar::new(7, Some(Symbol::intern("a")));
-    let typ = Type::fun(Type::var(a.clone()), Type::array(Type::var(a.clone())));
+    let typ = Type::fun(Type::var(a.clone()), Type::list(Type::var(a.clone())));
     let scheme = Scheme::new(
         vec![a.clone()],
         vec![Predicate::new("Show", Type::var(a.clone()))],
@@ -477,7 +471,7 @@ fn scheme_roundtrips_quantified_vars_and_constraints() {
                 "params": [{ "kind": "var", "name": "a" }],
                 "ret": {
                     "kind": "builtin",
-                    "name": "Array",
+                    "name": "List",
                     "args": [{ "kind": "var", "name": "a" }]
                 }
             }

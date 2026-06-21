@@ -132,28 +132,19 @@ fn promise_roundtrip_from_runtime_value() {
 }
 
 #[test]
-fn json_array_maps_to_array_not_list() {
+fn json_array_maps_to_list() {
     let ts = mk_type_system();
     let heap = Heap::new();
     let array_json = json!([1, 2, 3]);
 
-    let array_ty = Type::array(Type::builtin(BuiltinTypeId::I32));
-    let array_handle = json_to_rex(&heap, &array_json, &array_ty, &ts).unwrap();
-    let Value::Array(items) = array_handle.value().unwrap() else {
-        panic!("expected array");
-    };
-    assert_eq!(items.len(), 3);
-    assert_eq!(
-        rex_to_json(&array_handle, &array_ty, &ts).unwrap(),
-        array_json
-    );
-
     let list_ty = Type::list(Type::builtin(BuiltinTypeId::I32));
     let list_handle = json_to_rex(&heap, &array_json, &list_ty, &ts).unwrap();
-    let Value::Adt(tag, _args) = list_handle.value().unwrap() else {
-        panic!("expected list ADT");
-    };
-    assert_eq!(tag.as_ref(), "Cons");
+    let items = list_handle.as_list().unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(
+        rex_to_json(&list_handle, &list_ty, &ts).unwrap(),
+        array_json
+    );
 }
 
 #[test]
@@ -208,7 +199,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
         builder
     }
 
-    let rex_code = "EvalJsonRecord { id = 7, values = to_array [1, 2, 3, 5, 8] }";
+    let rex_code = "EvalJsonRecord { id = 7, values = [1, 2, 3, 5, 8] }";
     let expected_json = json!({
         "id": 7,
         "values": [1, 2, 3, 5, 8]

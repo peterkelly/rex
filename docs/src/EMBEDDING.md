@@ -577,17 +577,11 @@ globals.export("have_role", |state, role: String| {
 builder.inject_module(globals)?;
 ```
 
-## Array/List Interop at Host Boundaries
+## List Interop at Host Boundaries
 
-Rex keeps both `List a` and `Array a` because they serve different goals:
-
-- `List a` is ergonomic for user-authored functional code and pattern matching.
-- `Array a` is the host-facing contiguous representation (for example `Vec<u8>`
-  from filesystem reads).
-
-At host function call sites, Rex performs a narrow implicit coercion from
-`List a` to `Array a` in argument position. This means users can pass list
-literals to host functions that accept `Vec<T>` without writing conversions.
+Rex exposes one collection type to user code: `List a`. Rust `Vec<T>` values
+convert to and from `List T`, so host functions can accept list literals and
+return list values without explicit representation conversions.
 
 ```rex
 accept_bytes [1, 2, 3]
@@ -595,30 +589,13 @@ accept_bytes [1, 2, 3]
 
 where `accept_bytes` is exported from Rust with a `Vec<u8>` parameter.
 
-For the opposite direction, Rex exposes explicit helpers:
-
-- `to_list : Array a -> List a`
-- `to_array : List a -> Array a`
-
-### Why `to_list` Is Explicit (Not Implicit)
-
-`Array -> List` conversion is intentionally explicit to keep runtime costs
-predictable in user code. Converting an array into a list allocates a new
-linked structure and changes performance characteristics for downstream
-operations.
-
-If this conversion were implicit everywhere, the compiler could silently insert
-it in places where users do not expect allocation or complexity changes (for
-example inside control-flow joins, nested expressions, or polymorphic code).
-That would make performance harder to reason about and make type errors less
-transparent.
-
-By requiring `to_list` explicitly, we keep intent and cost visible at the exact
-program point where representation changes. This preserves ergonomics while
-avoiding hidden work:
+Internally, lists may be represented either as linked `Cons`/`Empty` cells or
+as a slice over contiguous heap data. That choice is not exposed to Rex code:
+list constructors, list literals, pattern matching, and prelude collection
+functions all operate on the same `List a` abstraction.
 
 ```rex
-match (to_list bytes) with {
+match bytes with {
     case Cons head _ -> head;
     case Empty -> 0;
 }
@@ -898,9 +875,9 @@ The derive:
 The derive does not implement `RexDefault`; `inject_rex_with_default` is available only when the
 type already provides that trait.
 
-Fields of type `Vec<T>` are exposed as `Array T` and convert to/from Rex
-runtime arrays. When constructing or updating derived records from Rex code, use
-`to_array [...]` for these fields.
+Fields of type `Vec<T>` are exposed as `List T` and convert to/from Rex lists.
+When constructing or updating derived records from Rex code, use list literals
+directly for these fields.
 
 That means `MyType::inject_rex(&mut builder)?` is enough for acyclic graphs of derived ADTs. You do
 not need to manually register dependencies in topological order. Cyclic ADT families are still not

@@ -72,7 +72,7 @@ This usually means you called a type-class method at a type that has no instance
 
 Typical fixes:
 
-- use a different type (`List` vs `Array`, `Option` vs `Result`, …),
+- use a different type (`List` vs `Option`, `Option` vs `Result`, …),
 - add an instance (Section 2),
 - add a type annotation so the intended instance is selected.
 

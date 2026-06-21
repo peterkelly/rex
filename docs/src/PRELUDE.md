@@ -6,9 +6,8 @@
 
 | Type | Description |
 |---|---|
-| `Array a` | Fixed-size indexed sequence. |
 | `Dict a` | Dictionary/record-like mapping from field labels to values. |
-| `List a` | Immutable singly linked list. Constructors: `Empty`, `Cons`. |
+| `List a` | Immutable ordered sequence. Constructors: `Empty`, `Cons`. |
 | `Option a` | Optional value (`Some` or `None`). Constructors: `Some`, `None`. |
 | `Result a b` | Result value (`Ok` or `Err`) for success/failure flows. Constructors: `Err`, `Ok`. |
 | `bool` | Boolean truth value. |
@@ -216,22 +215,22 @@ Methods:
 | `negate` | `('a -> 'a)` | `i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Additive inverse. |
 | `zero` | `'a` | `string`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Additive identity. |
 | `+` | `('a -> ('a -> 'a))` | `string`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Addition (or concatenation for strings). |
-| `or_else` | `((('f 'a) -> ('f 'a)) -> (('f`<br>`'a) -> ('f 'a)))` | `List`<br>`Option`<br>`Array`<br>`(Result 'e)` | Provide an alternative container value. |
-| `pure` | `('a -> ('f 'a))` | `List`<br>`Option`<br>`Array`<br>`(Result 'e)` | Lift a plain value into an applicative context. |
-| `ap` | `(('f ('a -> 'b)) -> (('f 'a)`<br>`-> ('f 'b)))` | `List`<br>`Option`<br>`Array`<br>`(Result 'e)` | Apply wrapped functions to wrapped values. |
-| `default` | `'a` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`(List 'a)`<br>`(Array 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Canonical default value for a type. For `Result a e`, this requires `Default a`. |
+| `or_else` | `((('f 'a) -> ('f 'a)) -> (('f`<br>`'a) -> ('f 'a)))` | `List`<br>`Option`<br>`(Result 'e)` | Provide an alternative container value. |
+| `pure` | `('a -> ('f 'a))` | `List`<br>`Option`<br>`(Result 'e)` | Lift a plain value into an applicative context. |
+| `ap` | `(('f ('a -> 'b)) -> (('f 'a)`<br>`-> ('f 'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Apply wrapped functions to wrapped values. |
+| `default` | `'a` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Canonical default value for a type. For `Result a e`, this requires `Default a`. |
 | `/` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Division. |
-| `==` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Array 'a)`<br>`(Result 'a 'e)` | Equality comparison. |
-| `!=` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Array 'a)`<br>`(Result 'a 'e)` | Inequality comparison. |
-| `filter` | `(('a -> bool) -> (('f 'a) ->`<br>`('f 'a)))` | `List`<br>`Option`<br>`Array` | Keep elements that satisfy a predicate. |
-| `filter_map` | `(('a -> (Option 'b)) -> (('f`<br>`'a) -> ('f 'b)))` | `List`<br>`Option`<br>`Array` | Map and drop missing results in one pass. |
-| `foldl` | `(('b -> ('a -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option`<br>`Array` | Strict left fold. |
-| `foldr` | `(('a -> ('b -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option`<br>`Array` | Right fold. |
-| `fold` | `(('b -> ('a -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option`<br>`Array` | Left-style fold over a container. |
-| `map` | `(('a -> 'b) -> (('f 'a) -> ('f`<br>`'b)))` | `List`<br>`Option`<br>`Array`<br>`(Result 'e)` | Apply a function to each value inside a functor. |
-| `get` | `(i32 -> ('t -> 'a))` | `((List 'a), 'a)`<br>`((Array 'a), 'a)` | Get an element by index. |
+| `==` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Equality comparison. |
+| `!=` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Inequality comparison. |
+| `filter` | `(('a -> bool) -> (('f 'a) ->`<br>`('f 'a)))` | `List`<br>`Option` | Keep elements that satisfy a predicate. |
+| `filter_map` | `(('a -> (Option 'b)) -> (('f`<br>`'a) -> ('f 'b)))` | `List`<br>`Option` | Map and drop missing results in one pass. |
+| `foldl` | `(('b -> ('a -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option` | Strict left fold. |
+| `foldr` | `(('a -> ('b -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option` | Right fold. |
+| `fold` | `(('b -> ('a -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option` | Left-style fold over a container. |
+| `map` | `(('a -> 'b) -> (('f 'a) -> ('f`<br>`'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Apply a function to each value inside a functor. |
+| `get` | `(i32 -> ('t -> 'a))` | `((List 'a), 'a)` | Get an element by index. |
 | `%` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64` | Remainder/modulo operation. |
-| `bind` | `(('a -> ('m 'b)) -> (('m 'a)`<br>`-> ('m 'b)))` | `List`<br>`Option`<br>`Array`<br>`(Result 'e)` | Monadic flat-map/sequencing operation. |
+| `bind` | `(('a -> ('m 'b)) -> (('m 'a)`<br>`-> ('m 'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Monadic flat-map/sequencing operation. |
 | `one` | `'a` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Multiplicative identity. |
 | `*` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Multiplication. |
 | `cmp` | `('a -> ('a -> i32))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string` | Three-way comparison returning negative/zero/positive `i32`. |
@@ -239,11 +238,11 @@ Methods:
 | `<=` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string` | Less-than-or-equal comparison. |
 | `>` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string` | Greater-than comparison. |
 | `>=` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string` | Greater-than-or-equal comparison. |
-| `take` | `(i32 -> (('f 'a) -> ('f 'a)))` | `List`<br>`Array` | Keep only the first `n` elements. |
-| `skip` | `(i32 -> (('f 'a) -> ('f 'a)))` | `List`<br>`Array` | Drop the first `n` elements. |
-| `zip` | `(('f 'a) -> (('f 'b) -> ('f`<br>`('a, 'b))))` | `List`<br>`Array` | Pair elements from two containers by position. |
-| `unzip` | `(('f ('a, 'b)) -> (('f 'a),`<br>`('f 'b)))` | `List`<br>`Array` | Split a container of pairs into a pair of containers. |
-| `show` | `('a -> string)` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`uuid`<br>`datetime`<br>`(List 'a)`<br>`(Array 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Render a value as a human-readable string. |
+| `take` | `(i32 -> (('f 'a) -> ('f 'a)))` | `List` | Keep only the first `n` elements. |
+| `skip` | `(i32 -> (('f 'a) -> ('f 'a)))` | `List` | Drop the first `n` elements. |
+| `zip` | `(('f 'a) -> (('f 'b) -> ('f`<br>`('a, 'b))))` | `List` | Pair elements from two containers by position. |
+| `unzip` | `(('f ('a, 'b)) -> (('f 'a),`<br>`('f 'b)))` | `List` | Split a container of pairs into a pair of containers. |
+| `show` | `('a -> string)` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`uuid`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Render a value as a human-readable string. |
 | `-` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Subtraction. |
 
 ### Other Built-ins
@@ -266,7 +265,5 @@ Methods:
 | `mean` | `Foldable 'f, Field 'a => (('f`<br>`'a) -> 'a)` | Arithmetic mean over numeric foldables. |
 | `min` | `Foldable 'f, Ord 'a => (('f`<br>`'a) -> 'a)` | Minimum element by ordering. |
 | `sum` | `Foldable 'f, AdditiveMonoid 'a`<br>`=> (('f 'a) -> 'a)` | Sum all elements in a foldable container. |
-| `to_array` | `((List 'a) -> (Array 'a))` | Convert a list to an array. |
-| `to_list` | `((Array 'a) -> (List 'a))` | Convert an array to a list. |
 | `unwrap` | `((Option 'a) -> 'a)`<br><br>`((Result 't 'e) -> 't)` | Extract the inner value from `Some`/`Ok`, or raise an error for `None`/`Err`. |
 | `||` | `(bool -> (bool -> bool))` | Boolean disjunction. |

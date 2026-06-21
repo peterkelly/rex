@@ -90,7 +90,7 @@ use crate::{
     },
     stack::NativeUnaryShape,
     util::split_fun,
-    value::{Cell, Handle, Heap, HeapAccess, Pointer},
+    value::{Cell, Handle, Heap, HeapAccess, ListItems, Pointer, list_to_vec},
 };
 
 pub fn prelude_typeclasses_program() -> Result<&'static CompilationUnit, EngineError> {
@@ -257,8 +257,8 @@ where
     Ok(())
 }
 
-fn expect_list(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
-    heap.pointer_as_list(pointer)
+fn expect_list_items(heap: &Heap, pointer: Pointer) -> Result<ListItems, EngineError> {
+    heap.list_items(pointer)
 }
 
 fn list_from_handles(heap: &Heap, values: Vec<Handle>) -> Result<Handle, EngineError> {
@@ -329,18 +329,6 @@ fn list_elem_type(typ: &Type) -> Result<Type, EngineError> {
     }
 }
 
-fn array_elem_type(typ: &Type) -> Result<Type, EngineError> {
-    match typ.as_ref() {
-        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Array)) => {
-            Ok(elem.clone())
-        }
-        _ => Err(EngineError::NativeType {
-            expected: "Array a".into(),
-            got: typ.to_string(),
-        }),
-    }
-}
-
 fn dict_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
         TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Dict)) => {
@@ -381,10 +369,6 @@ fn result_types(typ: &Type) -> Result<(Type, Type), EngineError> {
             got: typ.to_string(),
         }),
     }
-}
-
-fn expect_array(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
-    heap.pointer_as_array(pointer)
 }
 
 fn option_from_pointer(heap: &Heap, value: Option<Pointer>) -> Result<Pointer, EngineError> {
@@ -697,7 +681,32 @@ fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
     let list_a = list_adt.result_type();
     list_adt.add_variant(Symbol::intern("Empty"), vec![]);
     list_adt.add_variant(Symbol::intern("Cons"), vec![a, list_a]);
-    engine.inject_adt(list_adt)?;
+    engine.type_system.register_adt(&list_adt);
+    for (ctor, scheme) in list_adt.constructor_schemes() {
+        match ctor.as_ref() {
+            "Empty" => {
+                engine.export_native(ctor.to_string(), scheme, 0, |engine, _, args| {
+                    if !args.is_empty() {
+                        return Err(EngineError::Internal(
+                            "Empty constructor received arguments".into(),
+                        ));
+                    }
+                    engine.heap().alloc_empty()
+                })?;
+            }
+            "Cons" => {
+                engine.export_native(ctor.to_string(), scheme, 2, |engine, _, args| {
+                    let [head, tail] = args else {
+                        return Err(EngineError::Internal(
+                            "Cons constructor received wrong arity".into(),
+                        ));
+                    };
+                    engine.heap().alloc_cons(head.clone(), tail.clone())
+                })?;
+            }
+            _ => {}
+        }
+    }
 
     let mut option_adt = engine.adt_decl("Option", &["t"]);
     let t_name = Symbol::intern("t");
@@ -767,16 +776,16 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
         |_: &State, a: DateTime<Utc>, b: DateTime<Utc>| Ok(a != b),
     )?;
 
-    // Array equality must respect `Eq a`. We can't express the loop without a
+    // List equality must respect `Eq a`. We can't express the loop without a
     // primitive, but we *can* express the element comparison: the primitive
     // calls `(==)` on each pair.
     {
         let bool_ty = Type::builtin(BuiltinTypeId::Bool);
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(Type::array(a), Type::fun(Type::array(a), &bool_ty))
+            Type::fun(Type::list(a), Type::fun(Type::list(a), &bool_ty))
         );
         engine.export_native_scheduler(
-            "prim_array_eq",
+            "prim_list_eq",
             scheme.clone(),
             2,
             |engine, call_type, args| {
@@ -785,10 +794,10 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
                     expected: lhs_ty.to_string(),
                     got: rhs_ty.to_string(),
                 })?;
-                let array_ty = lhs_ty.apply(&subst);
-                let elem_ty = array_elem_type(&array_ty)?;
-                let xs = expect_array(engine.heap(), &args[0])?;
-                let ys = expect_array(engine.heap(), &args[1])?;
+                let list_ty = lhs_ty.apply(&subst);
+                let elem_ty = list_elem_type(&list_ty)?;
+                let xs = engine.heap().list_items(args[0])?;
+                let ys = engine.heap().list_items(args[1])?;
                 Ok(SchedulerNativeResult::Task(NativeTask::ArrayEq(
                     NativeArrayEq {
                         elem_type: elem_ty,
@@ -803,16 +812,16 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
             },
         )?;
 
-        engine.export_native_scheduler("prim_array_ne", scheme, 2, |engine, call_type, args| {
+        engine.export_native_scheduler("prim_list_ne", scheme, 2, |engine, call_type, args| {
             let (lhs_ty, rhs_ty) = binary_arg_types(&call_type)?;
             let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
                 expected: lhs_ty.to_string(),
                 got: rhs_ty.to_string(),
             })?;
-            let array_ty = lhs_ty.apply(&subst);
-            let elem_ty = array_elem_type(&array_ty)?;
-            let xs = expect_array(engine.heap(), &args[0])?;
-            let ys = expect_array(engine.heap(), &args[1])?;
+            let list_ty = lhs_ty.apply(&subst);
+            let elem_ty = list_elem_type(&list_ty)?;
+            let xs = engine.heap().list_items(args[0])?;
+            let ys = engine.heap().list_items(args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::ArrayEq(
                 NativeArrayEq {
                     elem_type: elem_ty,
@@ -1361,43 +1370,6 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
 fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
-    // List/Array conversion helpers.
-    {
-        let list_to_array_scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(Type::list(a), Type::array(a))
-        );
-        engine.export_native(
-            "prim_array_from_list",
-            list_to_array_scheme.clone(),
-            1,
-            |engine, _, args| {
-                let values = args[0].as_list()?;
-                engine.heap().alloc_array(values)
-            },
-        )?;
-        engine.export_native("to_array", list_to_array_scheme, 1, |engine, _, args| {
-            let values = args[0].as_list()?;
-            engine.heap().alloc_array(values)
-        })?;
-
-        let array_to_list_scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(Type::array(a), Type::list(a))
-        );
-        engine.export_native(
-            "prim_list_from_array",
-            array_to_list_scheme.clone(),
-            1,
-            |engine, _, args| {
-                let values = args[0].as_array()?;
-                list_from_handles(engine.heap(), values)
-            },
-        )?;
-        engine.export_native("to_list", array_to_list_scheme, 1, |engine, _, args| {
-            let values = args[0].as_array()?;
-            list_from_handles(engine.heap(), values)
-        })?;
-    }
-
     // Dict mapping and traversal helpers (used by `std.json`).
     {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
@@ -1551,7 +1523,7 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 },
                 Cell::Adt(tag, args) if tag == &tags.array => match args.as_slice() {
                     [arg] => {
-                        let xs = heap.get(arg).ok()?.cell_as_array().ok()?;
+                        let xs = list_to_vec(heap, heap.get(arg).ok()?).ok()?;
                         let mut out = Vec::with_capacity(xs.len());
                         for x in &xs {
                             let x_value = heap.get(x).ok()?;
@@ -1650,8 +1622,8 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                         let value = to_json_value(x, tags, heap)?;
                         out.push(value);
                     }
-                    let array = heap.alloc_array(out)?;
-                    heap.alloc_adt(tags.array.clone(), vec![array])
+                    let list = heap.alloc_list(out)?;
+                    heap.alloc_adt(tags.array.clone(), vec![list])
                 }
                 serde_json::Value::Object(obj) => {
                     let mut out = BTreeMap::new();
@@ -1705,7 +1677,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let list_ty = arg_tys[1].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(engine.heap(), &args[1])?;
+            let values = expect_list_items(engine.heap(), args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::SequenceMap(
                 NativeSequenceMap {
                     func: args[0],
@@ -1718,43 +1690,6 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     remaining: 0,
                 },
             )))
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
-            Type::fun(
-                Type::fun(a, b),
-                Type::fun(Type::array(a), Type::array(b)),
-            )
-        );
-        engine.export_native_scheduler("prim_map", scheme, 2, |engine, call_type, args| {
-            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-            let func_ty = arg_tys[0].clone();
-            let array_ty = arg_tys[1].clone();
-            let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(engine.heap(), &args[1])?;
-            Ok(SchedulerNativeResult::Task(NativeTask::SequenceMap(
-                NativeSequenceMap {
-                    func: args[0],
-                    func_type: func_ty,
-                    elem_type: elem_ty,
-                    values,
-                    shape: NativeSequenceShape::Array,
-                    children: Vec::new(),
-                    output: Vec::new(),
-                    remaining: 0,
-                },
-            )))
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(a, Type::array(a))
-        );
-        engine.export_native("prim_array_singleton", scheme, 1, |engine, _, args| {
-            engine.heap().alloc_array(vec![args[0].clone()])
         })?;
     }
 
@@ -1837,42 +1772,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(engine.heap(), &args[2])?;
-            Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                func: args[0],
-                func_type: func_ty,
-                acc_type: acc_ty,
-                elem_type: elem_ty,
-                values,
-                acc: args[1],
-                order: NativeFoldOrder::Left,
-                state: NativeFoldState::Enter,
-                next_index: 0,
-                step: None,
-            })))
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
-            Type::fun(
-                Type::fun(b, Type::fun(a, b)),
-                Type::fun(b, Type::fun(Type::array(a), b)),
-            )
-        );
-        engine.export_native_scheduler("prim_foldl", scheme, 3, |engine, call_type, args| {
-            let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
-            let func_ty = arg_tys[0].clone();
-            let acc_ty = arg_tys[1].clone();
-            let array_ty = arg_tys[2].clone();
-            if acc_ty != res_ty {
-                return Err(EngineError::NativeType {
-                    expected: acc_ty.to_string(),
-                    got: res_ty.to_string(),
-                });
-            }
-            let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(engine.heap(), &args[2])?;
+            let values = expect_list_items(engine.heap(), args[2])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1907,7 +1807,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values = option_value(engine.heap(), &args[2])?.into_iter().collect();
+            let values =
+                ListItems::Pointers(option_value(engine.heap(), &args[2])?.into_iter().collect());
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1942,44 +1843,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = list_elem_type(&list_ty)?;
-            let mut values = expect_list(engine.heap(), &args[2])?;
-            values.reverse();
-            Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                func: args[0],
-                func_type: func_ty,
-                acc_type: acc_ty,
-                elem_type: elem_ty,
-                values,
-                acc: args[1],
-                order: NativeFoldOrder::Right,
-                state: NativeFoldState::Enter,
-                next_index: 0,
-                step: None,
-            })))
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
-            Type::fun(
-                Type::fun(a, Type::fun(b, b)),
-                Type::fun(b, Type::fun(Type::array(a), b)),
-            )
-        );
-        engine.export_native_scheduler("prim_foldr", scheme, 3, |engine, call_type, args| {
-            let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
-            let func_ty = arg_tys[0].clone();
-            let acc_ty = arg_tys[1].clone();
-            let array_ty = arg_tys[2].clone();
-            if acc_ty != res_ty {
-                return Err(EngineError::NativeType {
-                    expected: acc_ty.to_string(),
-                    got: res_ty.to_string(),
-                });
-            }
-            let elem_ty = array_elem_type(&array_ty)?;
-            let mut values = expect_array(engine.heap(), &args[2])?;
-            values.reverse();
+            let values = expect_list_items(engine.heap(), args[2])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -2014,7 +1878,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values = option_value(engine.heap(), &args[2])?.into_iter().collect();
+            let values =
+                ListItems::Pointers(option_value(engine.heap(), &args[2])?.into_iter().collect());
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -2049,42 +1914,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(engine.heap(), &args[2])?;
-            Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                func: args[0],
-                func_type: func_ty,
-                acc_type: acc_ty,
-                elem_type: elem_ty,
-                values,
-                acc: args[1],
-                order: NativeFoldOrder::Left,
-                state: NativeFoldState::Enter,
-                next_index: 0,
-                step: None,
-            })))
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
-            Type::fun(
-                Type::fun(b, Type::fun(a, b)),
-                Type::fun(b, Type::fun(Type::array(a), b)),
-            )
-        );
-        engine.export_native_scheduler("prim_fold", scheme, 3, |engine, call_type, args| {
-            let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
-            let func_ty = arg_tys[0].clone();
-            let acc_ty = arg_tys[1].clone();
-            let array_ty = arg_tys[2].clone();
-            if acc_ty != res_ty {
-                return Err(EngineError::NativeType {
-                    expected: acc_ty.to_string(),
-                    got: res_ty.to_string(),
-                });
-            }
-            let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(engine.heap(), &args[2])?;
+            let values = expect_list_items(engine.heap(), args[2])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -2119,7 +1949,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values = option_value(engine.heap(), &args[2])?.into_iter().collect();
+            let values =
+                ListItems::Pointers(option_value(engine.heap(), &args[2])?.into_iter().collect());
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -2147,7 +1978,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let list_ty = arg_tys[1].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(engine.heap(), &args[1])?;
+            let values = expect_list_items(engine.heap(), args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilter(
                 NativeSequenceFilter {
                     func: args[0],
@@ -2155,34 +1986,6 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     elem_type: elem_ty,
                     values,
                     shape: NativeSequenceShape::List,
-                    children: Vec::new(),
-                    keep: Vec::new(),
-                    remaining: 0,
-                },
-            )))
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(
-                Type::fun(a, Type::builtin(BuiltinTypeId::Bool)),
-                Type::fun(Type::array(a), Type::array(a)),
-            )
-        );
-        engine.export_native_scheduler("prim_filter", scheme, 2, |engine, call_type, args| {
-            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-            let func_ty = arg_tys[0].clone();
-            let array_ty = arg_tys[1].clone();
-            let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(engine.heap(), &args[1])?;
-            Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilter(
-                NativeSequenceFilter {
-                    func: args[0],
-                    func_type: func_ty,
-                    elem_type: elem_ty,
-                    values,
-                    shape: NativeSequenceShape::Array,
                     children: Vec::new(),
                     keep: Vec::new(),
                     remaining: 0,
@@ -2237,7 +2040,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = expect_list(engine.heap(), &args[1])?;
+                let values = expect_list_items(engine.heap(), args[1])?;
                 Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilterMap(
                     NativeSequenceFilterMap {
                         func: args[0],
@@ -2245,39 +2048,6 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                         elem_type: elem_ty,
                         values,
                         shape: NativeSequenceShape::List,
-                        children: Vec::new(),
-                        output: Vec::new(),
-                        remaining: 0,
-                    },
-                )))
-            },
-        )?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
-            Type::fun(
-                Type::fun(a, Type::option(b)),
-                Type::fun(Type::array(a), Type::array(b)),
-            )
-        );
-        engine.export_native_scheduler(
-            "prim_filter_map",
-            scheme,
-            2,
-            |engine, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let array_ty = arg_tys[1].clone();
-                let elem_ty = array_elem_type(&array_ty)?;
-                let values = expect_array(engine.heap(), &args[1])?;
-                Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilterMap(
-                    NativeSequenceFilterMap {
-                        func: args[0],
-                        func_type: func_ty,
-                        elem_type: elem_ty,
-                        values,
-                        shape: NativeSequenceShape::Array,
                         children: Vec::new(),
                         output: Vec::new(),
                         remaining: 0,
@@ -2333,7 +2103,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let list_ty = arg_tys[1].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(engine.heap(), &args[1])?;
+            let values = expect_list_items(engine.heap(), args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::SequenceFlatMap(
                 NativeSequenceFlatMap {
                     func: args[0],
@@ -2341,34 +2111,6 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     elem_type: elem_ty,
                     values,
                     shape: NativeSequenceShape::List,
-                    children: Vec::new(),
-                    output: Vec::new(),
-                    remaining: 0,
-                },
-            )))
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
-            Type::fun(
-                Type::fun(a, Type::array(b)),
-                Type::fun(Type::array(a), Type::array(b)),
-            )
-        );
-        engine.export_native_scheduler("prim_flat_map", scheme, 2, |engine, call_type, args| {
-            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-            let func_ty = arg_tys[0].clone();
-            let array_ty = arg_tys[1].clone();
-            let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(engine.heap(), &args[1])?;
-            Ok(SchedulerNativeResult::Task(NativeTask::SequenceFlatMap(
-                NativeSequenceFlatMap {
-                    func: args[0],
-                    func_type: func_ty,
-                    elem_type: elem_ty,
-                    values,
-                    shape: NativeSequenceShape::Array,
                     children: Vec::new(),
                     output: Vec::new(),
                     remaining: 0,
@@ -2448,7 +2190,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
             let func_ty = arg_tys[0].clone();
             let list_ty = arg_tys[1].clone();
-            if !expect_list(engine.heap(), &args[1])?.is_empty() {
+            if !expect_list_items(engine.heap(), args[1])?.is_empty() {
                 return Ok(SchedulerNativeResult::Ready(args[1]));
             }
             Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
@@ -2457,31 +2199,6 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     func_type: func_ty,
                     arg: args[1],
                     arg_type: list_ty,
-                },
-            )))
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(
-                Type::fun(Type::array(a), Type::array(a)),
-                Type::fun(Type::array(a), Type::array(a)),
-            )
-        );
-        engine.export_native_scheduler("prim_or_else", scheme, 2, |engine, call_type, args| {
-            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-            let func_ty = arg_tys[0].clone();
-            let array_ty = arg_tys[1].clone();
-            if !expect_array(engine.heap(), &args[1])?.is_empty() {
-                return Ok(SchedulerNativeResult::Ready(args[1]));
-            }
-            Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
-                NativeApplyUnary {
-                    func: args[0],
-                    func_type: func_ty,
-                    arg: args[1],
-                    arg_type: array_ty,
                 },
             )))
         })?;
@@ -2545,28 +2262,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(engine.heap(), &args[0])?;
-            Ok(SchedulerNativeResult::Task(NativeTask::Sum(NativeSum {
-                elem_type: elem_ty,
-                values,
-                acc: None,
-                plus: None,
-                state: NativeFoldState::Enter,
-                next_index: 0,
-                step: None,
-            })))
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(Type::array(a), a)
-        );
-        engine.export_native_scheduler("sum", scheme, 1, |engine, call_type, args| {
-            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
-            let array_ty = arg_tys[0].clone();
-            let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(engine.heap(), &args[0])?;
+            let values = expect_list_items(engine.heap(), args[0])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Sum(NativeSum {
                 elem_type: elem_ty,
                 values,
@@ -2587,7 +2283,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values = option_value(engine.heap(), &args[0])?.into_iter().collect();
+            let values =
+                ListItems::Pointers(option_value(engine.heap(), &args[0])?.into_iter().collect());
             Ok(SchedulerNativeResult::Task(NativeTask::Sum(NativeSum {
                 elem_type: elem_ty,
                 values,
@@ -2608,32 +2305,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(engine.heap(), &args[0])?;
-            if values.is_empty() {
-                return Err(EngineError::EmptySequence);
-            }
-            Ok(SchedulerNativeResult::Task(NativeTask::Mean(NativeMean {
-                len: values.len(),
-                elem_type: elem_ty,
-                values,
-                acc: None,
-                state: NativeMeanState::Enter,
-                next_index: 0,
-                step: None,
-                len_value: None,
-            })))
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(Type::array(a), a)
-        );
-        engine.export_native_scheduler("mean", scheme, 1, |engine, call_type, args| {
-            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
-            let array_ty = arg_tys[0].clone();
-            let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(engine.heap(), &args[0])?;
+            let values = expect_list_items(engine.heap(), args[0])?;
             if values.is_empty() {
                 return Err(EngineError::EmptySequence);
             }
@@ -2659,7 +2331,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let opt_ty = arg_tys[0].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
             let values = match option_value(engine.heap(), &args[0])? {
-                Some(value) => vec![value],
+                Some(value) => ListItems::Pointers(vec![value]),
                 None => return Err(EngineError::EmptySequence),
             };
             Ok(SchedulerNativeResult::Task(NativeTask::Mean(NativeMean {
@@ -2680,16 +2352,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(Type::list(a), Type::builtin(BuiltinTypeId::I32))
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
-            engine.heap().alloc_i32(args[0].as_list()?.len() as i32)
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(Type::array(a), Type::builtin(BuiltinTypeId::I32))
-        );
-        engine.export_native("count", scheme, 1, |engine, _, args| {
-            engine.heap().alloc_i32(args[0].as_array()?.len() as i32)
+            let values = expect_list_items(engine.heap(), args[0].pointer()?)?;
+            engine.heap().alloc_i32(values.len() as i32)
         })?;
     }
 
@@ -2714,23 +2378,14 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
             let n = args[0].as_i32()?;
             let n = as_nonneg_usize(n);
-            let xs = args[1].as_list()?;
-            list_from_handles(engine.heap(), xs.into_iter().take(n).collect())
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(
-                Type::builtin(BuiltinTypeId::I32),
-                Type::fun(Type::array(a), Type::array(a)),
-            )
-        );
-        engine.export_native("prim_take", scheme, 2, |engine, _, args| {
-            let n = args[0].as_i32()?;
-            let n = as_nonneg_usize(n);
-            let xs = args[1].as_array()?;
-            engine.heap().alloc_array(xs.into_iter().take(n).collect())
+            let values = expect_list_items(engine.heap(), args[1].pointer()?)?;
+            let len = values.len().min(n);
+            let pointers = (0..len)
+                .map(|index| values.get(engine.heap(), index))
+                .collect::<Result<Vec<_>, _>>()?;
+            engine
+                .heap()
+                .handle(engine.heap().alloc_ptr_list(pointers)?)
         })?;
     }
 
@@ -2744,23 +2399,26 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
             let n = args[0].as_i32()?;
             let n = as_nonneg_usize(n);
-            let xs = args[1].as_list()?;
-            list_from_handles(engine.heap(), xs.into_iter().skip(n).collect())
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(
-                Type::builtin(BuiltinTypeId::I32),
-                Type::fun(Type::array(a), Type::array(a)),
-            )
-        );
-        engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
-            let n = args[0].as_i32()?;
-            let n = as_nonneg_usize(n);
-            let xs = args[1].as_array()?;
-            engine.heap().alloc_array(xs.into_iter().skip(n).collect())
+            let values = expect_list_items(engine.heap(), args[1].pointer()?)?;
+            match values {
+                ListItems::Slice {
+                    elements,
+                    start,
+                    len,
+                } => {
+                    if n >= len {
+                        engine.heap().alloc_empty()
+                    } else {
+                        engine
+                            .heap()
+                            .handle(engine.heap().alloc_ptr_list_slice(start + n, elements)?)
+                    }
+                }
+                ListItems::Pointers(values) => {
+                    let values = values.into_iter().skip(n).collect();
+                    engine.heap().handle(engine.heap().alloc_ptr_list(values)?)
+                }
+            }
         })?;
     }
 
@@ -2771,32 +2429,14 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(a), a),
             )
         );
-        engine.export_native("prim_get", scheme, 2, |_, call_type, args| {
+        engine.export_native("prim_get", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
             let list_ty = arg_tys[1].clone();
             let _elem_ty = list_elem_type(&list_ty)?;
             let idx = args[0].as_i32()?;
-            let xs = args[1].as_list()?;
-            let idx = checked_index(Symbol::intern("prim_get"), idx, xs.len())?;
-            Ok(xs[idx].clone())
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(
-                Type::builtin(BuiltinTypeId::I32),
-                Type::fun(Type::array(a), a),
-            )
-        );
-        engine.export_native("prim_get", scheme, 2, |_, call_type, args| {
-            let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
-            let array_ty = arg_tys[1].clone();
-            let _elem_ty = array_elem_type(&array_ty)?;
-            let idx = args[0].as_i32()?;
-            let xs = args[1].as_array()?;
-            let idx = checked_index(Symbol::intern("prim_get"), idx, xs.len())?;
-            Ok(xs[idx].clone())
+            let values = expect_list_items(engine.heap(), args[1].pointer()?)?;
+            let idx = checked_index(Symbol::intern("prim_get"), idx, values.len())?;
+            engine.heap().handle(values.get(engine.heap(), idx)?)
         })?;
     }
 
@@ -2842,21 +2482,6 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::array(a),
-                Type::fun(Type::array(b), Type::array(Type::tuple(vec![a, b]))),
-            )
-        );
-        engine.export_native("prim_zip", scheme, 2, |engine, _, args| {
-            let xs = args[0].as_array()?;
-            let ys = args[1].as_array()?;
-            let zipped = zip_tuple2_handles(engine.heap(), xs, ys)?;
-            engine.heap().alloc_array(zipped)
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
-            Type::fun(
                 Type::list(Type::tuple(vec![a, b])),
                 Type::tuple(vec![Type::list(a), Type::list(b)]),
             )
@@ -2871,22 +2496,6 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
-            Type::fun(
-                Type::array(Type::tuple(vec![a, b])),
-                Type::tuple(vec![Type::array(a), Type::array(b)]),
-            )
-        );
-        engine.export_native("prim_unzip", scheme, 1, |engine, _, args| {
-            let pairs = args[0].as_array()?;
-            let (left, right) = unzip_tuple2_handles(pairs)?;
-            let left = engine.heap().alloc_array(left)?;
-            let right = engine.heap().alloc_array(right)?;
-            engine.heap().alloc_tuple(vec![left, right])
-        })?;
-    }
-
-    {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::list(a), a)
         );
@@ -2895,25 +2504,6 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
             let values = args[0].as_list()?;
-            extremum_handle_by_type(
-                engine.heap(),
-                "min",
-                &elem_ty,
-                values,
-                std::cmp::Ordering::Less,
-            )
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(Type::array(a), a)
-        );
-        engine.export_native("min", scheme, 1, |engine, call_type, args| {
-            let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
-            let array_ty = arg_tys[0].clone();
-            let elem_ty = array_elem_type(&array_ty)?;
-            let values = args[0].as_array()?;
             extremum_handle_by_type(
                 engine.heap(),
                 "min",
@@ -2948,25 +2538,6 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
             let values = args[0].as_list()?;
-            extremum_handle_by_type(
-                engine.heap(),
-                "max",
-                &elem_ty,
-                values,
-                std::cmp::Ordering::Greater,
-            )
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(Type::array(a), a)
-        );
-        engine.export_native("max", scheme, 1, |engine, call_type, args| {
-            let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
-            let array_ty = arg_tys[0].clone();
-            let elem_ty = array_elem_type(&array_ty)?;
-            let values = args[0].as_array()?;
             extremum_handle_by_type(
                 engine.heap(),
                 "max",

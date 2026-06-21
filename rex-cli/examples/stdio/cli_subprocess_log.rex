@@ -14,7 +14,7 @@ import std.process;
 
 let p = process.spawn (process.SpawnOptions {
   cmd = "sh",
-  args = to_array ["-c", "printf hi"]
+  args = ["-c", "printf hi"]
 }) in
 let _ = process.wait p in
 let out = process.stdout p in

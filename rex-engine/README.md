@@ -102,13 +102,11 @@ For explicit control, use:
 - **Equality**: `==`, `!=`
 - **Ordering**: `<`, `<=`, `>`, `>=`
 - **Booleans**: `&&`, `||`
-- **Collection combinators** (List/Array/Option/Result): `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `bind`, `ap`, `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`, `or_else`
+- **Collection combinators** (List/Option/Result): `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `bind`, `ap`, `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`, `or_else`
 - **Option/Result helpers**: `is_some`, `is_none`, `is_ok`, `is_err`
 
-List literals are evaluated to the `Empty`/`Cons` ADT constructors and inspect as `Value::Adt`.
-Arrays are host-native array values that inspect as `Value::Array` when injected from Rust (for
-example by passing `Vec<T>` to `export_value`) and participate in the same collection combinators
-via type classes.
+Rust `Vec<T>` values convert to Rex `List T`. Runtime lists may inspect as linked
+`Value::Cons`/`Value::Empty` values or as vector-backed `Value::ListSlice` values.
 
 ## Type Defaults
 

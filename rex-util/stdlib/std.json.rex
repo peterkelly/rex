@@ -11,7 +11,7 @@ pub type Value
     | Bool bool
     | String string
     | Number f64
-    | Array (Array Value)
+    | Array (List Value)
     | Object (Dict Value);
 
 pub type DecodeError = DecodeError { message: string };
@@ -311,7 +311,7 @@ instance<a,e> DecodeJson (Result a e) <= DecodeJson a, DecodeJson e where {
 	}
 instance<a> EncodeJson (List a) <= EncodeJson a where {
     encode_json = \xs ->
-        Array (prim_array_from_list (map (\x -> to_json x) xs));
+        Array (map (\x -> to_json x) xs);
 }
 instance<a> DecodeJson (List a) <= DecodeJson a where {
 	    decode_json = \v ->
@@ -329,31 +329,6 @@ instance<a> DecodeJson (List a) <= DecodeJson a where {
 	                    foldr step (Ok []) xs;
 	            case _ -> Err (expected "array" v);
             };
-	}
-instance<a> EncodeJson (Array a) <= EncodeJson a where {
-    encode_json = \xs -> Array (map (\x -> to_json x) xs);
-}
-instance<a> DecodeJson (Array a) <= DecodeJson a where {
-	    decode_json = \v ->
-	        match v with {
-	            case Array xs ->
-	                let step = \x acc -> match acc with {
-	                        case Err e -> Err e;
-	                        case Ok out ->
-	                            match (from_json x) with {
-	                                case Err e2 -> Err e2;
-	                                case Ok y -> Ok (Cons y out);
-                                };
-                        }
-	                in
-	                    (
-                        match (foldr step (Ok []) xs) with {
-                            case Err e -> Err e;
-                            case Ok ys -> Ok (prim_array_from_list ys);
-                        }
-                    );
-            case _ -> Err (expected "array" v);
-        };
 	}
 instance<a> EncodeJson (Dict a) <= EncodeJson a where {
     encode_json = \d -> Object (prim_dict_map (\x -> to_json x) d);

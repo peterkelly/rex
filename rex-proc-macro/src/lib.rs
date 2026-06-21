@@ -550,7 +550,7 @@ fn rex_type_expr(
                     };
                     let inner = rex_type_expr(inner, adt_params)?;
                     Ok(quote! {
-                        ::rex::typesystem::Type::array(#inner)
+                        ::rex::typesystem::Type::list(#inner)
                     })
                 }
                 "HashMap" | "BTreeMap" => {
@@ -651,11 +651,11 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                     };
                     let inner_encode = into_value_expr(quote!(item), inner)?;
                     Ok(quote! {{
-                        let mut out = ::std::vec::Vec::new();
+                        let mut out: ::std::vec::Vec<::rex::engine::Handle> = ::std::vec::Vec::new();
                         for item in #expr.into_iter() {
                             out.push(#inner_encode);
                         }
-                        heap.alloc_array(out)?
+                        heap.alloc_list(out)?
                     }})
                 }
                 "HashMap" | "BTreeMap" => {
@@ -771,20 +771,13 @@ fn from_value_expr(
                     let inner_decode = from_value_expr(quote!(item), inner, name_expr.clone())?;
                     Ok(quote! {{
                         let __rex_handle = #handle_expr;
-                        match __rex_handle.value()? {
-                            ::rex::engine::Value::Array(items) => {
-                                let mut out = ::std::vec::Vec::with_capacity(items.len());
-                                for item in &items {
-                                    let v = #inner_decode?;
-                                    out.push(v);
-                                }
-                                Ok(out)
-                            }
-                            _ => Err(::rex::engine::EngineError::NativeType {
-                                expected: "array".into(),
-                                got: __rex_handle.type_name()?.into(),
-                            }),
+                        let items = __rex_handle.as_list()?;
+                        let mut out = ::std::vec::Vec::with_capacity(items.len());
+                        for item in &items {
+                            let v = #inner_decode?;
+                            out.push(v);
                         }
+                        Ok::<#type_path, ::rex::engine::EngineError>(out)
                     }})
                 }
                 "HashMap" | "BTreeMap" => {

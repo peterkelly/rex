@@ -1516,61 +1516,6 @@ fn code_actions_offer_function_value_mismatch_fixes() {
 }
 
 #[test]
-fn code_actions_offer_to_list_fix_for_array_list_mismatch() {
-    let text = r#"
-let
-  arr = prim_array_from_list [1, 2, 3],
-  xs : List i32 = arr
-in
-  xs
-"#;
-    let uri = in_memory_doc_uri();
-    let diagnostics = diagnostics_from_text(&uri, text);
-    let mismatch = diagnostics
-        .into_iter()
-        .find(|diag| is_array_list_unification_error(&diag.message))
-        .expect("expected array/list mismatch diagnostic");
-    let arr_range = Range {
-        start: Position {
-            line: 3,
-            character: 18,
-        },
-        end: Position {
-            line: 3,
-            character: 21,
-        },
-    };
-    let actions = code_actions_for_source(&uri, text, arr_range, std::slice::from_ref(&mismatch));
-    let code_actions: Vec<CodeAction> = actions
-        .into_iter()
-        .filter_map(|action| match action {
-            CodeActionOrCommand::CodeAction(action) => Some(action),
-            CodeActionOrCommand::Command(_) => None,
-        })
-        .collect();
-    let fix = code_actions
-        .iter()
-        .find(|action| action.title == "Convert expression to list with `to_list`")
-        .expect("expected to_list quick fix");
-
-    let edit = fix
-        .edit
-        .as_ref()
-        .expect("to_list quick fix must include edit");
-    let changes = edit
-        .changes
-        .as_ref()
-        .expect("to_list quick fix must include changes");
-    let edits = changes
-        .get(&uri)
-        .expect("to_list quick fix must target current document");
-    assert!(
-        edits.iter().any(|e| e.new_text.contains("to_list (arr)")),
-        "edits: {edits:#?}"
-    );
-}
-
-#[test]
 fn code_actions_offer_default_disambiguation_with_is_for_record_update() {
     let text = r#"
 type A = A { x: i32, y: i32 };

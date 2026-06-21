@@ -1057,7 +1057,7 @@ async fn gc_every_alloc_handles_broad_evaluator_paths() {
             pairs = zip nums mapped,
             unzipped = unzip pairs,
             lefts = match unzipped with { case (left, right) -> left; },
-            arr = to_array mapped,
+            arr = mapped,
             arr2 = map (\x -> x * 2) arr,
             flat: List i32 = bind (\x -> [x, x + 1]) [1, 2, 3],
             point: Point = Point { x = 10, y = 5 },
@@ -1109,15 +1109,14 @@ async fn gc_every_alloc_handles_host_callbacks_and_conversions() {
     let result = eval_i32(
         r#"
         let
-            arr = pack (bump_async 4) (triple 3),
-            xs = to_list arr,
+            xs = pack (bump_async 4) (triple 3),
             ys = map (\x -> x + 1) xs,
             zipped = zip xs ys,
             folded = foldl (\acc pair ->
                 match pair with { case (left, right) -> acc + left + right; }
             ) 0 zipped
         in
-            folded + sum arr
+            folded + sum xs
         "#,
         builder,
     )
@@ -1130,11 +1129,11 @@ async fn gc_every_alloc_handles_native_returning_nested_data() {
     let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     let i32_ty = Type::builtin(BuiltinTypeId::I32);
-    let row_ty = Type::tuple(vec![i32_ty.clone(), Type::array(i32_ty.clone())]);
+    let row_ty = Type::tuple(vec![i32_ty.clone(), Type::list(i32_ty.clone())]);
     let scheme = Scheme::new(
         vec![],
         vec![],
-        Type::fun(i32_ty.clone(), Type::array(row_ty)),
+        Type::fun(i32_ty.clone(), Type::list(row_ty)),
     );
     module
         .export_native("make_nested", scheme, 1, |engine, _, args| {
@@ -1157,7 +1156,7 @@ async fn gc_every_alloc_handles_native_returning_nested_data() {
                     let _ = engine.heap().alloc_tuple(vec![item.clone(), label])?;
                     values.push(item);
                 }
-                let array = engine.heap().alloc_array(values)?;
+                let array = engine.heap().alloc_list(values)?;
                 let base = engine.heap().alloc_i32(i)?;
                 let row = engine.heap().alloc_tuple(vec![base, array])?;
                 for noise in 0..4 {
@@ -1167,7 +1166,7 @@ async fn gc_every_alloc_handles_native_returning_nested_data() {
                 rows.push(row);
             }
 
-            engine.heap().alloc_array(rows)
+            engine.heap().alloc_list(rows)
         })
         .unwrap();
     builder.inject_module(module).unwrap();
@@ -1254,9 +1253,9 @@ async fn gc_every_alloc_handles_typeclass_cached_values() {
 async fn gc_every_alloc_handles_async_native_handles_across_awaits() {
     let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
-    let array_i32 = Type::array(Type::builtin(BuiltinTypeId::I32));
+    let list_i32 = Type::list(Type::builtin(BuiltinTypeId::I32));
     let i32_ty = Type::builtin(BuiltinTypeId::I32);
-    let scheme = Scheme::new(vec![], vec![], Type::fun(array_i32, i32_ty));
+    let scheme = Scheme::new(vec![], vec![], Type::fun(list_i32, i32_ty));
     module
         .export_native_async(
             "async_sum_after_alloc",
@@ -1271,10 +1270,10 @@ async fn gc_every_alloc_handles_async_native_handles_across_awaits() {
                     for value in 0..64 {
                         let value = engine.heap().alloc_i32(value)?;
                         let tuple = engine.heap().alloc_tuple(vec![value.clone(), value])?;
-                        let _ = engine.heap().alloc_array(vec![tuple])?;
+                        let _ = engine.heap().alloc_list(vec![tuple])?;
                     }
                     let mut sum = 0;
-                    for value in retained.as_array()? {
+                    for value in retained.as_list()? {
                         sum += i32::from_rex(&value)?;
                     }
                     engine.heap().alloc_i32(sum)
@@ -1288,9 +1287,9 @@ async fn gc_every_alloc_handles_async_native_handles_across_awaits() {
 
     let result = eval_i32(
         r#"
-        async_sum_after_alloc (to_array [
+        async_sum_after_alloc [
             1, 2, 3, 4, 5, 6, 7, 8
-        ])
+        ]
         "#,
         builder,
     )

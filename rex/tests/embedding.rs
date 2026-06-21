@@ -476,7 +476,7 @@ async fn derived_rex_default_record_update_can_override_fields() {
 
     let (_heap, value, ty) = common::eval_source(
         builder,
-        r#"let e: Entity1 = { default with { name = "sample", tags = Some (to_array ["x", "y"]), numbers = to_array [7, 11] } } in e"#,
+        r#"let e: Entity1 = { default with { name = "sample", tags = Some ["x", "y"], numbers = [7, 11] } } in e"#,
     )
     .await
     .unwrap();
@@ -549,7 +549,7 @@ async fn entity2_constructor_result_can_be_record_updated() {
             (Entity2 "sample" [7, 11])
             with {
                 description = Some "desc",
-                tags = Some (to_array ["x", "y"])
+                tags = Some ["x", "y"]
             }
         }"#,
     )

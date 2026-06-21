@@ -321,11 +321,10 @@ Common built-in types include:
 
 Functions are right-associative: `a -> b -> c` means `a -> (b -> c)`.
 
-### Tuples, Lists, Arrays, Dicts
+### Tuples, Lists, Dicts
 
 - Tuple type: `(a, b, c)`
 - List type: `List a` (prelude)
-- Array type: `Array a` (prelude)
 - Dict type: `Dict a` (prelude; key type is a symbol/field label at runtime)
 - Promise type: `Promise a` (built-in unary type constructor; embedders may attach their own operations)
 
@@ -523,9 +522,9 @@ Rex ships a prelude with common abstractions and instances. Highlights:
 - numeric hierarchy: `AdditiveMonoid`, `Semiring`, `Ring`, `Field`, …
 - `Default` (`default`) for common scalar and container types
 - `Eq` / `Ord`
-- `Functor` / `Applicative` / `Monad` for `List`, `Array`, `Option`, `Result`
+- `Functor` / `Applicative` / `Monad` for `List`, `Option`, `Result`
 - `Foldable`, `Filterable`, `Sequence`
-- multi-parameter `Indexable t a` with instances for lists/arrays
+- multi-parameter `Indexable t a` with instances for lists and tuples
 
 Example: `Functor` across different container types:
 

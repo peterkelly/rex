@@ -47,7 +47,6 @@ const typeDocs = new Map([
   ['f64', '64-bit float.'],
   ['List', 'List type constructor.'],
   ['Dict', 'Dictionary type constructor.'],
-  ['Array', 'Array type constructor.'],
   ['Option', 'Optional type constructor.'],
   ['Result', 'Result type constructor.']
 ]);

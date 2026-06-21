@@ -8,7 +8,8 @@ use crate::modules::stdio;
 pub use crate::modules::stdio::{io_result_type_arg, run_io_handle};
 use rex::{
     Rex,
-    engine::{Builder, EngineError, Module},
+    engine::{Builder, EngineError, Handle, Module},
+    typesystem::{BuiltinTypeId, Scheme, Type},
 };
 use tokio::process::Command;
 use tokio::sync::OnceCell;
@@ -86,6 +87,30 @@ fn inject_cli_test_natives(builder: &mut Builder) -> Result<(), EngineError> {
         println!("is_even {} end", n);
         Ok::<bool, EngineError>(n % 2 == 0)
     })?;
+
+    let u64_ty = Type::builtin(BuiltinTypeId::U64);
+    let string_list_ty = Type::list(Type::builtin(BuiltinTypeId::String));
+    let scheme = Scheme::new(
+        vec![],
+        vec![],
+        Type::fun(&u64_ty, Type::fun(&u64_ty, &string_list_ty)),
+    );
+    module.export_native("make_hybrid_list", scheme, 2, |engine, _scheme, args| {
+        let ncons = args[0].as_u64()?;
+        let nflat = args[1].as_u64()?;
+        let mut flat_contents: Vec<Handle> = Vec::new();
+        for i in 0..nflat {
+            flat_contents.push(engine.heap().alloc_string(format!("F-{}", ncons + i))?);
+        }
+        let data = engine.heap().alloc_data(flat_contents)?;
+        let mut tail = engine.heap().alloc_list_slice(0, data)?;
+        for i in 0..ncons {
+            let head = engine.heap().alloc_string(format!("C-{}", ncons + i))?;
+            tail = engine.heap().alloc_cons(head, tail)?;
+        }
+        Ok(tail)
+    })?;
+
     builder.inject_module(module)
 }
 
@@ -211,7 +236,7 @@ mod tests {
 
             let p = process.spawn (process.SpawnOptions {
                 cmd = "sh",
-                args = to_array ["-c", "printf hi"]
+                args = ["-c", "printf hi"]
             }) in
               io.write_all 1 (process.stdout p)
         "#;
@@ -350,7 +375,7 @@ mod tests {
 
             let p = process.spawn (process.SpawnOptions {
                 cmd = "sh",
-                args = to_array ["-c", "printf hi"]
+                args = ["-c", "printf hi"]
             }) in
               (process.wait p, process.stdout p, process.stderr p)
         "#;
@@ -370,8 +395,8 @@ mod tests {
             ty,
             Type::tuple(vec![
                 Type::builtin(BuiltinTypeId::I32),
-                Type::array(Type::builtin(BuiltinTypeId::U8)),
-                Type::array(Type::builtin(BuiltinTypeId::U8)),
+                Type::list(Type::builtin(BuiltinTypeId::U8)),
+                Type::list(Type::builtin(BuiltinTypeId::U8)),
             ])
         );
         let Value::Tuple(xs) = value.value().unwrap() else {
@@ -379,15 +404,11 @@ mod tests {
         };
         assert_eq!(xs[0].to_rust::<i32>().unwrap(), 0);
 
-        let Value::Array(out) = xs[1].value().unwrap() else {
-            panic!("expected stdout bytes");
-        };
+        let out = xs[1].as_list().unwrap();
         let got: Vec<u8> = out.iter().map(|v| v.to_rust::<u8>().unwrap()).collect();
         assert_eq!(got, b"hi");
 
-        let Value::Array(err) = xs[2].value().unwrap() else {
-            panic!("expected stderr bytes");
-        };
+        let err = xs[2].as_list().unwrap();
         assert!(err.is_empty());
     }
 }

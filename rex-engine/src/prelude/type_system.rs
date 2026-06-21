@@ -74,27 +74,27 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
         }
     }
 
-    // Array equality is implemented by the runtime (it needs to iterate without
+    // List equality is implemented by the runtime (it needs to iterate without
     // allocating) but it must respect `Eq a`, so the primitive calls `(==)` on
     // elements rather than doing structural `Value` equality.
     {
         let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
-        let array_a = Type::app(Type::builtin(BuiltinTypeId::Array), a.clone());
+        let list_a = Type::app(Type::builtin(BuiltinTypeId::List), a.clone());
         ts.add_value(
-            "prim_array_eq",
+            "prim_list_eq",
             Scheme::new(
                 vec![a_tv.clone()],
                 vec![],
-                Type::fun(array_a.clone(), Type::fun(array_a.clone(), bool_ty.clone())),
+                Type::fun(list_a.clone(), Type::fun(list_a.clone(), bool_ty.clone())),
             ),
         );
         ts.add_value(
-            "prim_array_ne",
+            "prim_list_ne",
             Scheme::new(
                 vec![a_tv],
                 vec![],
-                Type::fun(array_a.clone(), Type::fun(array_a, bool_ty.clone())),
+                Type::fun(list_a.clone(), Type::fun(list_a, bool_ty.clone())),
             ),
         );
     }
@@ -339,12 +339,10 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // The user-facing API is the class methods (`map`, `foldl`, `zip`, `get`, ...).
     {
         let list_con = Type::builtin(BuiltinTypeId::List);
-        let array_con = Type::builtin(BuiltinTypeId::Array);
         let option_con = Type::builtin(BuiltinTypeId::Option);
         let result_con = Type::builtin(BuiltinTypeId::Result);
 
         let list_of = |t: Type| Type::app(list_con.clone(), t);
-        let array_of = |t: Type| Type::app(array_con.clone(), t);
         let option_of = |t: Type| Type::app(option_con.clone(), t);
         let result_of = |ok: Type, err: Type| Type::app(Type::app(result_con.clone(), err), ok);
 
@@ -372,17 +370,6 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                     vec![],
                     Type::fun(
                         Type::fun(a.clone(), b.clone()),
-                        Type::fun(array_of(a.clone()), array_of(b.clone())),
-                    ),
-                ),
-            );
-            ts.add_overload(
-                "prim_map",
-                Scheme::new(
-                    vec![a_tv.clone(), b_tv.clone()],
-                    vec![],
-                    Type::fun(
-                        Type::fun(a.clone(), b.clone()),
                         Type::fun(option_of(a.clone()), option_of(b.clone())),
                     ),
                 ),
@@ -399,16 +386,6 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                         Type::fun(result_of(a.clone(), e.clone()), result_of(b.clone(), e)),
                     ),
                 ),
-            );
-        }
-
-        // prim_array_singleton
-        {
-            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
-            let a = Type::var(a_tv.clone());
-            ts.add_value(
-                "prim_array_singleton",
-                Scheme::new(vec![a_tv], vec![], Type::fun(a.clone(), array_of(a))),
             );
         }
 
@@ -457,7 +434,6 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             };
 
             add_for(list_of(a.clone()));
-            add_for(array_of(a.clone()));
             add_for(option_of(a.clone()));
         }
 
@@ -489,13 +465,12 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             };
 
             add_for(list_of(a.clone()), list_of(b.clone()));
-            add_for(array_of(a.clone()), array_of(b.clone()));
             add_for(option_of(a.clone()), option_of(b.clone()));
         }
 
         // prim_flat_map
         {
-            // List / Array / Option
+            // List / Option
             let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
             let b_tv = ts.supply.fresh(Some(Symbol::intern("b")));
             let a = Type::var(a_tv.clone());
@@ -512,7 +487,6 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             };
 
             add_for(list_of(a.clone()), list_of(b.clone()));
-            add_for(array_of(a.clone()), array_of(b.clone()));
             add_for(option_of(a.clone()), option_of(b.clone()));
 
             // Result e
@@ -547,7 +521,6 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             };
 
             add_for(list_of(a.clone()));
-            add_for(array_of(a.clone()));
             add_for(option_of(a.clone()));
 
             let e_tv = ts.supply.fresh(Some(Symbol::intern("e")));
@@ -577,7 +550,6 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                 ts.add_overload("prim_skip", scheme);
             };
             add_for(list_of(a.clone()));
-            add_for(array_of(a.clone()));
         }
 
         // prim_zip / prim_unzip
@@ -611,7 +583,6 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                 list_of(b.clone()),
                 list_of(pair.clone()),
             );
-            add_for(array_of(a.clone()), array_of(b.clone()), array_of(pair));
         }
 
         // prim_get
@@ -627,14 +598,6 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                     Type::fun(idx.clone(), Type::fun(list_of(a.clone()), a.clone())),
                 ),
             );
-            ts.add_overload(
-                "prim_get",
-                Scheme::new(
-                    vec![a_tv.clone()],
-                    vec![],
-                    Type::fun(idx.clone(), Type::fun(array_of(a.clone()), a.clone())),
-                ),
-            );
             for size in 2..=32 {
                 ts.add_overload(
                     "prim_get",
@@ -648,42 +611,6 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                     ),
                 );
             }
-        }
-
-        // List/Array conversion helpers.
-        {
-            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
-            let a = Type::var(a_tv.clone());
-            let list_a = list_of(a.clone());
-            let array_a = array_of(a.clone());
-            ts.add_value(
-                "prim_array_from_list",
-                Scheme::new(
-                    vec![a_tv.clone()],
-                    vec![],
-                    Type::fun(list_a.clone(), array_a.clone()),
-                ),
-            );
-            ts.add_value(
-                "prim_list_from_array",
-                Scheme::new(
-                    vec![a_tv.clone()],
-                    vec![],
-                    Type::fun(array_a.clone(), list_a.clone()),
-                ),
-            );
-            ts.add_value(
-                "to_array",
-                Scheme::new(
-                    vec![a_tv.clone()],
-                    vec![],
-                    Type::fun(list_a.clone(), array_a.clone()),
-                ),
-            );
-            ts.add_value(
-                "to_list",
-                Scheme::new(vec![a_tv], vec![], Type::fun(array_a, list_a)),
-            );
         }
 
         // prim_dict_map : (a -> b) -> Dict a -> Dict b
