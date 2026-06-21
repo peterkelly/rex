@@ -823,11 +823,11 @@ pub(super) fn inject_standard_prelude(
         => Type::fun(Type::app(f, a), a)
     );
     ts.add_value("mean", mean_scheme);
-    let count_scheme = scheme!(&mut ts.supply; forall [f, a]
+    let length_scheme = scheme!(&mut ts.supply; forall [f, a]
         where [Foldable(f)]
         => Type::fun(Type::app(f, a), Type::builtin(BuiltinTypeId::I32))
     );
-    ts.add_value("count", count_scheme);
+    ts.add_value("length", length_scheme);
     let first_scheme = scheme!(&mut ts.supply; forall [a]
         => Type::fun(
             Type::builtin(BuiltinTypeId::I32),

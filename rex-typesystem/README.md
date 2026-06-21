@@ -75,7 +75,7 @@ environment, the engine registers these classes and operators before running inf
 ### Collection Combinators
 
 - `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `bind`, `ap`, `or_else`
-- `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`
+- `sum`, `mean`, `length`, `take`, `skip`, `zip`, `unzip`, `min`, `max`
 These are type-class constrained and work for `List`, `Option`, and `Result` where applicable.
 
 ### Option/Result Helpers

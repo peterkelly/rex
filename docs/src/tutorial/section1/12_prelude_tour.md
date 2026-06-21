@@ -52,7 +52,7 @@ For tuples, use numeric projection like `.0` and `.1` instead of `get`.
 
 The prelude also exposes some generic helpers (type-class-based):
 
-- `sum`, `mean`, `count`, `min`, `max`
+- `sum`, `mean`, `length`, `min`, `max`
 - `first`, `last`, `slice` for strict list range extraction
 - `is_some`, `is_none` (for `Option`)
 - `is_ok`, `is_err` (for `Result`)

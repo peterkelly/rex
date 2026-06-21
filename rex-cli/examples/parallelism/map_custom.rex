@@ -15,4 +15,4 @@ fn custom_map<a, b> (f : a -> b) -> items : List a -> List b =
 let
     items = make_list 0 10
 in
-    count (custom_map do_something items)
+    length (custom_map do_something items)

@@ -86,6 +86,14 @@ fn prelude_injects_functions() {
     let ts = standard_type_system().unwrap();
     let minus = ts.env.lookup(&Symbol::intern("-")).expect("minus in env");
     let div = ts.env.lookup(&Symbol::intern("/")).expect("div in env");
+    assert!(
+        ts.env.lookup(&Symbol::intern("length")).is_some(),
+        "length in env"
+    );
+    assert!(
+        ts.env.lookup(&Symbol::intern("count")).is_none(),
+        "count was renamed to length"
+    );
     assert_eq!(minus.len(), 1);
     assert_eq!(div.len(), 1);
     let minus = &minus[0];

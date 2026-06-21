@@ -14,4 +14,4 @@ let
         in
             [y, y + 100]
 in
-    count (bind expand items)
+    length (bind expand items)

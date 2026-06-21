@@ -10,6 +10,6 @@ let
     items = make_list 0 10
 in
     (
-        count (map do_something items),
-        count (filter is_even items),
+        length (map do_something items),
+        length (filter is_even items),
     )

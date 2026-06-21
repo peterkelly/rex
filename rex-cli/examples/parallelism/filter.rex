@@ -9,4 +9,4 @@ fn make_list (from: i32) -> (to: i32) -> List i32 =
 let
     items = make_list 0 10
 in
-    count (filter is_even items)
+    length (filter is_even items)

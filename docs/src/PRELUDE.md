@@ -256,13 +256,13 @@ Methods:
 | `None` | `(Option 't)` | The empty `Option` constructor. |
 | `Ok` | `('t -> (Result 't 'e))` | Construct a successful `Result`. |
 | `Some` | `('t -> (Option 't))` | Construct a present `Option` value. |
-| `count` | `Foldable 'f => (('f 'a) ->`<br>`i32)` | Count elements in a foldable container. |
 | `first` | `(i32 -> ((List 'a) -> (List`<br>`'a)))` | Return the first `n` list elements; errors if `n` is out of range. |
 | `is_err` | `((Result 't 'e) -> bool)` | Check whether a `Result` is `Err`. |
 | `is_none` | `((Option 'a) -> bool)` | Check whether an `Option` is `None`. |
 | `is_ok` | `((Result 't 'e) -> bool)` | Check whether a `Result` is `Ok`. |
 | `is_some` | `((Option 'a) -> bool)` | Check whether an `Option` is `Some`. |
 | `last` | `(i32 -> ((List 'a) -> (List`<br>`'a)))` | Return the last `n` list elements; errors if `n` is out of range. |
+| `length` | `Foldable 'f => (('f 'a) ->`<br>`i32)` | Return the number of elements in a foldable container. |
 | `max` | `Foldable 'f, Ord 'a => (('f`<br>`'a) -> 'a)` | Maximum element by ordering. |
 | `mean` | `Foldable 'f, Field 'a => (('f`<br>`'a) -> 'a)` | Arithmetic mean over numeric foldables. |
 | `min` | `Foldable 'f, Ord 'a => (('f`<br>`'a) -> 'a)` | Minimum element by ordering. |

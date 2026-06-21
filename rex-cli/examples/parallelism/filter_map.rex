@@ -14,4 +14,4 @@ let
         else
             None
 in
-    count (filter_map keep_and_process items)
+    length (filter_map keep_and_process items)

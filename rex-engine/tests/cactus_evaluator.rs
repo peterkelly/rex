@@ -641,7 +641,7 @@ async fn sibling_map_and_filter_fan_out_their_callbacks() {
             let
                 xs = [1, 2]
             in
-                (sum (map gate xs), count (filter gate_even xs))
+                (sum (map gate xs), length (filter gate_even xs))
             "#,
             builder,
         )

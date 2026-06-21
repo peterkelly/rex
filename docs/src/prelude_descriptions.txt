@@ -63,7 +63,7 @@ fn:Some	Construct a present `Option` value.
 fn:ap	Apply wrapped functions to wrapped values.
 fn:bind	Monadic flat-map/sequencing operation.
 fn:cmp	Three-way comparison returning negative/zero/positive `i32`.
-fn:count	Count elements in a foldable container.
+fn:length	Return the number of elements in a foldable container.
 fn:default	Canonical default value for a type. For `Result a e`, this requires `Default a`.
 fn:filter	Keep elements that satisfy a predicate.
 fn:filter_map	Map and drop missing results in one pass.

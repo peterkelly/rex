@@ -2402,7 +2402,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::list(a), Type::builtin(BuiltinTypeId::I32))
         );
-        engine.export_native("count", scheme, 1, |engine, _, args| {
+        engine.export_native("length", scheme, 1, |engine, _, args| {
             let values = expect_list_items(engine.heap(), args[0].pointer()?)?;
             engine.heap().alloc_i32(values.len() as i32)
         })?;
@@ -2412,7 +2412,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::option(a), Type::builtin(BuiltinTypeId::I32))
         );
-        engine.export_native("count", scheme, 1, |engine, _, args| {
+        engine.export_native("length", scheme, 1, |engine, _, args| {
             engine
                 .heap()
                 .alloc_i32(option_handle(&args[0])?.is_some() as i32)

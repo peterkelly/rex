@@ -6,4 +6,4 @@ Run:
 
 import std.io;
 
-map count (io.read_all 0)
+map length (io.read_all 0)

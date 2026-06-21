@@ -19,6 +19,6 @@ let p = process.spawn (process.SpawnOptions {
 let _ = process.wait p in
 let out = process.stdout p in
 bind (\_ ->
-  bind (\msg -> pure (msg, count out))
+  bind (\msg -> pure (msg, length out))
        (io.info (show out)))
      (io.debug "spawning...")

@@ -1364,7 +1364,7 @@ async fn eval_result_filter_pipeline() {
             zs = filter_map (\x -> match x with { case Ok v -> Some v; case Err _ -> None; }) ys,
             total = sum zs
         in
-            (count ys, total)
+            (length ys, total)
         "#,
     );
     let builder = Builder::with_prelude(()).unwrap();
