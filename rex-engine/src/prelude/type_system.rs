@@ -828,6 +828,30 @@ pub(super) fn inject_standard_prelude(
         => Type::fun(Type::app(f, a), Type::builtin(BuiltinTypeId::I32))
     );
     ts.add_value("count", count_scheme);
+    let first_scheme = scheme!(&mut ts.supply; forall [a]
+        => Type::fun(
+            Type::builtin(BuiltinTypeId::I32),
+            Type::fun(Type::list(a), Type::list(a)),
+        )
+    );
+    ts.add_value("first", first_scheme);
+    let last_scheme = scheme!(&mut ts.supply; forall [a]
+        => Type::fun(
+            Type::builtin(BuiltinTypeId::I32),
+            Type::fun(Type::list(a), Type::list(a)),
+        )
+    );
+    ts.add_value("last", last_scheme);
+    let slice_scheme = scheme!(&mut ts.supply; forall [a]
+        => Type::fun(
+            Type::builtin(BuiltinTypeId::I32),
+            Type::fun(
+                Type::builtin(BuiltinTypeId::I32),
+                Type::fun(Type::list(a), Type::list(a)),
+            ),
+        )
+    );
+    ts.add_value("slice", slice_scheme);
     let min_scheme = scheme!(&mut ts.supply; forall [f, a]
         where [Foldable(f), Ord(a)]
         => Type::fun(Type::app(f, a), a)

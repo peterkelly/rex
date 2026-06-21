@@ -525,6 +525,7 @@ Rex ships a prelude with common abstractions and instances. Highlights:
 - `Functor` / `Applicative` / `Monad` for `List`, `Option`, `Result`
 - `Foldable`, `Filterable`, `Sequence`
 - multi-parameter `Indexable t a` with instances for lists and tuples
+- list range helpers: `first n xs`, `last n xs`, and half-open `slice n m xs`
 
 Example: `Functor` across different container types:
 

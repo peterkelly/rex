@@ -103,7 +103,7 @@ fn inject_cli_test_natives(builder: &mut Builder) -> Result<(), EngineError> {
             flat_contents.push(engine.heap().alloc_string(format!("F-{}", ncons + i))?);
         }
         let data = engine.heap().alloc_data(flat_contents)?;
-        let mut tail = engine.heap().alloc_list_slice(0, data)?;
+        let mut tail = engine.heap().alloc_list_slice(0, nflat as usize, data)?;
         for i in 0..ncons {
             let head = engine.heap().alloc_string(format!("C-{}", ncons + i))?;
             tail = engine.heap().alloc_cons(head, tail)?;

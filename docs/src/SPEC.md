@@ -382,6 +382,20 @@ Here `f` is polymorphic over the `Functor` dictionary; at each call site, the en
 `map` using the argument type (`List i32` vs `Option i32`) and dispatches to the corresponding
 instance method body.
 
+### Prelude List Ranges
+
+The prelude exposes strict list range helpers:
+
+- `first n xs` returns the first `n` visible elements of `xs`.
+- `last n xs` returns the last `n` visible elements of `xs`.
+- `slice n m xs` returns the half-open visible range `n..m`.
+
+For all three helpers, list positions are counted from the Rex-level list view, independent of
+whether the runtime stores the list as cons cells, a vector-backed slice, or cons cells followed by
+a vector-backed slice. Bounds are checked at runtime. Negative bounds, bounds greater than the list
+length, and `slice n m xs` with `m < n` are runtime errors. `n == length`/`m == length` is valid for
+empty suffixes and half-open slice endpoints.
+
 ### Instance-Method Checking (Static)
 
 Inside an instance method body, only the instance context is available as “given” constraints:

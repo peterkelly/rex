@@ -266,16 +266,16 @@ async fn methods_can_call_other_methods() {
     assert_eval(
         r#"
         class PairOps p where {
-            first : p -> i32;
+            pair_first : p -> i32;
             second : p -> i32;
             sum_pair : p -> i32;
         }
         type Pair = Pair { a: i32, b: i32 };
 
         instance PairOps Pair where {
-            first = \p -> p.a;
+            pair_first = \p -> p.a;
             second = \p -> p.b;
-            sum_pair = \p -> (first p) + (second p);
+            sum_pair = \p -> (pair_first p) + (second p);
         }
         sum_pair (Pair { a = 19, b = 23 })
         "#,

@@ -102,7 +102,7 @@ For explicit control, use:
 - **Equality**: `==`, `!=`
 - **Ordering**: `<`, `<=`, `>`, `>=`
 - **Booleans**: `&&`, `||`
-- **Collection combinators** (List/Option/Result): `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `bind`, `ap`, `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`, `or_else`
+- **Collection combinators** (List/Option/Result): `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `bind`, `ap`, `sum`, `mean`, `count`, `first`, `last`, `slice`, `take`, `skip`, `zip`, `unzip`, `min`, `max`, `or_else`
 - **Option/Result helpers**: `is_some`, `is_none`, `is_ok`, `is_err`
 
 Rust `Vec<T>` values convert to Rex `List T`. Runtime lists may inspect as linked

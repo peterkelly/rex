@@ -172,7 +172,11 @@ fn cell_type(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Type, EngineError> {
             let elem_ty = pointer_type(head)?;
             Ok(Type::app(Type::builtin(BuiltinTypeId::List), elem_ty))
         }
-        Cell::ListSlice { index, elements } => {
+        Cell::ListSlice {
+            start,
+            end,
+            elements,
+        } => {
             let elements_cell = heap.get(elements)?;
             let Cell::Data(elems) = elements_cell else {
                 return Err(EngineError::NativeType {
@@ -180,11 +184,17 @@ fn cell_type(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Type, EngineError> {
                     got: elements_cell.cell_type_name().into(),
                 });
             };
+            if *start > *end || *end > elems.len() {
+                return Err(EngineError::NativeType {
+                    expected: format!("valid list slice within len {}", elems.len()),
+                    got: format!("start {start}, end {end}"),
+                });
+            }
             let first = elems
-                .get(*index)
+                .get(*start)
                 .ok_or_else(|| EngineError::UnknownType(Symbol::intern("list")))?;
             let elem_ty = pointer_type(first)?;
-            for elem in elems.iter().skip(*index + 1) {
+            for elem in elems.iter().take(*end).skip(*start + 1) {
                 let ty = pointer_type(elem)?;
                 if ty != elem_ty {
                     return Err(EngineError::NativeType {

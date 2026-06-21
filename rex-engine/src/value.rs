@@ -184,7 +184,11 @@ pub enum Value {
     Tuple(Vec<Handle>),
     Empty,
     Cons(Handle, Handle),
-    ListSlice { index: usize, elements: Handle },
+    ListSlice {
+        start: usize,
+        end: usize,
+        elements: Handle,
+    },
     Data(Vec<Handle>),
     Dict(BTreeMap<Symbol, Handle>),
     Adt(Symbol, Vec<Handle>),
@@ -493,7 +497,11 @@ enum ValueSeed {
     Tuple(Vec<Pointer>),
     Empty,
     Cons(Pointer, Pointer),
-    ListSlice { index: usize, elements: Pointer },
+    ListSlice {
+        start: usize,
+        end: usize,
+        elements: Pointer,
+    },
     Data(Vec<Pointer>),
     Dict(BTreeMap<Symbol, Pointer>),
     Adt(Symbol, Vec<Pointer>),
@@ -524,8 +532,13 @@ impl ValueSeed {
             Cell::Tuple(values) => Self::Tuple(values.clone()),
             Cell::Empty => Self::Empty,
             Cell::Cons(head, tail) => Self::Cons(*head, *tail),
-            Cell::ListSlice { index, elements } => Self::ListSlice {
-                index: *index,
+            Cell::ListSlice {
+                start,
+                end,
+                elements,
+            } => Self::ListSlice {
+                start: *start,
+                end: *end,
                 elements: *elements,
             },
             Cell::Data(values) => Self::Data(values.clone()),
@@ -898,9 +911,14 @@ impl Heap {
         handle_from_pointer(self, self.alloc_ptr_data(pointers)?)
     }
 
-    pub fn alloc_list_slice(&self, index: usize, elements: Handle) -> Result<Handle, EngineError> {
+    pub fn alloc_list_slice(
+        &self,
+        start: usize,
+        end: usize,
+        elements: Handle,
+    ) -> Result<Handle, EngineError> {
         let elements = elements.pointer_for_heap(self)?;
-        handle_from_pointer(self, self.alloc_ptr_list_slice(index, elements)?)
+        handle_from_pointer(self, self.alloc_ptr_list_slice(start, end, elements)?)
     }
 
     pub fn alloc_dict(&self, values: BTreeMap<Symbol, Handle>) -> Result<Handle, EngineError> {
@@ -935,7 +953,11 @@ impl Heap {
             Value::Tuple(values) => self.alloc_tuple(values),
             Value::Empty => self.alloc_empty(),
             Value::Cons(head, tail) => self.alloc_cons(head, tail),
-            Value::ListSlice { index, elements } => self.alloc_list_slice(index, elements),
+            Value::ListSlice {
+                start,
+                end,
+                elements,
+            } => self.alloc_list_slice(start, end, elements),
             Value::Data(values) => self.alloc_data(values),
             Value::Dict(values) => self.alloc_dict(values),
             Value::Adt(name, args) => self.alloc_adt(name, args),
@@ -988,8 +1010,13 @@ impl Heap {
             ValueSeed::Tuple(values) => Value::Tuple(self.handles_from_pointers(&values)?),
             ValueSeed::Empty => Value::Empty,
             ValueSeed::Cons(head, tail) => Value::Cons(self.handle(head)?, self.handle(tail)?),
-            ValueSeed::ListSlice { index, elements } => Value::ListSlice {
-                index,
+            ValueSeed::ListSlice {
+                start,
+                end,
+                elements,
+            } => Value::ListSlice {
+                start,
+                end,
                 elements: self.handle(elements)?,
             },
             ValueSeed::Data(values) => Value::Data(self.handles_from_pointers(&values)?),
@@ -1117,12 +1144,22 @@ impl Heap {
             match cell {
                 Cell::Empty => Ok(None),
                 Cell::Cons(head, tail) => Ok(Some((*head, None, *tail))),
-                Cell::ListSlice { index, elements } => {
+                Cell::ListSlice {
+                    start,
+                    end,
+                    elements,
+                } => {
                     let values = heap.get(elements)?.cell_as_data()?;
-                    let Some(head) = values.get(*index).copied() else {
+                    validate_list_slice_bounds(values.len(), *start, *end)?;
+                    if start >= end {
                         return Ok(None);
+                    }
+                    let Some(head) = values.get(*start).copied() else {
+                        return Err(EngineError::Internal(
+                            "list slice head index out of bounds".into(),
+                        ));
                     };
-                    Ok(Some((head, Some(index + 1), *elements)))
+                    Ok(Some((head, Some((start + 1, *end)), *elements)))
                 }
                 _ => Err(EngineError::NativeType {
                     expected: "list".into(),
@@ -1134,13 +1171,13 @@ impl Heap {
             return Ok(None);
         };
         let tail = match tail_index {
-            Some(index) => {
+            Some((start, end)) => {
                 // Creating the tail slice can trigger copying GC. The head was
                 // read from the backing Data cell before that allocation, so it
                 // must be temporarily rooted or the returned pointer may refer
                 // to the pre-collection location.
                 let head_root = self.temp_roots(vec![head])?;
-                let tail = self.alloc_ptr_list_slice(index, elements)?;
+                let tail = self.alloc_ptr_list_slice(start, end, elements)?;
                 let head = head_root.get(0)?;
                 return Ok(Some((head, tail)));
             }
@@ -1263,10 +1300,20 @@ impl Heap {
 
     pub(crate) fn alloc_ptr_list_slice(
         &self,
-        index: usize,
+        start: usize,
+        end: usize,
         elements: Pointer,
     ) -> Result<Pointer, EngineError> {
-        self.alloc_cell(Cell::ListSlice { index, elements })
+        let len = self.with_access(|heap| Ok(heap.get(&elements)?.cell_as_data()?.len()))?;
+        validate_list_slice_bounds(len, start, end)?;
+        if start == end {
+            return self.alloc_ptr_empty();
+        }
+        self.alloc_cell(Cell::ListSlice {
+            start,
+            end,
+            elements,
+        })
     }
 
     pub(crate) fn alloc_ptr_list(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
@@ -1274,12 +1321,13 @@ impl Heap {
             return self.alloc_ptr_empty();
         }
         let roots = self.temp_roots(values)?;
+        let len = roots.len();
         let values = (0..roots.len())
             .map(|index| roots.get(index))
             .collect::<Result<Vec<_>, _>>()?;
         let data = self.alloc_ptr_data(values)?;
         let data = self.temp_roots(vec![data])?;
-        self.alloc_ptr_list_slice(0, data.get(0)?)
+        self.alloc_ptr_list_slice(0, len, data.get(0)?)
     }
 
     pub(crate) fn alloc_ptr_closure(
@@ -1644,7 +1692,11 @@ pub(crate) enum Cell {
     Tuple(Vec<Pointer>),
     Empty,
     Cons(Pointer, Pointer),
-    ListSlice { index: usize, elements: Pointer },
+    ListSlice {
+        start: usize,
+        end: usize,
+        elements: Pointer,
+    },
     Data(Vec<Pointer>),
     Dict(BTreeMap<Symbol, Pointer>),
     Adt(Symbol, Vec<Pointer>),
@@ -2403,13 +2455,40 @@ pub(crate) fn pointer_eq(heap: &Heap, lhs: &Pointer, rhs: &Pointer) -> Result<bo
     })
 }
 
+fn usize_to_i32_saturating(index: usize) -> i32 {
+    i32::try_from(index).unwrap_or(i32::MAX)
+}
+
+fn validate_list_slice_bounds(
+    data_len: usize,
+    start: usize,
+    end: usize,
+) -> Result<(), EngineError> {
+    if start > end {
+        return Err(EngineError::Custom(format!(
+            "invalid list slice range: start {start} is greater than end {end}"
+        )));
+    }
+    if end > data_len {
+        return Err(EngineError::IndexOutOfBounds {
+            name: Symbol::intern("ListSlice"),
+            index: usize_to_i32_saturating(end),
+            len: data_len,
+        });
+    }
+    Ok(())
+}
+
 pub(crate) fn list_to_vec(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Vec<Pointer>, EngineError> {
-    if let Cell::ListSlice { index, elements } = cell {
+    if let Cell::ListSlice {
+        start,
+        end,
+        elements,
+    } = cell
+    {
         let values = heap.get(elements)?.cell_as_data()?;
-        if *index >= values.len() {
-            return Ok(Vec::new());
-        }
-        return Ok(values[*index..].to_vec());
+        validate_list_slice_bounds(values.len(), *start, *end)?;
+        return Ok(values[*start..*end].to_vec());
     }
 
     let mut out = Vec::new();
@@ -2421,11 +2500,14 @@ pub(crate) fn list_to_vec(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Vec<Poin
                 out.push(*head);
                 cursor = heap.get(tail)?;
             }
-            Cell::ListSlice { index, elements } => {
+            Cell::ListSlice {
+                start,
+                end,
+                elements,
+            } => {
                 let values = heap.get(elements)?.cell_as_data()?;
-                if *index < values.len() {
-                    out.extend_from_slice(&values[*index..]);
-                }
+                validate_list_slice_bounds(values.len(), *start, *end)?;
+                out.extend_from_slice(&values[*start..*end]);
                 return Ok(out);
             }
             _ => {
@@ -2443,7 +2525,7 @@ pub(crate) enum ListItems {
     Slice {
         elements: Pointer,
         start: usize,
-        len: usize,
+        end: usize,
     },
     Pointers(Vec<Pointer>),
 }
@@ -2455,7 +2537,7 @@ impl ListItems {
 
     pub(crate) fn len(&self) -> usize {
         match self {
-            Self::Slice { len, .. } => *len,
+            Self::Slice { start, end, .. } => end - start,
             Self::Pointers(values) => values.len(),
         }
     }
@@ -2465,16 +2547,25 @@ impl ListItems {
             Self::Slice {
                 elements,
                 start,
-                len,
+                end,
             } => {
-                if index >= *len {
+                let len = end - start;
+                if index >= len {
                     return Err(EngineError::Internal(
                         "list item index out of bounds".into(),
                     ));
                 }
+                let backing_index = start.checked_add(index).ok_or_else(|| {
+                    EngineError::Internal("list slice backing index overflow".into())
+                })?;
+                if backing_index >= *end {
+                    return Err(EngineError::Internal(
+                        "list slice backing index out of bounds".into(),
+                    ));
+                }
                 heap.with_access(|heap| {
                     let values = heap.get(elements)?.cell_as_data()?;
-                    values.get(start + index).copied().ok_or_else(|| {
+                    values.get(backing_index).copied().ok_or_else(|| {
                         EngineError::Internal("list slice backing index out of bounds".into())
                     })
                 })
@@ -2519,13 +2610,17 @@ fn list_items_from_pointer(
     let cell = heap.get(&pointer)?;
     match cell {
         Cell::Empty => Ok(ListItems::Pointers(Vec::new())),
-        Cell::ListSlice { index, elements } => {
+        Cell::ListSlice {
+            start,
+            end,
+            elements,
+        } => {
             let values = heap.get(elements)?.cell_as_data()?;
-            let len = values.len().saturating_sub(*index);
+            validate_list_slice_bounds(values.len(), *start, *end)?;
             Ok(ListItems::Slice {
                 elements: *elements,
-                start: *index,
-                len,
+                start: *start,
+                end: *end,
             })
         }
         Cell::Cons(..) => Ok(ListItems::Pointers(list_to_vec(heap, cell)?)),
@@ -3270,12 +3365,16 @@ mod tests {
         let list = heap
             .alloc_ptr_list(values.clone())
             .expect("list allocation should succeed");
-        let Cell::ListSlice { index, elements } =
-            heap.clone_cell(&list).expect("list cell should exist")
+        let Cell::ListSlice {
+            start,
+            end,
+            elements,
+        } = heap.clone_cell(&list).expect("list cell should exist")
         else {
             panic!("expected vector-backed list slice");
         };
-        assert_eq!(index, 0);
+        assert_eq!(start, 0);
+        assert_eq!(end, values.len());
         let Cell::Data(backing) = heap.clone_cell(&elements).expect("data cell should exist")
         else {
             panic!("expected list data backing");
@@ -3305,12 +3404,16 @@ mod tests {
             .list_head_tail(&list)
             .expect("head/tail should decode")
             .expect("list should be non-empty");
-        let Cell::ListSlice { index, elements } =
-            heap.clone_cell(&tail).expect("tail cell should exist")
+        let Cell::ListSlice {
+            start,
+            end,
+            elements,
+        } = heap.clone_cell(&tail).expect("tail cell should exist")
         else {
             panic!("expected tail list slice");
         };
-        assert_eq!(index, 1);
+        assert_eq!(start, 1);
+        assert_eq!(end, 3);
         assert_eq!(elements, original_data);
     }
 

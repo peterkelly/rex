@@ -173,8 +173,12 @@ fn list_values(value: &Value) -> Vec<Handle> {
             out.extend(list_values(&tail.value().unwrap()));
             out
         }
-        Value::ListSlice { index, elements } => match elements.value().unwrap() {
-            Value::Data(values) => values.into_iter().skip(*index).collect(),
+        Value::ListSlice {
+            start,
+            end,
+            elements,
+        } => match elements.value().unwrap() {
+            Value::Data(values) => values[*start..*end].to_vec(),
             _ => panic!("expected list backing data"),
         },
         _ => panic!("expected list value"),

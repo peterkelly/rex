@@ -257,13 +257,16 @@ Methods:
 | `Ok` | `('t -> (Result 't 'e))` | Construct a successful `Result`. |
 | `Some` | `('t -> (Option 't))` | Construct a present `Option` value. |
 | `count` | `Foldable 'f => (('f 'a) ->`<br>`i32)` | Count elements in a foldable container. |
+| `first` | `(i32 -> ((List 'a) -> (List`<br>`'a)))` | Return the first `n` list elements; errors if `n` is out of range. |
 | `is_err` | `((Result 't 'e) -> bool)` | Check whether a `Result` is `Err`. |
 | `is_none` | `((Option 'a) -> bool)` | Check whether an `Option` is `None`. |
 | `is_ok` | `((Result 't 'e) -> bool)` | Check whether a `Result` is `Ok`. |
 | `is_some` | `((Option 'a) -> bool)` | Check whether an `Option` is `Some`. |
+| `last` | `(i32 -> ((List 'a) -> (List`<br>`'a)))` | Return the last `n` list elements; errors if `n` is out of range. |
 | `max` | `Foldable 'f, Ord 'a => (('f`<br>`'a) -> 'a)` | Maximum element by ordering. |
 | `mean` | `Foldable 'f, Field 'a => (('f`<br>`'a) -> 'a)` | Arithmetic mean over numeric foldables. |
 | `min` | `Foldable 'f, Ord 'a => (('f`<br>`'a) -> 'a)` | Minimum element by ordering. |
+| `slice` | `(i32 -> (i32 -> ((List 'a) ->`<br>`(List 'a))))` | Return elements in the half-open range `n..m`; errors if either bound is out of range or `m < n`. |
 | `sum` | `Foldable 'f, AdditiveMonoid 'a`<br>`=> (('f 'a) -> 'a)` | Sum all elements in a foldable container. |
 | `unwrap` | `((Option 'a) -> 'a)`<br><br>`((Result 't 'e) -> 't)` | Extract the inner value from `Some`/`Ok`, or raise an error for `None`/`Err`. |
 | `||` | `(bool -> (bool -> bool))` | Boolean disjunction. |

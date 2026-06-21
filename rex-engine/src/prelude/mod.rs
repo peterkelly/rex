@@ -492,6 +492,57 @@ fn checked_index(name: Symbol, index: i32, len: usize) -> Result<usize, EngineEr
     Ok(index_usize)
 }
 
+fn checked_endpoint(name: Symbol, index: i32, len: usize) -> Result<usize, EngineError> {
+    if index < 0 {
+        return Err(EngineError::IndexOutOfBounds { name, index, len });
+    }
+    let index_usize = index as usize;
+    if index_usize > len {
+        return Err(EngineError::IndexOutOfBounds { name, index, len });
+    }
+    Ok(index_usize)
+}
+
+fn list_range_from_items(
+    heap: &Heap,
+    items: ListItems,
+    start: usize,
+    end: usize,
+) -> Result<Handle, EngineError> {
+    if start > end || end > items.len() {
+        return Err(EngineError::Internal(format!(
+            "invalid list item range {start}..{end} for len {}",
+            items.len()
+        )));
+    }
+    if start == end {
+        return heap.alloc_empty();
+    }
+    match items {
+        ListItems::Slice {
+            elements,
+            start: base_start,
+            end: base_end,
+        } => {
+            let slice_start = base_start
+                .checked_add(start)
+                .ok_or_else(|| EngineError::Internal("list slice start overflow".into()))?;
+            let slice_end = base_start
+                .checked_add(end)
+                .ok_or_else(|| EngineError::Internal("list slice end overflow".into()))?;
+            if slice_end > base_end {
+                return Err(EngineError::Internal(
+                    "list slice range exceeds backing slice".into(),
+                ));
+            }
+            heap.handle(heap.alloc_ptr_list_slice(slice_start, slice_end, elements)?)
+        }
+        ListItems::Pointers(values) => {
+            heap.handle(heap.alloc_ptr_list(values[start..end].to_vec())?)
+        }
+    }
+}
+
 fn zip_tuple2_handles(
     heap: &Heap,
     xs: Vec<Handle>,
@@ -2375,17 +2426,69 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(a), Type::list(a)),
             )
         );
+        engine.export_native("first", scheme, 2, |engine, _, args| {
+            let n = args[0].as_i32()?;
+            let values = expect_list_items(engine.heap(), args[1].pointer()?)?;
+            let end = checked_endpoint(Symbol::intern("first"), n, values.len())?;
+            list_range_from_items(engine.heap(), values, 0, end)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::builtin(BuiltinTypeId::I32),
+                Type::fun(Type::list(a), Type::list(a)),
+            )
+        );
+        engine.export_native("last", scheme, 2, |engine, _, args| {
+            let n = args[0].as_i32()?;
+            let values = expect_list_items(engine.heap(), args[1].pointer()?)?;
+            let len = values.len();
+            let n = checked_endpoint(Symbol::intern("last"), n, len)?;
+            let start = len - n;
+            list_range_from_items(engine.heap(), values, start, len)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::builtin(BuiltinTypeId::I32),
+                Type::fun(
+                    Type::builtin(BuiltinTypeId::I32),
+                    Type::fun(Type::list(a), Type::list(a)),
+                ),
+            )
+        );
+        engine.export_native("slice", scheme, 3, |engine, _, args| {
+            let n = args[0].as_i32()?;
+            let m = args[1].as_i32()?;
+            let values = expect_list_items(engine.heap(), args[2].pointer()?)?;
+            let start = checked_endpoint(Symbol::intern("slice"), n, values.len())?;
+            let end = checked_endpoint(Symbol::intern("slice"), m, values.len())?;
+            if end < start {
+                return Err(EngineError::Custom(format!(
+                    "invalid slice range: end {m} is before start {n}"
+                )));
+            }
+            list_range_from_items(engine.heap(), values, start, end)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::builtin(BuiltinTypeId::I32),
+                Type::fun(Type::list(a), Type::list(a)),
+            )
+        );
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
             let n = args[0].as_i32()?;
             let n = as_nonneg_usize(n);
             let values = expect_list_items(engine.heap(), args[1].pointer()?)?;
-            let len = values.len().min(n);
-            let pointers = (0..len)
-                .map(|index| values.get(engine.heap(), index))
-                .collect::<Result<Vec<_>, _>>()?;
-            engine
-                .heap()
-                .handle(engine.heap().alloc_ptr_list(pointers)?)
+            let end = values.len().min(n);
+            list_range_from_items(engine.heap(), values, 0, end)
         })?;
     }
 
@@ -2400,25 +2503,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let n = args[0].as_i32()?;
             let n = as_nonneg_usize(n);
             let values = expect_list_items(engine.heap(), args[1].pointer()?)?;
-            match values {
-                ListItems::Slice {
-                    elements,
-                    start,
-                    len,
-                } => {
-                    if n >= len {
-                        engine.heap().alloc_empty()
-                    } else {
-                        engine
-                            .heap()
-                            .handle(engine.heap().alloc_ptr_list_slice(start + n, elements)?)
-                    }
-                }
-                ListItems::Pointers(values) => {
-                    let values = values.into_iter().skip(n).collect();
-                    engine.heap().handle(engine.heap().alloc_ptr_list(values)?)
-                }
-            }
+            let len = values.len();
+            let start = len.min(n);
+            list_range_from_items(engine.heap(), values, start, len)
         })?;
     }
 
