@@ -182,6 +182,10 @@ Examples:
 
 Negative literals only specialize to signed types. For example, `(-3 is u8)` is a type error.
 
+Rex can implicitly widen primitive integers when the target type is already known and the conversion
+is lossless. For example, an `i8` value can be passed to an `i32` parameter, but Rex will not guess a
+common type for `(1 is i8) + (2 is i32)`.
+
 ### Function Application
 
 Application is left-associative: `f x y` parses as `(f x) y`.

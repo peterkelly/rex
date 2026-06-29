@@ -446,6 +446,37 @@ let x: i16 = -3 in x
 Attempting to use a negative literal at an unsigned type is a type error (for example
 `let x: u8 = -3 in x`).
 
+## Implicit Integer Widening
+
+Rex inserts an implicit integer widening conversion only when the surrounding expression context
+already requires a concrete primitive integer type.
+
+- The source and target must both be primitive integer types.
+- The conversion must be lossless for every value of the source type.
+- The target type must already be known; Rex does not infer a common numeric type for unconstrained
+  mixed-width expressions.
+
+Allowed widening conversions are:
+
+- `i8 -> i16`, `i8 -> i32`, `i8 -> i64`
+- `i16 -> i32`, `i16 -> i64`
+- `i32 -> i64`
+- `u8 -> u16`, `u8 -> u32`, `u8 -> u64`, `u8 -> i16`, `u8 -> i32`, `u8 -> i64`
+- `u16 -> u32`, `u16 -> u64`, `u16 -> i32`, `u16 -> i64`
+- `u32 -> u64`, `u32 -> i64`
+
+Examples:
+
+```rex
+fn f : i32 -> i32 = \x -> x;
+fn g : i8 -> i8 = \x -> x;
+
+let x: i32 = (7 is i8) in (f (g 5), x)
+```
+
+Mixed operators remain homogeneous unless an enclosing context fixes the target type. For example,
+`(1 is i8) + (2 is i32)` is a type error.
+
 ## Float Literals
 
 Float literals are overloaded over primitive floating-point types.

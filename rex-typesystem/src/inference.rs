@@ -52,6 +52,109 @@ fn is_integral_primitive(typ: &Type) -> bool {
     )
 }
 
+const IMPLICIT_INT_WIDEN_PRIM: &str = "prim_widen_int";
+
+fn builtin_id(typ: &Type) -> Option<BuiltinTypeId> {
+    match typ.as_ref() {
+        TypeKind::Con(tc) => tc.builtin_id(),
+        _ => None,
+    }
+}
+
+fn lossless_integer_widening(src: BuiltinTypeId, dst: BuiltinTypeId) -> bool {
+    use BuiltinTypeId::*;
+    matches!(
+        (src, dst),
+        (I8, I16 | I32 | I64)
+            | (I16, I32 | I64)
+            | (I32, I64)
+            | (U8, U16 | U32 | U64 | I16 | I32 | I64)
+            | (U16, U32 | U64 | I32 | I64)
+            | (U32, U64 | I64)
+    )
+}
+
+fn implicit_integer_widening(src: &Type, dst: &Type) -> bool {
+    match (builtin_id(src), builtin_id(dst)) {
+        (Some(src), Some(dst)) => lossless_integer_widening(src, dst),
+        _ => false,
+    }
+}
+
+fn unify_or_implicit_widen(
+    unifier: &mut Unifier,
+    actual: &Type,
+    expected: &Type,
+) -> Result<Type, TypeError> {
+    let actual = unifier.apply_type(actual);
+    let expected = unifier.apply_type(expected);
+    if implicit_integer_widening(&actual, &expected) {
+        return Ok(expected);
+    }
+    unifier.unify(&actual, &expected)?;
+    Ok(unifier.apply_type(&expected))
+}
+
+fn implicit_widen_expr(src: Type, dst: Type, expr: TypedExpr) -> TypedExpr {
+    let widen_ty = Type::fun(src, dst.clone());
+    let widen = TypedExpr::new(
+        widen_ty,
+        TypedExprKind::Var {
+            name: Symbol::intern(IMPLICIT_INT_WIDEN_PRIM),
+            overloads: Vec::new(),
+        },
+    );
+    TypedExpr::new(dst, TypedExprKind::App(Arc::new(widen), Arc::new(expr)))
+}
+
+fn coerce_typed_to_expected(
+    unifier: &mut Unifier,
+    actual: &Type,
+    expected: &Type,
+    typed: TypedExpr,
+) -> Result<(Type, TypedExpr), TypeError> {
+    let actual = unifier.apply_type(actual);
+    let expected = unifier.apply_type(expected);
+    if implicit_integer_widening(&actual, &expected) {
+        let typed = implicit_widen_expr(actual, expected.clone(), typed);
+        return Ok((expected, typed));
+    }
+    unifier.unify(&actual, &expected)?;
+    Ok((unifier.apply_type(&expected), typed))
+}
+
+fn coerce_app_arg_from_func_type(
+    unifier: &mut Unifier,
+    func_ty: &Type,
+    arg_ty: Type,
+    typed_arg: TypedExpr,
+) -> (Type, TypedExpr) {
+    let arg_ty = unifier.apply_type(&arg_ty);
+    let Some(expected_arg) = app_arg_hint(unifier, func_ty) else {
+        return (arg_ty, typed_arg);
+    };
+    let expected_arg = unifier.apply_type(&expected_arg);
+    if implicit_integer_widening(&arg_ty, &expected_arg) {
+        let typed_arg = implicit_widen_expr(arg_ty, expected_arg.clone(), typed_arg);
+        (expected_arg, typed_arg)
+    } else {
+        (arg_ty, typed_arg)
+    }
+}
+
+fn coerce_app_arg_type_from_func_type(unifier: &mut Unifier, func_ty: &Type, arg_ty: Type) -> Type {
+    let arg_ty = unifier.apply_type(&arg_ty);
+    let Some(expected_arg) = app_arg_hint(unifier, func_ty) else {
+        return arg_ty;
+    };
+    let expected_arg = unifier.apply_type(&expected_arg);
+    if implicit_integer_widening(&arg_ty, &expected_arg) {
+        expected_arg
+    } else {
+        arg_ty
+    }
+}
+
 fn is_float_primitive(typ: &Type) -> bool {
     matches!(
         typ.as_ref(),
@@ -756,7 +859,7 @@ fn infer_app_arg_type(
                     })?
                     .clone();
                 let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, v.as_ref())?;
-                unifier.unify(&t1, &expected_ty)?;
+                unify_or_implicit_widen(unifier, &t1, &expected_ty)?;
                 preds.extend(p1);
                 seen.insert(k.clone());
             }
@@ -820,7 +923,8 @@ fn infer_app_arg_typed(
                     })?
                     .clone();
                 let (p1, t1, typed_v) = infer_expr(unifier, supply, env, adts, known, v.as_ref())?;
-                unifier.unify(&t1, &expected_ty)?;
+                let (_field_ty, typed_v) =
+                    coerce_typed_to_expected(unifier, &t1, &expected_ty, typed_v)?;
                 preds.extend(p1);
                 typed_kvs.insert(k.clone(), Arc::new(typed_v));
             }
@@ -918,6 +1022,8 @@ fn apply_typed_app_arg(
         Some(candidates) if candidates.len() == 1 => candidates[0].clone(),
         _ => Type::var(supply.fresh(Some(Symbol::intern("r")))),
     };
+    let (arg_ty, typed_arg) =
+        coerce_app_arg_from_func_type(unifier, &state.func_ty, arg_ty, typed_arg);
     unifier.unify(&state.func_ty, &Type::fun(arg_ty, res_ty.clone()))?;
     let result_ty = match state.overload_candidates.as_ref() {
         Some(candidates) if candidates.len() == 1 => unifier.apply_type(&candidates[0]),
@@ -1028,7 +1134,7 @@ fn infer_record_update_type_with_hint(
             typ: result_ty.to_string(),
         })?;
         let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, v.as_ref())?;
-        unifier.unify(&t1, expected_ty)?;
+        unify_or_implicit_widen(unifier, &t1, expected_ty)?;
         preds.extend(p1);
     }
     Ok((preds, result_ty))
@@ -1068,7 +1174,7 @@ fn infer_record_update_typed_with_hint(
             typ: result_ty.to_string(),
         })?;
         let (p1, t1, typed_v) = infer_expr(unifier, supply, env, adts, known, v.as_ref())?;
-        unifier.unify(&t1, expected_ty)?;
+        let (_field_ty, typed_v) = coerce_typed_to_expected(unifier, &t1, expected_ty, typed_v)?;
         preds.extend(p1);
         typed_updates.insert(k.clone(), Arc::new(typed_v));
     }
@@ -1238,6 +1344,7 @@ fn infer_expr_type_inner(
                     Some(candidates) if candidates.len() == 1 => candidates[0].clone(),
                     _ => Type::var(supply.fresh(Some(Symbol::intern("r")))),
                 };
+                let arg_ty = coerce_app_arg_type_from_func_type(unifier, &func_ty, arg_ty);
                 unifier.unify(&func_ty, &Type::fun(arg_ty, res_ty.clone()))?;
                 preds.extend(p_arg);
                 func_ty = match overload_candidates.as_ref() {
@@ -1277,7 +1384,7 @@ fn infer_expr_type_inner(
                     typ: result_ty.to_string(),
                 })?;
                 let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, v.as_ref())?;
-                unifier.unify(&t1, expected_ty)?;
+                unify_or_implicit_widen(unifier, &t1, expected_ty)?;
                 preds.extend(p1);
             }
             Ok((preds, result_ty))
@@ -1315,7 +1422,7 @@ fn infer_expr_type_inner(
                         _ => {
                             let (p1, t1) =
                                 infer_expr_type(unifier, supply, &env_def, adts, &known_cur, &d)?;
-                            unifier.unify(&t1, &ann_ty)?;
+                            let t1 = unify_or_implicit_widen(unifier, &t1, &ann_ty)?;
                             (p1, t1)
                         }
                     }
@@ -1367,13 +1474,13 @@ fn infer_expr_type_inner(
             for (var, type_params, ann, def) in bindings {
                 let mut env_def = env_seed.clone();
                 extend_type_params(&mut env_def.type_vars, type_params, supply)?;
-                let (preds, def_ty) =
+                let (preds, mut def_ty) =
                     infer_expr_type(unifier, supply, &env_def, adts, &known_seed, def)?;
                 if let Some(ann) = ann {
                     let mut ann_vars = annotation_vars_from_env(&env_seed);
                     extend_type_params(&mut ann_vars, type_params, supply)?;
                     let ann_ty = type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
-                    unifier.unify(&def_ty, &ann_ty)?;
+                    def_ty = unify_or_implicit_widen(unifier, &def_ty, &ann_ty)?;
                 }
                 let binding_ty = binding_tys
                     .get(&var.name)
@@ -1530,8 +1637,7 @@ fn infer_expr_type_inner(
                 _ => {
                     let (preds, expr_ty) =
                         infer_expr_type(unifier, supply, env, adts, known, expr)?;
-                    unifier.unify(&expr_ty, &ann_ty)?;
-                    let out_ty = unifier.apply_type(&ann_ty);
+                    let out_ty = unify_or_implicit_widen(unifier, &expr_ty, &ann_ty)?;
                     Ok((preds, out_ty))
                 }
             }
@@ -1748,7 +1854,8 @@ fn infer_expr(
                     })?;
                     let (p1, t1, typed_v) =
                         infer_expr(unifier, supply, env, adts, known, v.as_ref())?;
-                    unifier.unify(&t1, expected_ty)?;
+                    let (_field_ty, typed_v) =
+                        coerce_typed_to_expected(unifier, &t1, expected_ty, typed_v)?;
                     preds.extend(p1);
                     typed_updates.insert(k.clone(), Arc::new(typed_v));
                 }
@@ -1797,7 +1904,8 @@ fn infer_expr(
                             _ => {
                                 let (p1, t1, typed_def) =
                                     infer_expr(unifier, supply, &env_def, adts, &known_cur, &d)?;
-                                unifier.unify(&t1, &ann_ty)?;
+                                let (t1, typed_def) =
+                                    coerce_typed_to_expected(unifier, &t1, &ann_ty, typed_def)?;
                                 (p1, t1, typed_def)
                             }
                         }
@@ -1863,14 +1971,17 @@ fn infer_expr(
                 for (var, type_params, ann, def) in bindings {
                     let mut env_def = env_seed.clone();
                     extend_type_params(&mut env_def.type_vars, type_params, supply)?;
-                    let (preds, def_ty, typed_def) =
+                    let (preds, mut def_ty, mut typed_def) =
                         infer_expr(unifier, supply, &env_def, adts, &known_seed, def)?;
                     if let Some(ann) = ann {
                         let mut ann_vars = annotation_vars_from_env(&env_seed);
                         extend_type_params(&mut ann_vars, type_params, supply)?;
                         let ann_ty =
                             type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
-                        unifier.unify(&def_ty, &ann_ty)?;
+                        let coerced =
+                            coerce_typed_to_expected(unifier, &def_ty, &ann_ty, typed_def)?;
+                        def_ty = coerced.0;
+                        typed_def = coerced.1;
                     }
                     let binding_ty = binding_tys
                         .get(&var.name)
@@ -2062,8 +2173,8 @@ fn infer_expr(
                     _ => {
                         let (preds, expr_ty, typed_expr) =
                             infer_expr(unifier, supply, env, adts, known, expr)?;
-                        unifier.unify(&expr_ty, &ann_ty)?;
-                        let out_ty = unifier.apply_type(&ann_ty);
+                        let (out_ty, typed_expr) =
+                            coerce_typed_to_expected(unifier, &expr_ty, &ann_ty, typed_expr)?;
                         Ok((preds, out_ty, typed_expr))
                     }
                 }

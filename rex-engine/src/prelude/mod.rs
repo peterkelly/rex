@@ -1309,6 +1309,31 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     engine.export("prim_to_f64", |_: &State, x: f32| Ok(x as f64))?;
     engine.export("prim_to_f64", |_: &State, x: f64| Ok(x))?;
 
+    macro_rules! export_int_widen {
+        ($src:ty => $dst:ty) => {
+            engine.export("prim_widen_int", |_: &State, x: $src| Ok(x as $dst))?;
+        };
+    }
+
+    export_int_widen!(i8 => i16);
+    export_int_widen!(i8 => i32);
+    export_int_widen!(i8 => i64);
+    export_int_widen!(i16 => i32);
+    export_int_widen!(i16 => i64);
+    export_int_widen!(i32 => i64);
+    export_int_widen!(u8 => u16);
+    export_int_widen!(u8 => u32);
+    export_int_widen!(u8 => u64);
+    export_int_widen!(u8 => i16);
+    export_int_widen!(u8 => i32);
+    export_int_widen!(u8 => i64);
+    export_int_widen!(u16 => u32);
+    export_int_widen!(u16 => u64);
+    export_int_widen!(u16 => i32);
+    export_int_widen!(u16 => i64);
+    export_int_widen!(u32 => u64);
+    export_int_widen!(u32 => i64);
+
     // f64 -> Option <number> conversions (used by `std.json`).
     // - reject NaN/±inf
     // - for integer types: require integral `x` (fract == 0) and in range

@@ -680,6 +680,34 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             );
         }
 
+        for (src, dst) in [
+            (BuiltinTypeId::I8, BuiltinTypeId::I16),
+            (BuiltinTypeId::I8, BuiltinTypeId::I32),
+            (BuiltinTypeId::I8, BuiltinTypeId::I64),
+            (BuiltinTypeId::I16, BuiltinTypeId::I32),
+            (BuiltinTypeId::I16, BuiltinTypeId::I64),
+            (BuiltinTypeId::I32, BuiltinTypeId::I64),
+            (BuiltinTypeId::U8, BuiltinTypeId::U16),
+            (BuiltinTypeId::U8, BuiltinTypeId::U32),
+            (BuiltinTypeId::U8, BuiltinTypeId::U64),
+            (BuiltinTypeId::U8, BuiltinTypeId::I16),
+            (BuiltinTypeId::U8, BuiltinTypeId::I32),
+            (BuiltinTypeId::U8, BuiltinTypeId::I64),
+            (BuiltinTypeId::U16, BuiltinTypeId::U32),
+            (BuiltinTypeId::U16, BuiltinTypeId::U64),
+            (BuiltinTypeId::U16, BuiltinTypeId::I32),
+            (BuiltinTypeId::U16, BuiltinTypeId::I64),
+            (BuiltinTypeId::U32, BuiltinTypeId::U64),
+            (BuiltinTypeId::U32, BuiltinTypeId::I64),
+        ] {
+            let src_ty = Type::builtin(src);
+            let dst_ty = Type::builtin(dst);
+            ts.add_overload(
+                "prim_widen_int",
+                Scheme::new(vec![], vec![], Type::fun(src_ty, dst_ty)),
+            );
+        }
+
         for (name, dst) in [
             ("prim_f64_to_u8", BuiltinTypeId::U8),
             ("prim_f64_to_u16", BuiltinTypeId::U16),

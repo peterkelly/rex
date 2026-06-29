@@ -33,6 +33,10 @@ If you need to force a different numeric type, you can use an annotation (covere
 )
 ```
 
+When the target type is already known, Rex can widen primitive integers without losing information:
+an `i8` value can flow into an `i32` parameter. Mixed-width arithmetic still needs a single
+operator type; Rex does not guess a common type for `(1 is i8) + (2 is i32)`.
+
 ### Negative numbers
 
 Rex supports negative integer literals:

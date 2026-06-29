@@ -137,6 +137,24 @@ async fn spec_integer_literals_unify_with_integral_context() {
 }
 
 #[tokio::test]
+async fn spec_integer_values_widen_when_context_requires_lossless_target() {
+    let code = r#"
+fn a : i32 -> i32 -> i32 = \x y -> x * y;
+fn b : i8 -> i8 = \x -> x + 1;
+
+a 4 (b 5)
+"#;
+    let (_heap, handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), code)
+        .await
+        .unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match handle.value().unwrap() {
+        Value::I32(n) => assert_eq!(n, 24),
+        _ => panic!("expected i32, got {}", handle.type_name().unwrap()),
+    }
+}
+
+#[tokio::test]
 async fn spec_float_literals_unify_with_float_context() {
     let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
