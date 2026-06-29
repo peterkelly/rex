@@ -8,16 +8,16 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
-rex-ast = { path = "../rex-ast", version = "3.9.13" }
+rex-ast = { path = "../rex-ast", version = "3.9.14" }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-rex-typesystem = { path = "../rex-typesystem", version = "3.9.13" }
+rex-typesystem = { path = "../rex-typesystem", version = "3.9.14" }
 futures = { workspace = true }
-rex-parser = { path = "../rex-parser", version = "3.9.13" }
+rex-parser = { path = "../rex-parser", version = "3.9.14" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-rex-util = { path = "../rex-util", version = "3.9.13" }
+rex-util = { path = "../rex-util", version = "3.9.14" }
 
 [lints]
 workspace = true

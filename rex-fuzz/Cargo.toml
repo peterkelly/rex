@@ -9,11 +9,11 @@ version.workspace = true
 publish = false
 
 [dependencies]
-rex-ast = { path = "../rex-ast", version = "3.9.13" }
-rex-engine = { path = "../rex-engine", version = "3.9.13" }
-rex-parser = { path = "../rex-parser", version = "3.9.13" }
-rex-typesystem = { path = "../rex-typesystem", version = "3.9.13" }
-rex-util = { path = "../rex-util", version = "3.9.13" }
+rex-ast = { path = "../rex-ast", version = "3.9.14" }
+rex-engine = { path = "../rex-engine", version = "3.9.14" }
+rex-parser = { path = "../rex-parser", version = "3.9.14" }
+rex-typesystem = { path = "../rex-typesystem", version = "3.9.14" }
+rex-util = { path = "../rex-util", version = "3.9.14" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 

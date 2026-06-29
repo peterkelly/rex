@@ -10,12 +10,12 @@ version.workspace = true
 
 [dependencies]
 clap = { workspace = true }
-rex-ast = { path = "../rex-ast", version = "3.9.13" }
-rex-engine = { path = "../rex-engine", version = "3.9.13" }
-rex-parser = { path = "../rex-parser", version = "3.9.13" }
-rex-proc-macro = { path = "../rex-proc-macro", version = "3.9.13" }
-rex-typesystem = { path = "../rex-typesystem", version = "3.9.13" }
-rex-util = { path = "../rex-util", version = "3.9.13" }
+rex-ast = { path = "../rex-ast", version = "3.9.14" }
+rex-engine = { path = "../rex-engine", version = "3.9.14" }
+rex-parser = { path = "../rex-parser", version = "3.9.14" }
+rex-proc-macro = { path = "../rex-proc-macro", version = "3.9.14" }
+rex-typesystem = { path = "../rex-typesystem", version = "3.9.14" }
+rex-util = { path = "../rex-util", version = "3.9.14" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
