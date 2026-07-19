@@ -1140,6 +1140,10 @@ impl Heap {
         materialize_list_elements(self, elements)
     }
 
+    pub(crate) fn list_len(&self, pointer: &Pointer) -> Result<usize, EngineError> {
+        self.with_access(|heap| list_len_from_pointer(heap, *pointer))
+    }
+
     pub(crate) fn list_items(&self, pointer: Pointer) -> Result<ListItems, EngineError> {
         match self.with_access(|heap| list_items_from_pointer(heap, pointer))? {
             ListItemsSeed::Ready(items) => Ok(items),
@@ -1490,7 +1494,7 @@ impl Heap {
     }
 
     #[cfg(test)]
-    fn collection_count(&self) -> Result<u64, EngineError> {
+    pub(crate) fn collection_count(&self) -> Result<u64, EngineError> {
         let state = self
             .state
             .lock()
@@ -2613,6 +2617,39 @@ fn list_elements_from_pointer(
 ) -> Result<Vec<ListElement>, EngineError> {
     let cell = heap.get(&pointer)?;
     list_elements_from_cell(heap, cell)
+}
+
+fn list_len_from_pointer(heap: &HeapAccess<'_>, pointer: Pointer) -> Result<usize, EngineError> {
+    let mut len = 0usize;
+    let mut cursor = heap.get(&pointer)?;
+    loop {
+        match cursor {
+            Cell::Empty => return Ok(len),
+            Cell::Cons(_, tail) => {
+                len = len
+                    .checked_add(1)
+                    .ok_or_else(|| EngineError::Internal("list length overflow".into()))?;
+                cursor = heap.get(tail)?;
+            }
+            Cell::ListSlice {
+                start,
+                end,
+                elements,
+            } => {
+                let backing_len = list_slice_backing_len(heap.get(elements)?)?;
+                validate_list_slice_bounds(backing_len, *start, *end)?;
+                return len
+                    .checked_add(end - start)
+                    .ok_or_else(|| EngineError::Internal("list length overflow".into()));
+            }
+            cell => {
+                return Err(EngineError::NativeType {
+                    expected: "list".into(),
+                    got: cell.cell_type_name().into(),
+                });
+            }
+        }
+    }
 }
 
 enum MaterializedListElement {

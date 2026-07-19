@@ -21,7 +21,7 @@ use crate::{
         FrValueState, FrVar, Frame,
     },
     util::{is_function_type, split_fun},
-    value::{Cell, Closure, Collection, Handle, Heap, HeapAccess, Pointer, TempRoots},
+    value::{Cell, Closure, Collection, Handle, Heap, HeapAccess, ListItems, Pointer, TempRoots},
 };
 use rex_ast::{Pattern, Symbol};
 use rex_typesystem::{
@@ -1720,9 +1720,9 @@ fn match_pattern_ptr(
                 .unwrap_or(expected.as_ref())
             {
                 "Empty" if ps.is_empty() => heap
-                    .list_items(*value)
+                    .list_len(value)
                     .ok()
-                    .filter(|items| items.is_empty())
+                    .filter(|len| *len == 0)
                     .map(|_| BTreeMap::new()),
                 "Cons" if ps.len() == 2 => {
                     let (head, tail) = heap.list_head_tail(value).ok().flatten()?;
@@ -1742,12 +1742,17 @@ fn match_pattern_ptr(
             match_patterns(heap, ps, &xs)
         }
         Pattern::List(_, ps) => {
-            let values = heap.pointer_as_list(value).ok()?;
-            if values.len() == ps.len() {
-                match_patterns(heap, ps, &values)
-            } else {
-                None
+            if heap.list_len(value).ok()? != ps.len() {
+                return None;
             }
+            if ps
+                .iter()
+                .all(|pattern| matches!(pattern, Pattern::Wildcard(..)))
+            {
+                return Some(BTreeMap::new());
+            }
+            let values = heap.list_items(*value).ok()?;
+            match_list_patterns(heap, ps, values)
         }
         Pattern::Cons(_, head, tail) => {
             let (head_value, tail_value) = heap.list_head_tail(value).ok().flatten()?;
@@ -1784,6 +1789,43 @@ fn match_pattern_ptr(
     }
 }
 
+fn match_list_patterns(
+    heap: &Heap,
+    patterns: &[Pattern],
+    mut values: ListItems,
+) -> Option<BTreeMap<Symbol, Pointer>> {
+    if patterns.len() != values.len() {
+        return None;
+    }
+
+    let mut value_pointers = Vec::new();
+    values.trace_pointers(&mut value_pointers);
+    let value_roots = heap.temp_roots(value_pointers).ok()?;
+    let mut bindings = BTreeMap::new();
+
+    for (index, pattern) in patterns.iter().enumerate() {
+        if matches!(pattern, Pattern::Wildcard(..)) {
+            continue;
+        }
+
+        let binding_roots = heap
+            .temp_roots(bindings.values().copied().collect::<Vec<_>>())
+            .ok()?;
+        refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
+        refresh_list_items_from_roots(&mut values, &value_roots)?;
+
+        let value = values.get(heap, index).ok()?;
+        let value_root = heap.temp_roots(vec![value]).ok()?;
+        let value = value_root.get(0).ok()?;
+        let sub = match_pattern_ptr(heap, pattern, &value)?;
+
+        refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
+        refresh_list_items_from_roots(&mut values, &value_roots)?;
+        bindings.extend(sub);
+    }
+    Some(bindings)
+}
+
 fn match_patterns(
     heap: &Heap,
     patterns: &[Pattern],
@@ -1812,6 +1854,18 @@ fn refresh_bindings_from_roots(
         *pointer = roots.get(index).ok()?;
     }
     Some(())
+}
+
+fn refresh_list_items_from_roots(items: &mut ListItems, roots: &TempRoots) -> Option<()> {
+    let mut index = 0;
+    items
+        .rewrite_pointers(&mut |_| {
+            let pointer = roots.get(index);
+            index += 1;
+            pointer
+        })
+        .ok()?;
+    (index == roots.len()).then_some(())
 }
 
 fn runtime_ctor_matches(actual: &Symbol, expected: &Symbol) -> bool {
@@ -2111,4 +2165,101 @@ pub(crate) fn synthetic_application_expr_from_head(
     }
 
     Ok((env, expr))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rex_ast::{Span, Var};
+
+    fn wildcard() -> Pattern {
+        Pattern::Wildcard(Span::default())
+    }
+
+    #[test]
+    fn binary_list_length_and_wildcard_patterns_do_not_allocate_elements() {
+        let heap = Heap::new();
+        let list = heap
+            .alloc_ptr_binary_list(vec![10, 20, 30, 40])
+            .expect("binary list should allocate");
+        let list = heap.handle(list).expect("binary list should be rooted");
+        let pointer = list.pointer().expect("binary list pointer should resolve");
+        heap.set_collect_on_every_alloc(true)
+            .expect("collection setting should succeed");
+        let collections_before = heap
+            .collection_count()
+            .expect("collection count should be available");
+
+        let empty = Pattern::List(Span::default(), Vec::new());
+        assert!(match_pattern_ptr(&heap, &empty, &pointer).is_none());
+
+        let wrong_len = Pattern::List(Span::default(), vec![wildcard()]);
+        assert!(match_pattern_ptr(&heap, &wrong_len, &pointer).is_none());
+
+        let exact_wildcards = Pattern::List(
+            Span::default(),
+            vec![wildcard(), wildcard(), wildcard(), wildcard()],
+        );
+        assert_eq!(
+            match_pattern_ptr(&heap, &exact_wildcards, &pointer),
+            Some(BTreeMap::new())
+        );
+        assert_eq!(
+            heap.collection_count()
+                .expect("collection count should be available"),
+            collections_before,
+            "matching must not allocate a heap cell for each byte"
+        );
+    }
+
+    #[test]
+    fn nested_binary_list_bindings_survive_collection() {
+        let heap = Heap::new();
+        let first = heap
+            .alloc_ptr_binary_list(vec![10])
+            .expect("first binary list should allocate");
+        let second = heap
+            .alloc_ptr_binary_list(vec![20])
+            .expect("second binary list should allocate");
+        let outer = heap
+            .alloc_ptr_list(vec![first, second])
+            .expect("outer list should allocate");
+        let outer = heap.handle(outer).expect("outer list should be rooted");
+        let pointer = outer.pointer().expect("outer list pointer should resolve");
+        let x = Symbol::intern("x");
+        let y = Symbol::intern("y");
+        let pattern = Pattern::List(
+            Span::default(),
+            vec![
+                Pattern::List(Span::default(), vec![Pattern::Var(Var::new("x"))]),
+                Pattern::List(Span::default(), vec![Pattern::Var(Var::new("y"))]),
+            ],
+        );
+
+        heap.set_collect_on_every_alloc(true)
+            .expect("collection setting should succeed");
+        let collections_before = heap
+            .collection_count()
+            .expect("collection count should be available");
+        let bindings =
+            match_pattern_ptr(&heap, &pattern, &pointer).expect("nested list pattern should match");
+
+        assert_eq!(
+            heap.pointer_as_u8(bindings.get(&x).expect("x should be bound"))
+                .expect("x should be a u8"),
+            10
+        );
+        assert_eq!(
+            heap.pointer_as_u8(bindings.get(&y).expect("y should be bound"))
+                .expect("y should be a u8"),
+            20
+        );
+        assert_eq!(
+            heap.collection_count()
+                .expect("collection count should be available")
+                - collections_before,
+            2,
+            "only the two bound bytes should be materialized"
+        );
+    }
 }
