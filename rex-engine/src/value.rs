@@ -3667,6 +3667,38 @@ mod tests {
     }
 
     #[test]
+    fn temp_roots_detect_and_follow_copying_collection() {
+        let heap = Heap::new();
+        let stale = heap.alloc_ptr_i32(42).expect("alloc_i32 should succeed");
+        let roots = heap
+            .temp_roots(vec![stale])
+            .expect("temporary root should register");
+
+        assert!(
+            !roots
+                .has_collected_since_creation()
+                .expect("collection state should be available")
+        );
+        heap.collect_now().expect("collection should succeed");
+        assert!(
+            roots
+                .has_collected_since_creation()
+                .expect("collection state should be available")
+        );
+
+        let refreshed = roots.get(0).expect("temporary root should be rewritten");
+        assert_eq!(
+            heap.pointer_as_i32(&refreshed)
+                .expect("rewritten pointer should resolve"),
+            42
+        );
+        assert!(
+            heap.pointer_as_i32(&stale).is_err(),
+            "raw pointer from before collection should be stale"
+        );
+    }
+
+    #[test]
     fn alloc_triggers_collection_after_heap_growth() {
         let heap = Heap::new();
         let rooted = heap.alloc_i32(7).expect("alloc_i32 handle");

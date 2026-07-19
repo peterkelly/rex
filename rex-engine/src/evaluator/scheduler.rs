@@ -227,10 +227,7 @@ where
     scheduler.trace_pointers(&mut protected);
     runtime.trace_pointers(&mut protected)?;
     let roots = runtime.heap.temp_roots(protected)?;
-
-    let mut cursor = 0;
-    scheduler.refresh_from_roots(&roots, &mut cursor)?;
-    runtime.refresh_from_roots(&roots, &mut cursor)?;
+    refresh_scheduler_roots(runtime, scheduler, &roots)?;
 
     enum NativeWaitEvent {
         Completion(usize),
@@ -274,9 +271,7 @@ where
         .await?
     };
 
-    let mut cursor = 0;
-    scheduler.refresh_from_roots(&roots, &mut cursor)?;
-    runtime.refresh_from_roots(&roots, &mut cursor)?;
+    refresh_scheduler_roots(runtime, scheduler, &roots)?;
 
     let Some(event) = event else {
         return Ok(false);
@@ -288,6 +283,23 @@ where
     let value = handle.pointer_for_heap(&runtime.heap)?;
     scheduler.schedule_next(EvalWorkItem::receive(frame, frame, value));
     Ok(true)
+}
+
+fn refresh_scheduler_roots<State>(
+    runtime: &mut RuntimeCore<State>,
+    scheduler: &mut EvalScheduler<State>,
+    roots: &TempRoots,
+) -> Result<(), EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if !roots.has_collected_since_creation()? {
+        return Ok(());
+    }
+
+    let mut cursor = 0;
+    scheduler.refresh_from_roots(roots, &mut cursor)?;
+    runtime.refresh_from_roots(roots, &mut cursor)
 }
 
 enum PendingNativeState {

@@ -118,11 +118,7 @@ where
         scheduler.trace_pointers(&mut protected);
         runtime.trace_pointers(&mut protected)?;
         let roots = runtime.heap.temp_roots(protected)?;
-
-        let mut cursor = 0;
-        item.refresh_from_roots(&roots, &mut cursor)?;
-        scheduler.refresh_from_roots(&roots, &mut cursor)?;
-        runtime.refresh_from_roots(&roots, &mut cursor)?;
+        refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
 
         let frame = runtime.heap.pointer_as_frame(&item.frame)?;
         let control = match item.returned {
@@ -131,11 +127,7 @@ where
             }
             None => eval_enter(&runtime, item.frame, frame)?,
         };
-
-        let mut cursor = 0;
-        item.refresh_from_roots(&roots, &mut cursor)?;
-        scheduler.refresh_from_roots(&roots, &mut cursor)?;
-        runtime.refresh_from_roots(&roots, &mut cursor)?;
+        refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
 
         match control {
             EvalControl::Push { expr, env } => {
@@ -164,8 +156,10 @@ where
                     .heap
                     .alloc_ptr_frame(Frame::NativeAsync(FrNativeAsync { parent: item.frame }))?;
                 refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
-                let mut cursor = 0;
-                call.refresh_from_roots(&call_roots, &mut cursor)?;
+                if call_roots.has_collected_since_creation()? {
+                    let mut cursor = 0;
+                    call.refresh_from_roots(&call_roots, &mut cursor)?;
+                }
                 scheduler.schedule_pending_native(child, call);
             }
             EvalControl::Return(value) => {
@@ -205,6 +199,10 @@ fn refresh_eval_roots<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
+    if !roots.has_collected_since_creation()? {
+        return Ok(());
+    }
+
     let mut cursor = 0;
     item.refresh_from_roots(roots, &mut cursor)?;
     scheduler.refresh_from_roots(roots, &mut cursor)?;

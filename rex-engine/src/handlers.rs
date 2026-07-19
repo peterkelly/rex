@@ -396,8 +396,10 @@ where
         let mut protected = Vec::new();
         self.trace_pointers(&mut protected);
         let roots = runtime.heap.temp_roots(protected)?;
-        let mut cursor = 0;
-        self.refresh_from_roots(&roots, &mut cursor)?;
+        if roots.has_collected_since_creation()? {
+            let mut cursor = 0;
+            self.refresh_from_roots(&roots, &mut cursor)?;
+        }
         let args = self.args;
         let ctx = Context::new_at_call_site(runtime, self.call_site);
         let future = (self.callable)(ctx, self.typ, args);
