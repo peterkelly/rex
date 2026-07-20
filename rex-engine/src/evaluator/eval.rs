@@ -1458,7 +1458,7 @@ pub(crate) fn refresh_frame_from_roots(
     for (idx, original) in originals.iter().enumerate().skip(start) {
         rewrites.insert(*original, roots.get(idx)?);
     }
-    frame.rewrite_pointers(&mut |pointer| Ok(rewrites.get(&pointer).copied().unwrap_or(pointer)))
+    frame.map_pointers(&mut |pointer| Ok(rewrites.get(&pointer).copied().unwrap_or(pointer)))
 }
 
 fn eval_apply_overloaded_arg<State>(
@@ -2000,7 +2000,7 @@ fn refresh_bindings_from_roots(
 fn refresh_list_items_from_roots(items: &mut ListItems, roots: &TempRoots) -> Option<()> {
     let mut index = 0;
     items
-        .rewrite_pointers(&mut |_| {
+        .map_pointers(&mut |_| {
             let pointer = roots.get(index);
             index += 1;
             pointer

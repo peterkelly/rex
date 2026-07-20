@@ -4,7 +4,7 @@ use std::sync::Arc;
 use rex_ast::Symbol;
 
 use crate::EngineError;
-use crate::value::{Handle, Pointer};
+use crate::value::{Collection, Handle, Pointer};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Environment(Arc<EnvEntry>);
@@ -54,25 +54,19 @@ impl Environment {
     pub(crate) fn bindings(&self) -> &BTreeMap<Symbol, Pointer> {
         &self.0.bindings
     }
+}
 
-    pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        let mut current = Some(self);
-        while let Some(env) = current {
-            out.extend(env.0.bindings.values().copied());
-            current = env.0.parent.as_ref();
-        }
-    }
-
-    pub(crate) fn rewrite_pointers(
+impl Collection for Environment {
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
         let mut entries = Vec::new();
         let mut current: Option<&Environment> = Some(self);
         while let Some(env) = current {
             let mut bindings = BTreeMap::new();
             for (name, pointer) in &env.0.bindings {
-                bindings.insert(name.clone(), rewrite(*pointer)?);
+                bindings.insert(name.clone(), map(*pointer)?);
             }
             entries.push(bindings);
             current = env.0.parent.as_ref();

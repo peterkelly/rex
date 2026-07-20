@@ -12,7 +12,7 @@ use crate::{
     overloaded_fn::OverloadedFn,
     stack::{
         FrNativeCall, FrNativeCallState, Frame, NativeUnaryShape, rewrite_entries,
-        rewrite_map_values, rewrite_option, rewrite_pointer, rewrite_slice, trace_option,
+        rewrite_map_values, rewrite_option, rewrite_pointer, rewrite_slice,
     },
     value::{Collection, ListItems, Pointer, TempRoots},
 };
@@ -177,46 +177,26 @@ pub enum NativeTask {
 }
 
 impl Collection for NativeTask {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        match self {
-            NativeTask::ApplyUnary(task) => task.trace_pointers(out),
-            NativeTask::SequenceMap(task) => task.trace_pointers(out),
-            NativeTask::SequenceFilter(task) => task.trace_pointers(out),
-            NativeTask::SequenceFilterMap(task) => task.trace_pointers(out),
-            NativeTask::SequenceFlatMap(task) => task.trace_pointers(out),
-            NativeTask::UnaryMap(task) => task.trace_pointers(out),
-            NativeTask::UnaryFilter(task) => task.trace_pointers(out),
-            NativeTask::UnaryFilterMap(task) => task.trace_pointers(out),
-            NativeTask::UnaryFlatMap(task) => task.trace_pointers(out),
-            NativeTask::Fold(task) => task.trace_pointers(out),
-            NativeTask::DictMap(task) => task.trace_pointers(out),
-            NativeTask::DictTraverse(task) => task.trace_pointers(out),
-            NativeTask::ArrayEq(task) => task.trace_pointers(out),
-            NativeTask::Sum(task) => task.trace_pointers(out),
-            NativeTask::Mean(task) => task.trace_pointers(out),
-        }
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
         match self {
-            NativeTask::ApplyUnary(task) => task.rewrite_pointers(rewrite),
-            NativeTask::SequenceMap(task) => task.rewrite_pointers(rewrite),
-            NativeTask::SequenceFilter(task) => task.rewrite_pointers(rewrite),
-            NativeTask::SequenceFilterMap(task) => task.rewrite_pointers(rewrite),
-            NativeTask::SequenceFlatMap(task) => task.rewrite_pointers(rewrite),
-            NativeTask::UnaryMap(task) => task.rewrite_pointers(rewrite),
-            NativeTask::UnaryFilter(task) => task.rewrite_pointers(rewrite),
-            NativeTask::UnaryFilterMap(task) => task.rewrite_pointers(rewrite),
-            NativeTask::UnaryFlatMap(task) => task.rewrite_pointers(rewrite),
-            NativeTask::Fold(task) => task.rewrite_pointers(rewrite),
-            NativeTask::DictMap(task) => task.rewrite_pointers(rewrite),
-            NativeTask::DictTraverse(task) => task.rewrite_pointers(rewrite),
-            NativeTask::ArrayEq(task) => task.rewrite_pointers(rewrite),
-            NativeTask::Sum(task) => task.rewrite_pointers(rewrite),
-            NativeTask::Mean(task) => task.rewrite_pointers(rewrite),
+            NativeTask::ApplyUnary(task) => task.map_pointers(map),
+            NativeTask::SequenceMap(task) => task.map_pointers(map),
+            NativeTask::SequenceFilter(task) => task.map_pointers(map),
+            NativeTask::SequenceFilterMap(task) => task.map_pointers(map),
+            NativeTask::SequenceFlatMap(task) => task.map_pointers(map),
+            NativeTask::UnaryMap(task) => task.map_pointers(map),
+            NativeTask::UnaryFilter(task) => task.map_pointers(map),
+            NativeTask::UnaryFilterMap(task) => task.map_pointers(map),
+            NativeTask::UnaryFlatMap(task) => task.map_pointers(map),
+            NativeTask::Fold(task) => task.map_pointers(map),
+            NativeTask::DictMap(task) => task.map_pointers(map),
+            NativeTask::DictTraverse(task) => task.map_pointers(map),
+            NativeTask::ArrayEq(task) => task.map_pointers(map),
+            NativeTask::Sum(task) => task.map_pointers(map),
+            NativeTask::Mean(task) => task.map_pointers(map),
         }
     }
 }
@@ -409,30 +389,30 @@ fn native_apply_spec(
     })
 }
 
-fn rewrite_options(
+fn rewrite_options<E>(
     values: &mut [Option<Pointer>],
-    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-) -> Result<(), EngineError> {
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+) -> Result<(), E> {
     for value in values.iter_mut().flatten() {
         rewrite_pointer(value, rewrite)?;
     }
     Ok(())
 }
 
-fn rewrite_nested_options(
+fn rewrite_nested_options<E>(
     values: &mut [Option<Option<Pointer>>],
-    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-) -> Result<(), EngineError> {
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+) -> Result<(), E> {
     for value in values.iter_mut().filter_map(Option::as_mut).flatten() {
         rewrite_pointer(value, rewrite)?;
     }
     Ok(())
 }
 
-fn rewrite_option_vecs(
+fn rewrite_option_vecs<E>(
     values: &mut [Option<Vec<Pointer>>],
-    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-) -> Result<(), EngineError> {
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+) -> Result<(), E> {
     for values in values.iter_mut().flatten() {
         rewrite_slice(values, rewrite)?;
     }
@@ -471,17 +451,12 @@ pub struct NativeApplyUnary {
 }
 
 impl Collection for NativeApplyUnary {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.func);
-        out.push(self.arg);
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        rewrite_pointer(&mut self.func, rewrite)?;
-        rewrite_pointer(&mut self.arg, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        rewrite_pointer(&mut self.func, map)?;
+        rewrite_pointer(&mut self.arg, map)
     }
 }
 
@@ -525,21 +500,14 @@ pub(crate) struct NativeSequenceMap {
 }
 
 impl Collection for NativeSequenceMap {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.func);
-        self.values.trace_pointers(out);
-        out.extend(self.children.iter().copied());
-        out.extend(self.output.iter().flatten().copied());
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        rewrite_pointer(&mut self.func, rewrite)?;
-        self.values.rewrite_pointers(rewrite)?;
-        rewrite_slice(&mut self.children, rewrite)?;
-        rewrite_options(&mut self.output, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        rewrite_pointer(&mut self.func, map)?;
+        self.values.map_pointers(map)?;
+        rewrite_slice(&mut self.children, map)?;
+        rewrite_options(&mut self.output, map)
     }
 }
 impl<State> Coroutine<State> for NativeSequenceMap
@@ -650,19 +618,13 @@ pub(crate) struct NativeSequenceFilter {
 }
 
 impl Collection for NativeSequenceFilter {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.func);
-        self.values.trace_pointers(out);
-        out.extend(self.children.iter().copied());
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        rewrite_pointer(&mut self.func, rewrite)?;
-        self.values.rewrite_pointers(rewrite)?;
-        rewrite_slice(&mut self.children, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        rewrite_pointer(&mut self.func, map)?;
+        self.values.map_pointers(map)?;
+        rewrite_slice(&mut self.children, map)
     }
 }
 
@@ -784,27 +746,14 @@ pub(crate) struct NativeSequenceFilterMap {
 }
 
 impl Collection for NativeSequenceFilterMap {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.func);
-        self.values.trace_pointers(out);
-        out.extend(self.children.iter().copied());
-        out.extend(
-            self.output
-                .iter()
-                .filter_map(Option::as_ref)
-                .flatten()
-                .copied(),
-        );
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        rewrite_pointer(&mut self.func, rewrite)?;
-        self.values.rewrite_pointers(rewrite)?;
-        rewrite_slice(&mut self.children, rewrite)?;
-        rewrite_nested_options(&mut self.output, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        rewrite_pointer(&mut self.func, map)?;
+        self.values.map_pointers(map)?;
+        rewrite_slice(&mut self.children, map)?;
+        rewrite_nested_options(&mut self.output, map)
     }
 }
 
@@ -918,21 +867,14 @@ pub(crate) struct NativeSequenceFlatMap {
 }
 
 impl Collection for NativeSequenceFlatMap {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.func);
-        self.values.trace_pointers(out);
-        out.extend(self.children.iter().copied());
-        out.extend(self.output.iter().flatten().flatten().copied());
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        rewrite_pointer(&mut self.func, rewrite)?;
-        self.values.rewrite_pointers(rewrite)?;
-        rewrite_slice(&mut self.children, rewrite)?;
-        rewrite_option_vecs(&mut self.output, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        rewrite_pointer(&mut self.func, map)?;
+        self.values.map_pointers(map)?;
+        rewrite_slice(&mut self.children, map)?;
+        rewrite_option_vecs(&mut self.output, map)
     }
 }
 
@@ -1042,17 +984,12 @@ pub(crate) struct NativeUnaryMap {
 }
 
 impl Collection for NativeUnaryMap {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.func);
-        out.push(self.value);
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        rewrite_pointer(&mut self.func, rewrite)?;
-        rewrite_pointer(&mut self.value, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        rewrite_pointer(&mut self.func, map)?;
+        rewrite_pointer(&mut self.value, map)
     }
 }
 
@@ -1100,19 +1037,13 @@ pub(crate) struct NativeUnaryFilter {
 }
 
 impl Collection for NativeUnaryFilter {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.func);
-        out.push(self.value);
-        out.push(self.original);
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        rewrite_pointer(&mut self.func, rewrite)?;
-        rewrite_pointer(&mut self.value, rewrite)?;
-        rewrite_pointer(&mut self.original, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        rewrite_pointer(&mut self.func, map)?;
+        rewrite_pointer(&mut self.value, map)?;
+        rewrite_pointer(&mut self.original, map)
     }
 }
 
@@ -1163,17 +1094,12 @@ pub struct NativeUnaryFilterMap {
 }
 
 impl Collection for NativeUnaryFilterMap {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.func);
-        out.push(self.value);
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        rewrite_pointer(&mut self.func, rewrite)?;
-        rewrite_pointer(&mut self.value, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        rewrite_pointer(&mut self.func, map)?;
+        rewrite_pointer(&mut self.value, map)
     }
 }
 
@@ -1214,17 +1140,12 @@ pub(crate) struct NativeUnaryFlatMap {
 }
 
 impl Collection for NativeUnaryFlatMap {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.func);
-        out.push(self.value);
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        rewrite_pointer(&mut self.func, rewrite)?;
-        rewrite_pointer(&mut self.value, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        rewrite_pointer(&mut self.func, map)?;
+        rewrite_pointer(&mut self.value, map)
     }
 }
 
@@ -1289,21 +1210,14 @@ pub(crate) struct NativeFold {
 }
 
 impl Collection for NativeFold {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.func);
-        self.values.trace_pointers(out);
-        out.push(self.acc);
-        trace_option(self.step, out);
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        rewrite_pointer(&mut self.func, rewrite)?;
-        self.values.rewrite_pointers(rewrite)?;
-        rewrite_pointer(&mut self.acc, rewrite)?;
-        rewrite_option(&mut self.step, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        rewrite_pointer(&mut self.func, map)?;
+        self.values.map_pointers(map)?;
+        rewrite_pointer(&mut self.acc, map)?;
+        rewrite_option(&mut self.step, map)
     }
 }
 
@@ -1426,21 +1340,14 @@ pub struct NativeDictMap {
 }
 
 impl Collection for NativeDictMap {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.func);
-        out.extend(self.entries.iter().map(|(_, pointer)| *pointer));
-        out.extend(self.children.iter().copied());
-        out.extend(self.output.values().copied());
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        rewrite_pointer(&mut self.func, rewrite)?;
-        rewrite_entries(&mut self.entries, rewrite)?;
-        rewrite_slice(&mut self.children, rewrite)?;
-        rewrite_map_values(&mut self.output, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        rewrite_pointer(&mut self.func, map)?;
+        rewrite_entries(&mut self.entries, map)?;
+        rewrite_slice(&mut self.children, map)?;
+        rewrite_map_values(&mut self.output, map)
     }
 }
 
@@ -1528,19 +1435,13 @@ pub struct NativeDictTraverse {
 }
 
 impl Collection for NativeDictTraverse {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.func);
-        out.extend(self.entries.iter().map(|(_, pointer)| *pointer));
-        out.extend(self.output.values().copied());
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        rewrite_pointer(&mut self.func, rewrite)?;
-        rewrite_entries(&mut self.entries, rewrite)?;
-        rewrite_map_values(&mut self.output, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        rewrite_pointer(&mut self.func, map)?;
+        rewrite_entries(&mut self.entries, map)?;
+        rewrite_map_values(&mut self.output, map)
     }
 }
 
@@ -1635,19 +1536,13 @@ pub struct NativeArrayEq {
 }
 
 impl Collection for NativeArrayEq {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        self.xs.trace_pointers(out);
-        self.ys.trace_pointers(out);
-        trace_option(self.step, out);
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        self.xs.rewrite_pointers(rewrite)?;
-        self.ys.rewrite_pointers(rewrite)?;
-        rewrite_option(&mut self.step, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        self.xs.map_pointers(map)?;
+        self.ys.map_pointers(map)?;
+        rewrite_option(&mut self.step, map)
     }
 }
 
@@ -1777,21 +1672,14 @@ pub struct NativeSum {
 }
 
 impl Collection for NativeSum {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        self.values.trace_pointers(out);
-        trace_option(self.acc, out);
-        trace_option(self.plus, out);
-        trace_option(self.step, out);
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        self.values.rewrite_pointers(rewrite)?;
-        rewrite_option(&mut self.acc, rewrite)?;
-        rewrite_option(&mut self.plus, rewrite)?;
-        rewrite_option(&mut self.step, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        self.values.map_pointers(map)?;
+        rewrite_option(&mut self.acc, map)?;
+        rewrite_option(&mut self.plus, map)?;
+        rewrite_option(&mut self.step, map)
     }
 }
 
@@ -1932,21 +1820,14 @@ pub struct NativeMean {
 }
 
 impl Collection for NativeMean {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        self.values.trace_pointers(out);
-        trace_option(self.acc, out);
-        trace_option(self.step, out);
-        trace_option(self.len_value, out);
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        self.values.rewrite_pointers(rewrite)?;
-        rewrite_option(&mut self.acc, rewrite)?;
-        rewrite_option(&mut self.step, rewrite)?;
-        rewrite_option(&mut self.len_value, rewrite)
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        self.values.map_pointers(map)?;
+        rewrite_option(&mut self.acc, map)?;
+        rewrite_option(&mut self.step, map)?;
+        rewrite_option(&mut self.len_value, map)
     }
 }
 

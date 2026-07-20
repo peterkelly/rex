@@ -1,7 +1,4 @@
-use crate::{
-    error::EngineError,
-    value::{Collection, Pointer},
-};
+use crate::value::{Collection, Pointer};
 use rex_ast::Symbol;
 use rex_typesystem::types::Type;
 
@@ -47,16 +44,12 @@ impl OverloadedFn {
 }
 
 impl Collection for OverloadedFn {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.extend(self.applied.iter().copied());
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
         for pointer in &mut self.applied {
-            *pointer = rewrite(*pointer)?;
+            *pointer = map(*pointer)?;
         }
         Ok(())
     }

@@ -2,6 +2,7 @@
 
 use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::convert::Infallible;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,7 +26,7 @@ use crate::{
 //   public API and ordinary native/prelude code to keep values alive while
 //   allocating.
 // - Scheduler-native code may still store Pointer values directly, but only in
-//   frame/task state that implements trace_pointers and rewrite_pointers.
+//   frame/task state that implements Collection.
 // - The collector is copying: every traced Pointer must be rewritten after a
 //   collection. A raw Pointer from before collection is stale by design.
 pub(crate) struct HeapState {
@@ -248,7 +249,7 @@ impl HeapState {
                 .get_mut(scan_index)
                 .and_then(|slot| slot.cell.take())
                 .ok_or_else(|| EngineError::Internal("copying GC copied slot missing".into()))?;
-            rewrite_cell_pointers(&mut cell, &mut |child| {
+            cell.map_pointers(&mut |child| {
                 self.copy_for_gc(child, &mut new_slots, &mut forwarding)
             })?;
             new_slots[scan_index].cell = Some(cell);
@@ -329,8 +330,9 @@ impl HeapState {
                     "GC verification found empty live slot for {pointer:?}"
                 ))
             })?;
+            let mut cell = cell.clone();
             let mut children = Vec::new();
-            trace_cell_pointers(cell, &mut children);
+            cell.trace_pointers(&mut children);
             for child in children {
                 self.get_slot_checked(&child).map_err(|err| {
                     EngineError::Internal(format!(
@@ -375,7 +377,7 @@ impl HeapState {
         }
 
         let mut protected = Vec::new();
-        trace_cell_pointers(&cell, &mut protected);
+        cell.trace_pointers(&mut protected);
 
         let mut root_ids = Vec::with_capacity(protected.len());
         for pointer in protected {
@@ -400,7 +402,7 @@ impl HeapState {
             self.unregister_root(root_id)?;
         }
         let mut relocated = relocated.into_iter();
-        rewrite_cell_pointers(&mut cell, &mut |_| {
+        cell.map_pointers(&mut |_| {
             relocated.next().ok_or_else(|| {
                 EngineError::Internal("temporary allocation root count mismatch".into())
             })
@@ -1943,88 +1945,55 @@ impl Cell {
     }
 }
 
-fn trace_cell_pointers(cell: &Cell, out: &mut Vec<Pointer>) {
-    match cell {
-        Cell::Tuple(values) | Cell::Data(values) | Cell::Adt(_, values) => {
-            out.extend(values.iter().copied());
-        }
-        Cell::Cons(head, tail) => {
-            out.push(*head);
-            out.push(*tail);
-        }
-        Cell::ListSlice { elements, .. } => out.push(*elements),
-        Cell::Dict(values) => out.extend(values.values().copied()),
-        Cell::Frame(frame) => frame.trace_pointers(out),
-        Cell::Closure(closure) => closure.env.trace_pointers(out),
-        Cell::Native(native) => native.trace_pointers(out),
-        Cell::Overloaded(overloaded) => overloaded.trace_pointers(out),
-        Cell::Bool(_)
-        | Cell::U8(_)
-        | Cell::U16(_)
-        | Cell::U32(_)
-        | Cell::U64(_)
-        | Cell::I8(_)
-        | Cell::I16(_)
-        | Cell::I32(_)
-        | Cell::I64(_)
-        | Cell::F32(_)
-        | Cell::F64(_)
-        | Cell::String(_)
-        | Cell::Uuid(_)
-        | Cell::DateTime(_)
-        | Cell::BinaryData(_)
-        | Cell::Empty
-        | Cell::Uninitialized(_) => {}
-    }
-}
-
-fn rewrite_cell_pointers(
-    cell: &mut Cell,
-    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-) -> Result<(), EngineError> {
-    match cell {
-        Cell::Tuple(values) | Cell::Data(values) | Cell::Adt(_, values) => {
-            for pointer in values {
-                *pointer = rewrite(*pointer)?;
+impl Collection for Cell {
+    fn map_pointers<E>(
+        &mut self,
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        match self {
+            Cell::Tuple(values) | Cell::Data(values) | Cell::Adt(_, values) => {
+                for pointer in values {
+                    *pointer = map(*pointer)?;
+                }
+                Ok(())
             }
-            Ok(())
-        }
-        Cell::Cons(head, tail) => {
-            *head = rewrite(*head)?;
-            *tail = rewrite(*tail)?;
-            Ok(())
-        }
-        Cell::ListSlice { elements, .. } => {
-            *elements = rewrite(*elements)?;
-            Ok(())
-        }
-        Cell::Dict(values) => {
-            for pointer in values.values_mut() {
-                *pointer = rewrite(*pointer)?;
+            Cell::Cons(head, tail) => {
+                *head = map(*head)?;
+                *tail = map(*tail)?;
+                Ok(())
             }
-            Ok(())
+            Cell::ListSlice { elements, .. } => {
+                *elements = map(*elements)?;
+                Ok(())
+            }
+            Cell::Dict(values) => {
+                for pointer in values.values_mut() {
+                    *pointer = map(*pointer)?;
+                }
+                Ok(())
+            }
+            Cell::Frame(frame) => frame.map_pointers(map),
+            Cell::Closure(closure) => closure.env.map_pointers(map),
+            Cell::Native(native) => native.map_pointers(map),
+            Cell::Overloaded(overloaded) => overloaded.map_pointers(map),
+            Cell::Bool(_)
+            | Cell::U8(_)
+            | Cell::U16(_)
+            | Cell::U32(_)
+            | Cell::U64(_)
+            | Cell::I8(_)
+            | Cell::I16(_)
+            | Cell::I32(_)
+            | Cell::I64(_)
+            | Cell::F32(_)
+            | Cell::F64(_)
+            | Cell::String(_)
+            | Cell::Uuid(_)
+            | Cell::DateTime(_)
+            | Cell::BinaryData(_)
+            | Cell::Empty
+            | Cell::Uninitialized(_) => Ok(()),
         }
-        Cell::Frame(frame) => frame.rewrite_pointers(rewrite),
-        Cell::Closure(closure) => closure.env.rewrite_pointers(rewrite),
-        Cell::Native(native) => native.rewrite_pointers(rewrite),
-        Cell::Overloaded(overloaded) => overloaded.rewrite_pointers(rewrite),
-        Cell::Bool(_)
-        | Cell::U8(_)
-        | Cell::U16(_)
-        | Cell::U32(_)
-        | Cell::U64(_)
-        | Cell::I8(_)
-        | Cell::I16(_)
-        | Cell::I32(_)
-        | Cell::I64(_)
-        | Cell::F32(_)
-        | Cell::F64(_)
-        | Cell::String(_)
-        | Cell::Uuid(_)
-        | Cell::DateTime(_)
-        | Cell::BinaryData(_)
-        | Cell::Empty
-        | Cell::Uninitialized(_) => Ok(()),
     }
 }
 
@@ -2887,33 +2856,6 @@ impl ListItems {
                 .ok_or_else(|| EngineError::Internal("list item index out of bounds".into())),
         }
     }
-
-    pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        match self {
-            Self::Slice { elements, .. } | Self::BinarySlice { elements, .. } => {
-                out.push(*elements);
-            }
-            Self::Pointers(values) => out.extend(values.iter().copied()),
-        }
-    }
-
-    pub(crate) fn rewrite_pointers(
-        &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        match self {
-            Self::Slice { elements, .. } | Self::BinarySlice { elements, .. } => {
-                *elements = rewrite(*elements)?;
-                Ok(())
-            }
-            Self::Pointers(values) => {
-                for pointer in values {
-                    *pointer = rewrite(*pointer)?;
-                }
-                Ok(())
-            }
-        }
-    }
 }
 
 enum ListItemsSeed {
@@ -2966,12 +2908,41 @@ fn list_items_from_pointer(
 }
 
 pub(crate) trait Collection {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>);
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError>;
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E>;
+
+    fn trace_pointers(&mut self, out: &mut Vec<Pointer>) {
+        let result: Result<(), Infallible> = self.map_pointers(&mut |pointer| {
+            out.push(pointer);
+            Ok(pointer)
+        });
+        match result {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
+    }
+}
+
+impl Collection for ListItems {
+    fn map_pointers<E>(
+        &mut self,
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        match self {
+            Self::Slice { elements, .. } | Self::BinarySlice { elements, .. } => {
+                *elements = map(*elements)?;
+                Ok(())
+            }
+            Self::Pointers(values) => {
+                for pointer in values {
+                    *pointer = map(*pointer)?;
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 pub(crate) trait IntoPointer {

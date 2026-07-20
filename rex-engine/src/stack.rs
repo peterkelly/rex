@@ -5,7 +5,6 @@ use rex_ast::{Pattern, Symbol};
 use rex_typesystem::types::{Type, TypedExpr};
 
 use crate::{
-    EngineError,
     env::Environment,
     evaluator::native_functions::NativeTask,
     value::{Collection, Pointer},
@@ -127,94 +126,10 @@ impl Frame {
 }
 
 impl Collection for Frame {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        match self {
-            Frame::Bool(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
-            Frame::Uint(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
-            Frame::Int(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
-            Frame::Float(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
-            Frame::String(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
-            Frame::Uuid(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
-            Frame::DateTime(frame) => {
-                trace_value_frame(&frame.parent, &frame.env, frame.value, out)
-            }
-            Frame::Hole(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
-            Frame::Var(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
-            Frame::Project(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
-            Frame::Lam(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
-            Frame::Tuple(frame) => {
-                out.push(frame.parent);
-                frame.env.trace_pointers(out);
-                out.extend(frame.children.iter().copied());
-                out.extend(frame.values.iter().flatten().copied());
-            }
-            Frame::List(frame) => {
-                out.push(frame.parent);
-                frame.env.trace_pointers(out);
-                out.extend(frame.children.iter().copied());
-                out.extend(frame.values.iter().flatten().copied());
-            }
-            Frame::Dict(frame) => {
-                out.push(frame.parent);
-                frame.env.trace_pointers(out);
-                out.extend(frame.children.iter().copied());
-                out.extend(frame.values.iter().flatten().copied());
-            }
-            Frame::RecordUpdate(frame) => {
-                out.push(frame.parent);
-                frame.env.trace_pointers(out);
-                trace_option(frame.base_value, out);
-                out.extend(frame.update_children.iter().copied());
-                out.extend(frame.update_values.iter().flatten().copied());
-            }
-            Frame::App(frame) => {
-                out.push(frame.parent);
-                frame.env.trace_pointers(out);
-                trace_option(frame.head_child, out);
-                out.extend(frame.arg_children.iter().copied());
-                out.extend(frame.arg_values.iter().flatten().copied());
-                trace_option(frame.func, out);
-                trace_option(frame.arg, out);
-            }
-            Frame::Let(frame) => {
-                out.push(frame.parent);
-                frame.env.trace_pointers(out);
-                trace_option(frame.def_value, out);
-            }
-            Frame::LetRec(frame) => {
-                out.push(frame.parent);
-                frame.env.trace_pointers(out);
-                if let Some(env) = &frame.recursive_env {
-                    env.trace_pointers(out);
-                }
-                out.extend(frame.slots.iter().copied());
-                trace_option(frame.binding_value, out);
-            }
-            Frame::Ite(frame) => {
-                out.push(frame.parent);
-                frame.env.trace_pointers(out);
-                trace_option(frame.cond_value, out);
-            }
-            Frame::Match(frame) => {
-                out.push(frame.parent);
-                frame.env.trace_pointers(out);
-                trace_option(frame.scrutinee_value, out);
-                if let Some(env) = &frame.matched_env {
-                    env.trace_pointers(out);
-                }
-            }
-            Frame::NativeCall(frame) => {
-                out.push(frame.parent);
-                frame.task.trace_pointers(out);
-            }
-            Frame::NativeAsync(frame) => out.push(frame.parent),
-        }
-    }
-
-    fn rewrite_pointers(
+    fn map_pointers<E>(
         &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
         match self {
             Frame::Bool(frame) => {
                 rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
@@ -251,32 +166,32 @@ impl Collection for Frame {
             }
             Frame::Tuple(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
-                frame.env.rewrite_pointers(rewrite)?;
+                frame.env.map_pointers(rewrite)?;
                 rewrite_slice(&mut frame.children, rewrite)?;
                 rewrite_option_slice(&mut frame.values, rewrite)
             }
             Frame::List(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
-                frame.env.rewrite_pointers(rewrite)?;
+                frame.env.map_pointers(rewrite)?;
                 rewrite_slice(&mut frame.children, rewrite)?;
                 rewrite_option_slice(&mut frame.values, rewrite)
             }
             Frame::Dict(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
-                frame.env.rewrite_pointers(rewrite)?;
+                frame.env.map_pointers(rewrite)?;
                 rewrite_slice(&mut frame.children, rewrite)?;
                 rewrite_option_slice(&mut frame.values, rewrite)
             }
             Frame::RecordUpdate(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
-                frame.env.rewrite_pointers(rewrite)?;
+                frame.env.map_pointers(rewrite)?;
                 rewrite_option(&mut frame.base_value, rewrite)?;
                 rewrite_slice(&mut frame.update_children, rewrite)?;
                 rewrite_option_slice(&mut frame.update_values, rewrite)
             }
             Frame::App(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
-                frame.env.rewrite_pointers(rewrite)?;
+                frame.env.map_pointers(rewrite)?;
                 rewrite_option(&mut frame.head_child, rewrite)?;
                 rewrite_slice(&mut frame.arg_children, rewrite)?;
                 rewrite_option_slice(&mut frame.arg_values, rewrite)?;
@@ -285,114 +200,97 @@ impl Collection for Frame {
             }
             Frame::Let(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
-                frame.env.rewrite_pointers(rewrite)?;
+                frame.env.map_pointers(rewrite)?;
                 rewrite_option(&mut frame.def_value, rewrite)
             }
             Frame::LetRec(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
-                frame.env.rewrite_pointers(rewrite)?;
+                frame.env.map_pointers(rewrite)?;
                 if let Some(env) = &mut frame.recursive_env {
-                    env.rewrite_pointers(rewrite)?;
+                    env.map_pointers(rewrite)?;
                 }
                 rewrite_slice(&mut frame.slots, rewrite)?;
                 rewrite_option(&mut frame.binding_value, rewrite)
             }
             Frame::Ite(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
-                frame.env.rewrite_pointers(rewrite)?;
+                frame.env.map_pointers(rewrite)?;
                 rewrite_option(&mut frame.cond_value, rewrite)
             }
             Frame::Match(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
-                frame.env.rewrite_pointers(rewrite)?;
+                frame.env.map_pointers(rewrite)?;
                 rewrite_option(&mut frame.scrutinee_value, rewrite)?;
                 if let Some(env) = &mut frame.matched_env {
-                    env.rewrite_pointers(rewrite)?;
+                    env.map_pointers(rewrite)?;
                 }
                 Ok(())
             }
             Frame::NativeCall(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
-                frame.task.rewrite_pointers(rewrite)
+                frame.task.map_pointers(rewrite)
             }
             Frame::NativeAsync(frame) => rewrite_pointer(&mut frame.parent, rewrite),
         }
     }
 }
 
-pub(crate) fn trace_option(pointer: Option<Pointer>, out: &mut Vec<Pointer>) {
-    if let Some(pointer) = pointer {
-        out.push(pointer);
-    }
-}
-
-fn trace_value_frame(
-    parent: &Pointer,
-    env: &Environment,
-    value: Option<Pointer>,
-    out: &mut Vec<Pointer>,
-) {
-    out.push(*parent);
-    env.trace_pointers(out);
-    trace_option(value, out);
-}
-
-pub(crate) fn rewrite_pointer(
+pub(crate) fn rewrite_pointer<E>(
     pointer: &mut Pointer,
-    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-) -> Result<(), EngineError> {
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+) -> Result<(), E> {
     *pointer = rewrite(*pointer)?;
     Ok(())
 }
 
-pub(crate) fn rewrite_option(
+pub(crate) fn rewrite_option<E>(
     pointer: &mut Option<Pointer>,
-    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-) -> Result<(), EngineError> {
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+) -> Result<(), E> {
     if let Some(value) = pointer {
         rewrite_pointer(value, rewrite)?;
     }
     Ok(())
 }
 
-pub(crate) fn rewrite_slice(
+pub(crate) fn rewrite_slice<E>(
     pointers: &mut [Pointer],
-    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-) -> Result<(), EngineError> {
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+) -> Result<(), E> {
     for pointer in pointers {
         rewrite_pointer(pointer, rewrite)?;
     }
     Ok(())
 }
 
-fn rewrite_option_slice(
+fn rewrite_option_slice<E>(
     pointers: &mut [Option<Pointer>],
-    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-) -> Result<(), EngineError> {
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+) -> Result<(), E> {
     for pointer in pointers {
         rewrite_option(pointer, rewrite)?;
     }
     Ok(())
 }
 
-pub(crate) fn rewrite_map_values(
+pub(crate) fn rewrite_map_values<E>(
     values: &mut BTreeMap<Symbol, Pointer>,
-    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-) -> Result<(), EngineError> {
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+) -> Result<(), E> {
     for pointer in values.values_mut() {
         rewrite_pointer(pointer, rewrite)?;
     }
     Ok(())
 }
 
-fn rewrite_value_frame(
+fn rewrite_value_frame<E>(
     parent: &mut Pointer,
     env: &mut Environment,
     value: &mut Option<Pointer>,
-    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-) -> Result<(), EngineError> {
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+) -> Result<(), E> {
     rewrite_pointer(parent, rewrite)?;
-    env.rewrite_pointers(rewrite)?;
+    env.map_pointers(rewrite)?;
     rewrite_option(value, rewrite)
 }
 
@@ -470,10 +368,10 @@ pub enum NativeUnaryShape {
     Result,
 }
 
-pub(crate) fn rewrite_entries(
+pub(crate) fn rewrite_entries<E>(
     entries: &mut [(Symbol, Pointer)],
-    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-) -> Result<(), EngineError> {
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+) -> Result<(), E> {
     for (_, pointer) in entries {
         rewrite_pointer(pointer, rewrite)?;
     }
