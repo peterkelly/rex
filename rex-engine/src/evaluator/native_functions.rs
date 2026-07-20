@@ -48,7 +48,7 @@ where
         NativeStep::Wait => {
             runtime
                 .heap
-                .replace_frame(&frame_ptr, Frame::NativeCall(frame))?;
+                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::NativeCall(frame)))?;
             Ok(EvalControl::Wait)
         }
         NativeStep::Return(value) => Ok(EvalControl::Return(value)),
@@ -56,42 +56,50 @@ where
             frame.state = FrNativeCallState::Waiting;
             runtime
                 .heap
-                .replace_frame(&frame_ptr, Frame::NativeCall(frame))?;
+                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::NativeCall(frame)))?;
             Ok(EvalControl::Push { expr, env })
         }
         NativeStep::Schedule(child_count) => {
             frame.state = FrNativeCallState::Waiting;
             runtime
                 .heap
-                .replace_frame(&frame_ptr, Frame::NativeCall(frame))?;
+                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::NativeCall(frame)))?;
 
             let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
             for index in 0..child_count {
                 let current_frame_ptr = roots.get(0)?;
-                let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+                let current_frame = match runtime
+                    .heap
+                    .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+                {
                     Frame::NativeCall(frame) => frame,
                     _ => return frame_kind_error("native call"),
                 };
                 let child_spec = current_frame.task.scheduled_child_spec(runtime, index)?;
                 let current_frame_ptr = roots.get(0)?;
-                let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
-                    current_frame_ptr,
-                    child_spec.expr,
-                    child_spec.env,
-                ))?;
+                let frame = frame_for_expr(current_frame_ptr, child_spec.expr, child_spec.env);
+                let child = runtime
+                    .heap
+                    .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
                 let current_frame_ptr = roots.get(0)?;
-                let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+                let mut current_frame = match runtime
+                    .heap
+                    .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+                {
                     Frame::NativeCall(frame) => frame,
                     _ => return frame_kind_error("native call"),
                 };
                 current_frame.task.push_scheduled_child(child)?;
-                runtime
-                    .heap
-                    .replace_frame(&current_frame_ptr, Frame::NativeCall(current_frame))?;
+                runtime.heap.with_locked(|heap| {
+                    heap.replace_frame(&current_frame_ptr, Frame::NativeCall(current_frame))
+                })?;
             }
 
             let current_frame_ptr = roots.get(0)?;
-            let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+            let current_frame = match runtime
+                .heap
+                .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+            {
                 Frame::NativeCall(frame) => frame,
                 _ => return frame_kind_error("native call"),
             };
@@ -617,7 +625,9 @@ impl NativeSequenceMap {
     where
         State: Clone + Send + Sync + 'static,
     {
-        let value = self.values.get(&runtime.heap, index)?;
+        let value = runtime
+            .heap
+            .with_locked(|heap| self.values.get(heap, index))?;
         native_apply_spec(
             self.func,
             self.func_type.clone(),
@@ -701,7 +711,11 @@ where
                 "native sequence filter received duplicate child result".into(),
             ));
         }
-        *slot = Some(runtime.heap.pointer_as_bool(&value)?);
+        *slot = Some(
+            runtime
+                .heap
+                .with_locked(|heap| heap.pointer_as_bool(&value))?,
+        );
         self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
             EngineError::Internal("native sequence filter received too many results".into())
         })?;
@@ -709,7 +723,11 @@ where
             let mut output = Vec::new();
             for (index, keep) in self.keep.iter().enumerate() {
                 match keep {
-                    Some(true) => output.push(self.values.get(&runtime.heap, index)?),
+                    Some(true) => output.push(
+                        runtime
+                            .heap
+                            .with_locked(|heap| self.values.get(heap, index))?,
+                    ),
                     Some(false) => {}
                     None => {
                         return Err(EngineError::Internal(
@@ -741,7 +759,9 @@ impl NativeSequenceFilter {
     where
         State: Clone + Send + Sync + 'static,
     {
-        let value = self.values.get(&runtime.heap, index)?;
+        let value = runtime
+            .heap
+            .with_locked(|heap| self.values.get(heap, index))?;
         native_apply_spec(
             self.func,
             self.func_type.clone(),
@@ -873,7 +893,9 @@ impl NativeSequenceFilterMap {
     where
         State: Clone + Send + Sync + 'static,
     {
-        let value = self.values.get(&runtime.heap, index)?;
+        let value = runtime
+            .heap
+            .with_locked(|heap| self.values.get(heap, index))?;
         native_apply_spec(
             self.func,
             self.func_type.clone(),
@@ -998,7 +1020,9 @@ impl NativeSequenceFlatMap {
     where
         State: Clone + Send + Sync + 'static,
     {
-        let value = self.values.get(&runtime.heap, index)?;
+        let value = runtime
+            .heap
+            .with_locked(|heap| self.values.get(heap, index))?;
         native_apply_spec(
             self.func,
             self.func_type.clone(),
@@ -1114,7 +1138,10 @@ where
     where
         State: Clone + Send + Sync + 'static,
     {
-        let value = if runtime.heap.pointer_as_bool(&value)? {
+        let value = if runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_bool(&value))?
+        {
             self.original
         } else {
             option_from_native_pointer(runtime, None)?
@@ -1381,7 +1408,9 @@ impl NativeFold {
                 })?
             }
         };
-        self.values.get(&runtime.heap, index)
+        runtime
+            .heap
+            .with_locked(|heap| self.values.get(heap, index))
     }
 }
 
@@ -1424,9 +1453,9 @@ where
         State: Clone + Send + Sync + 'static,
     {
         if self.entries.is_empty() {
-            return Ok(NativeStep::Return(
-                runtime.heap.alloc_ptr_dict(BTreeMap::new())?,
-            ));
+            return Ok(NativeStep::Return(runtime.heap.with_locked(|heap| {
+                Ok(heap.alloc_ptr_dict(BTreeMap::new())?.into_pointer())
+            })?));
         }
         self.children.clear();
         self.output.clear();
@@ -1462,9 +1491,9 @@ where
             EngineError::Internal("native dict map received too many results".into())
         })?;
         if self.remaining == 0 {
-            return Ok(NativeStep::Return(
-                runtime.heap.alloc_ptr_dict(self.output.clone())?,
-            ));
+            return Ok(NativeStep::Return(runtime.heap.with_locked(|heap| {
+                Ok(heap.alloc_ptr_dict(self.output.clone())?.into_pointer())
+            })?));
         }
         Ok(NativeStep::Wait)
     }
@@ -1524,7 +1553,9 @@ where
         State: Clone + Send + Sync + 'static,
     {
         if self.entries.is_empty() {
-            let dict = runtime.heap.alloc_ptr_dict(BTreeMap::new())?;
+            let dict = runtime
+                .heap
+                .with_locked(|heap| Ok(heap.alloc_ptr_dict(BTreeMap::new())?.into_pointer()))?;
             return Ok(NativeStep::Return(result_from_native_pointer(
                 runtime,
                 Ok(dict),
@@ -1563,7 +1594,9 @@ where
         }
         self.next_index += 1;
         if self.next_index == self.entries.len() {
-            let dict = runtime.heap.alloc_ptr_dict(self.output.clone())?;
+            let dict = runtime
+                .heap
+                .with_locked(|heap| Ok(heap.alloc_ptr_dict(self.output.clone())?.into_pointer()))?;
             return Ok(NativeStep::Return(result_from_native_pointer(
                 runtime,
                 Ok(dict),
@@ -1653,7 +1686,10 @@ where
                 self.apply_second(runtime)
             }
             NativeArrayEqState::ApplySecond => {
-                if !runtime.heap.pointer_as_bool(&value)? {
+                if !runtime
+                    .heap
+                    .with_locked(|heap| heap.pointer_as_bool(&value))?
+                {
                     return self.result(runtime, false);
                 }
                 self.step = None;
@@ -1686,7 +1722,9 @@ impl NativeArrayEq {
             self.elem_type.clone(),
             Type::fun(self.elem_type.clone(), bool_ty),
         );
-        let lhs = self.xs.get(&runtime.heap, self.next_index)?;
+        let lhs = runtime
+            .heap
+            .with_locked(|heap| self.xs.get(heap, self.next_index))?;
         let roots = runtime.heap.temp_roots(vec![lhs])?;
         let eq = overloaded_pointer(runtime, "==", eq_ty.clone())?;
         let lhs = roots.get(0)?;
@@ -1705,7 +1743,9 @@ impl NativeArrayEq {
         native_apply_step(
             step,
             step_ty,
-            self.ys.get(&runtime.heap, self.next_index)?,
+            runtime
+                .heap
+                .with_locked(|heap| self.ys.get(heap, self.next_index))?,
             self.elem_type.clone(),
         )
     }
@@ -1718,9 +1758,10 @@ impl NativeArrayEq {
     where
         State: Clone + Send + Sync + 'static,
     {
-        Ok(NativeStep::Return(runtime.heap.alloc_ptr_bool(
-            if self.negate { !equal } else { equal },
-        )?))
+        let b = if self.negate { !equal } else { equal };
+        Ok(NativeStep::Return(runtime.heap.with_locked(|heap| {
+            Ok(heap.alloc_ptr_bool(b)?.into_pointer())
+        })?))
     }
 }
 
@@ -1768,7 +1809,7 @@ where
                 self.elem_type.clone(),
             ));
         }
-        let first = self.values.get(&runtime.heap, 0)?;
+        let first = runtime.heap.with_locked(|heap| self.values.get(heap, 0))?;
         self.acc = Some(first);
         self.next_index = 1;
         if self.next_index == self.values.len() {
@@ -1861,7 +1902,9 @@ impl NativeSum {
         native_apply_step(
             step,
             step_ty,
-            self.values.get(&runtime.heap, self.next_index)?,
+            runtime
+                .heap
+                .with_locked(|heap| self.values.get(heap, self.next_index))?,
             self.elem_type.clone(),
         )
     }
@@ -1918,7 +1961,7 @@ where
         if self.values.is_empty() {
             return Err(EngineError::EmptySequence);
         }
-        self.acc = Some(self.values.get(&runtime.heap, 0)?);
+        self.acc = Some(runtime.heap.with_locked(|heap| self.values.get(heap, 0))?);
         self.next_index = 1;
         if self.next_index == self.values.len() {
             self.state = NativeMeanState::ApplyDivFirst;
@@ -2007,7 +2050,9 @@ impl NativeMean {
         native_apply_step(
             step,
             step_ty,
-            self.values.get(&runtime.heap, self.next_index)?,
+            runtime
+                .heap
+                .with_locked(|heap| self.values.get(heap, self.next_index))?,
             self.elem_type.clone(),
         )
     }
@@ -2088,7 +2133,9 @@ fn option_value_ptr<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let (tag, args) = runtime.heap.pointer_as_adt(&pointer)?;
+    let (tag, args) = runtime
+        .heap
+        .with_locked(|heap| heap.pointer_as_adt(&pointer))?;
     if tag.as_ref() == "Some" && args.len() == 1 {
         Ok(Some(args[0]))
     } else if tag.as_ref() == "None" && args.is_empty() {
@@ -2096,7 +2143,10 @@ where
     } else {
         Err(EngineError::NativeType {
             expected: "Option".into(),
-            got: runtime.heap.type_name(&pointer)?.into(),
+            got: runtime
+                .heap
+                .with_locked(|heap| heap.type_name(&pointer))?
+                .into(),
         })
     }
 }
@@ -2109,10 +2159,16 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match value {
-        Some(value) => runtime
-            .heap
-            .alloc_ptr_adt(Symbol::intern("Some"), vec![value]),
-        None => runtime.heap.alloc_ptr_adt(Symbol::intern("None"), vec![]),
+        Some(value) => runtime.heap.with_locked(|heap| {
+            Ok(heap
+                .alloc_ptr_adt(Symbol::intern("Some"), vec![value])?
+                .into_pointer())
+        }),
+        None => runtime.heap.with_locked(|heap| {
+            Ok(heap
+                .alloc_ptr_adt(Symbol::intern("None"), vec![])?
+                .into_pointer())
+        }),
     }
 }
 
@@ -2124,12 +2180,16 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match value {
-        Ok(value) => runtime
-            .heap
-            .alloc_ptr_adt(Symbol::intern("Ok"), vec![value]),
-        Err(value) => runtime
-            .heap
-            .alloc_ptr_adt(Symbol::intern("Err"), vec![value]),
+        Ok(value) => runtime.heap.with_locked(|heap| {
+            Ok(heap
+                .alloc_ptr_adt(Symbol::intern("Ok"), vec![value])?
+                .into_pointer())
+        }),
+        Err(value) => runtime.heap.with_locked(|heap| {
+            Ok(heap
+                .alloc_ptr_adt(Symbol::intern("Err"), vec![value])?
+                .into_pointer())
+        }),
     }
 }
 
@@ -2140,7 +2200,9 @@ fn result_value_ptr<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let (tag, args) = runtime.heap.pointer_as_adt(&pointer)?;
+    let (tag, args) = runtime
+        .heap
+        .with_locked(|heap| heap.pointer_as_adt(&pointer))?;
     if tag.as_ref() == "Ok" && args.len() == 1 {
         Ok(Ok(args[0]))
     } else if tag.as_ref() == "Err" && args.len() == 1 {
@@ -2148,7 +2210,10 @@ where
     } else {
         Err(EngineError::NativeType {
             expected: "Result".into(),
-            got: runtime.heap.type_name(&pointer)?.into(),
+            got: runtime
+                .heap
+                .with_locked(|heap| heap.type_name(&pointer))?
+                .into(),
         })
     }
 }
@@ -2163,9 +2228,11 @@ where
 {
     let (name, typ, applied, applied_types) =
         OverloadedFn::new(Symbol::intern(name), typ).into_parts();
-    runtime
-        .heap
-        .alloc_ptr_overloaded(name, typ, applied, applied_types)
+    runtime.heap.with_locked(|heap| {
+        Ok(heap
+            .alloc_ptr_overloaded(name, typ, applied, applied_types)?
+            .into_pointer())
+    })
 }
 
 fn native_eval_var_step(name: Symbol, typ: Type) -> NativeStep {
@@ -2194,12 +2261,12 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match elem_ty.as_ref() {
-        TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::F32) => {
-            runtime.heap.alloc_ptr_f32(len as f32)
-        }
-        TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::F64) => {
-            runtime.heap.alloc_ptr_f64(len as f64)
-        }
+        TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::F32) => runtime
+            .heap
+            .with_locked(|heap| Ok(heap.alloc_ptr_f32(len as f32)?.into_pointer())),
+        TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::F64) => runtime
+            .heap
+            .with_locked(|heap| Ok(heap.alloc_ptr_f64(len as f64)?.into_pointer())),
         _ => Err(EngineError::NativeType {
             expected: "f32 or f64".into(),
             got: elem_ty.to_string(),

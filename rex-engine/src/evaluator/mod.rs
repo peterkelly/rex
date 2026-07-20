@@ -15,7 +15,7 @@ use crate::{
     error::EngineError,
     evaluator::{context::Context, eval::eval_typed_expr, runtime_core::RuntimeCore},
     util::split_fun,
-    value::{Cell, Handle, Heap, HeapAccess, Pointer},
+    value::{Cell, Handle, Heap, HeapState, Pointer},
 };
 
 pub(crate) mod context;
@@ -139,9 +139,9 @@ fn main_input_args(
         .collect()
 }
 
-fn cell_type(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Type, EngineError> {
+fn cell_type(heap: &HeapState, cell: &Cell) -> Result<Type, EngineError> {
     let pointer_type = |pointer: &Pointer| -> Result<Type, EngineError> {
-        let cell = heap.get(pointer)?;
+        let cell = heap.get_cell_from_pointer(pointer)?;
         cell_type(heap, cell)
     };
 
@@ -177,7 +177,7 @@ fn cell_type(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Type, EngineError> {
             end,
             elements,
         } => {
-            let elements_cell = heap.get(elements)?;
+            let elements_cell = heap.get_cell_from_pointer(elements)?;
             match elements_cell {
                 Cell::Data(elems) => {
                     if *start > *end || *end > elems.len() {
@@ -270,8 +270,8 @@ pub(crate) fn resolve_arg_type(
     arg: &Pointer,
 ) -> Result<Type, EngineError> {
     let infer_from_cell = |ty_hint: Option<&Type>| -> Result<Type, EngineError> {
-        heap.with_access(|heap| {
-            let cell = heap.get(arg)?;
+        heap.with_locked(|heap| {
+            let cell = heap.get_cell_from_pointer(arg)?;
             match ty_hint {
                 Some(ty) => match cell_type(heap, cell) {
                     Ok(val_ty) if val_ty.ftv().is_empty() => Ok(val_ty),

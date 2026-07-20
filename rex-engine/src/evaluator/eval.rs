@@ -21,7 +21,10 @@ use crate::{
         FrValueState, FrVar, Frame,
     },
     util::{is_function_type, split_fun},
-    value::{Cell, Closure, Collection, Handle, Heap, HeapAccess, ListItems, Pointer, TempRoots},
+    value::{
+        Cell, Closure, Collection, Handle, Heap, HeapState, ListItems, Pointer, Reference,
+        TempRoots,
+    },
 };
 use rex_ast::{Pattern, Symbol};
 use rex_typesystem::{
@@ -54,9 +57,10 @@ pub(crate) async fn eval_typed_expr<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let root_parent = runtime
+    let root_parent_ptr = runtime
         .heap
-        .handle(runtime.heap.alloc_ptr_root_frame_parent()?)?;
+        .with_locked(|heap| Ok(heap.alloc_ptr_root_frame_parent()?.into_pointer()))?;
+    let root_parent = runtime.heap.handle(root_parent_ptr)?;
     let env = rooted_env.to_environment()?;
     let (env, expr) = if input_args.is_empty() {
         (env, expr)
@@ -92,15 +96,23 @@ where
     State: Clone + Send + Sync + 'static,
 {
     let initial_parent = initial_parent.pointer_for_heap(&runtime.heap)?;
-    let root_frame = runtime
-        .heap
-        .alloc_ptr_frame(frame_for_expr(initial_parent, expr, env))?;
+    let root_frame = runtime.heap.with_locked(|heap| {
+        Ok(heap
+            .alloc_ptr_frame(frame_for_expr(initial_parent, expr, env))?
+            .into_pointer())
+    })?;
     let mut scheduler = EvalScheduler::new(root_frame, runtime.parallelism_controller.clone());
 
+    let mut iteration = 0;
     loop {
         if poll_pending_native(&mut runtime, &mut scheduler, false).await? {
             continue;
         }
+
+        if iteration % 1000 == 0 {
+            println!("Iteration {}", iteration);
+        }
+        iteration += 1;
 
         let mut item = match scheduler.pop_next() {
             Some(item) => item,
@@ -120,7 +132,9 @@ where
         let roots = runtime.heap.temp_roots(protected)?;
         refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
 
-        let frame = runtime.heap.pointer_as_frame(&item.frame)?;
+        let frame = runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_frame(&item.frame))?;
         let control = match item.returned {
             Some(returned) => {
                 eval_receive(&runtime, item.frame, frame, returned.child, returned.value)?
@@ -131,14 +145,17 @@ where
 
         match control {
             EvalControl::Push { expr, env } => {
+                let frame = frame_for_expr(item.frame, expr, env);
                 let child = runtime
                     .heap
-                    .alloc_ptr_frame(frame_for_expr(item.frame, expr, env))?;
+                    .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
                 refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
                 scheduler.schedule_next(EvalWorkItem::enter(child));
             }
             EvalControl::PushFrame(frame) => {
-                let child = runtime.heap.alloc_ptr_frame(*frame)?;
+                let child = runtime
+                    .heap
+                    .with_locked(|heap| Ok(heap.alloc_ptr_frame(*frame)?.into_pointer()))?;
                 refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
                 scheduler.schedule_next(EvalWorkItem::enter(child));
             }
@@ -152,9 +169,10 @@ where
                 let mut protected = Vec::new();
                 call.trace_pointers(&mut protected);
                 let call_roots = runtime.heap.temp_roots(protected)?;
+                let frame = Frame::NativeAsync(FrNativeAsync { parent: item.frame });
                 let child = runtime
                     .heap
-                    .alloc_ptr_frame(Frame::NativeAsync(FrNativeAsync { parent: item.frame }))?;
+                    .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
                 refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
                 if call_roots.has_collected_since_creation()? {
                     let mut cursor = 0;
@@ -163,10 +181,14 @@ where
                 scheduler.schedule_pending_native(child, call);
             }
             EvalControl::Return(value) => {
-                let mut frame = runtime.heap.pointer_as_frame(&item.frame)?;
+                let mut frame = runtime
+                    .heap
+                    .with_locked(|heap| heap.pointer_as_frame(&item.frame))?;
                 let parent = *frame.parent();
                 frame.mark_complete(value);
-                runtime.heap.replace_frame(&item.frame, frame)?;
+                runtime
+                    .heap
+                    .with_locked(|heap| heap.replace_frame(&item.frame, frame))?;
                 match stop {
                     EvalStop::RootSentinel => {
                         if is_root_frame_parent(&runtime.heap, &parent)? {
@@ -398,24 +420,26 @@ where
     match frame {
         Frame::Bool(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Bool(value) => {
-                Ok(EvalControl::Return(runtime.heap.alloc_ptr_bool(*value)?))
+                Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
+                    Ok(heap.alloc_ptr_bool(*value)?.into_pointer())
+                })?))
             }
             _ => frame_kind_error("bool"),
         },
         Frame::Uint(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Uint(value) => Ok(EvalControl::Return(alloc_uint_literal_as(
-                runtime,
-                *value,
-                &frame.expr.typ,
-            )?)),
+            TypedExprKind::Uint(value) => {
+                Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
+                    Ok(alloc_uint_literal_as(heap, *value, &frame.expr.typ)?.into_pointer())
+                })?))
+            }
             _ => frame_kind_error("uint"),
         },
         Frame::Int(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Int(value) => Ok(EvalControl::Return(alloc_int_literal_as(
-                runtime,
-                *value,
-                &frame.expr.typ,
-            )?)),
+            TypedExprKind::Int(value) => {
+                Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
+                    Ok(alloc_int_literal_as(heap, *value, &frame.expr.typ)?.into_pointer())
+                })?))
+            }
             _ => frame_kind_error("int"),
         },
         Frame::Float(frame) => match frame.expr.kind.as_ref() {
@@ -427,21 +451,27 @@ where
             _ => frame_kind_error("float"),
         },
         Frame::String(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::String(value) => Ok(EvalControl::Return(
-                runtime.heap.alloc_ptr_string(value.clone())?,
-            )),
+            TypedExprKind::String(value) => {
+                Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
+                    Ok(heap.alloc_ptr_string(value.clone())?.into_pointer())
+                })?))
+            }
             _ => frame_kind_error("string"),
         },
         Frame::Uuid(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Uuid(value) => {
-                Ok(EvalControl::Return(runtime.heap.alloc_ptr_uuid(*value)?))
+                Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
+                    Ok(heap.alloc_ptr_uuid(*value)?.into_pointer())
+                })?))
             }
             _ => frame_kind_error("uuid"),
         },
         Frame::DateTime(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::DateTime(value) => Ok(EvalControl::Return(
-                runtime.heap.alloc_ptr_datetime(*value)?,
-            )),
+            TypedExprKind::DateTime(value) => {
+                Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
+                    Ok(heap.alloc_ptr_datetime(*value)?.into_pointer())
+                })?))
+            }
             _ => frame_kind_error("datetime"),
         },
         Frame::Hole(_) => Err(EngineError::UnsupportedExpr),
@@ -457,7 +487,7 @@ where
             let env = frame.env.clone();
             runtime
                 .heap
-                .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
+                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::RecordUpdate(frame)))?;
             Ok(EvalControl::Push { expr: base, env })
         }
         Frame::Var(mut frame) => match frame.expr.kind.as_ref() {
@@ -466,12 +496,16 @@ where
                     EvalVarResult::Value(value) => Ok(EvalControl::Return(value)),
                     EvalVarResult::Push { expr, env } => {
                         frame.state = FrValueState::Enter;
-                        runtime.heap.replace_frame(&frame_ptr, Frame::Var(frame))?;
+                        runtime.heap.with_locked(|heap| {
+                            heap.replace_frame(&frame_ptr, Frame::Var(frame))
+                        })?;
                         Ok(EvalControl::Push { expr, env })
                     }
                     EvalVarResult::AwaitNative(future) => {
                         frame.state = FrValueState::Enter;
-                        runtime.heap.replace_frame(&frame_ptr, Frame::Var(frame))?;
+                        runtime.heap.with_locked(|heap| {
+                            heap.replace_frame(&frame_ptr, Frame::Var(frame))
+                        })?;
                         Ok(EvalControl::AwaitNative(future))
                     }
                 }
@@ -488,7 +522,7 @@ where
             let env = frame.env.clone();
             runtime
                 .heap
-                .replace_frame(&frame_ptr, Frame::Project(frame))?;
+                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Project(frame)))?;
             Ok(EvalControl::Push { expr, env })
         }
         Frame::Lam(frame) => match frame.expr.kind.as_ref() {
@@ -496,13 +530,17 @@ where
                 let param_ty = split_fun(&frame.expr.typ)
                     .map(|(arg, _)| arg)
                     .ok_or_else(|| EngineError::NotCallable(frame.expr.typ.to_string()))?;
-                let value = runtime.heap.alloc_ptr_closure(
-                    frame.env.clone(),
-                    param.clone(),
-                    param_ty,
-                    frame.expr.typ.clone(),
-                    Arc::clone(body),
-                )?;
+                let value = runtime.heap.with_locked(|heap| {
+                    Ok(heap
+                        .alloc_ptr_closure(
+                            frame.env.clone(),
+                            param.clone(),
+                            param_ty,
+                            frame.expr.typ.clone(),
+                            Arc::clone(body),
+                        )?
+                        .into_pointer())
+                })?;
                 Ok(EvalControl::Return(value))
             }
             _ => frame_kind_error("lambda"),
@@ -514,7 +552,9 @@ where
             };
             frame.state = FrLetState::EvalDef;
             let env = frame.env.clone();
-            runtime.heap.replace_frame(&frame_ptr, Frame::Let(frame))?;
+            runtime
+                .heap
+                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Let(frame)))?;
             Ok(EvalControl::Push { expr: def, env })
         }
         Frame::LetRec(frame) => {
@@ -528,7 +568,9 @@ where
             let frame_roots = runtime.heap.temp_roots(protected.clone())?;
             let mut slot_roots = Vec::with_capacity(bindings.len());
             for (name, _) in &bindings {
-                let placeholder = runtime.heap.alloc_ptr_uninitialized(name.clone())?;
+                let placeholder = runtime.heap.with_locked(|heap| {
+                    Ok(heap.alloc_ptr_uninitialized(name.clone())?.into_pointer())
+                })?;
                 slot_roots.push(runtime.heap.temp_roots(vec![placeholder])?);
             }
             let frame_ptr = frame_roots.get(0)?;
@@ -550,7 +592,7 @@ where
                 frame.state = FrLetRecState::EvalBody;
                 runtime
                     .heap
-                    .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
+                    .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::LetRec(frame)))?;
                 return Ok(EvalControl::Push {
                     expr: body,
                     env: recursive_env,
@@ -560,7 +602,7 @@ where
             let def = Arc::clone(&bindings[0].1);
             runtime
                 .heap
-                .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
+                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::LetRec(frame)))?;
             Ok(EvalControl::Push {
                 expr: def,
                 env: recursive_env,
@@ -573,7 +615,9 @@ where
             };
             frame.state = FrBranchState::EvalCondition;
             let env = frame.env.clone();
-            runtime.heap.replace_frame(&frame_ptr, Frame::Ite(frame))?;
+            runtime
+                .heap
+                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Ite(frame)))?;
             Ok(EvalControl::Push { expr: cond, env })
         }
         Frame::Match(mut frame) => {
@@ -585,7 +629,7 @@ where
             let env = frame.env.clone();
             runtime
                 .heap
-                .replace_frame(&frame_ptr, Frame::Match(frame))?;
+                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Match(frame)))?;
             Ok(EvalControl::Push {
                 expr: scrutinee,
                 env,
@@ -609,7 +653,9 @@ where
         _ => return frame_kind_error("tuple"),
     };
     if elems.is_empty() {
-        return Ok(EvalControl::Return(runtime.heap.alloc_ptr_tuple(vec![])?));
+        return Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
+            Ok(heap.alloc_ptr_tuple(vec![])?.into_pointer())
+        })?));
     }
 
     frame.state = FrSequenceState::EvalItem;
@@ -618,33 +664,41 @@ where
     frame.remaining = elems.len();
     runtime
         .heap
-        .replace_frame(&frame_ptr, Frame::Tuple(frame))?;
+        .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Tuple(frame)))?;
 
     let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
     for expr in elems {
         let current_frame_ptr = roots.get(0)?;
-        let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        let current_frame = match runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+        {
             Frame::Tuple(frame) => frame,
             _ => return frame_kind_error("tuple"),
         };
-        let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
-            current_frame_ptr,
-            expr,
-            current_frame.env.clone(),
-        ))?;
+        let frame = frame_for_expr(current_frame_ptr, expr, current_frame.env.clone());
+        let child = runtime
+            .heap
+            .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
         let current_frame_ptr = roots.get(0)?;
-        let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        let mut current_frame = match runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+        {
             Frame::Tuple(frame) => frame,
             _ => return frame_kind_error("tuple"),
         };
         current_frame.children.push(child);
-        runtime
-            .heap
-            .replace_frame(&current_frame_ptr, Frame::Tuple(current_frame))?;
+        runtime.heap.with_locked(|heap| {
+            heap.replace_frame(&current_frame_ptr, Frame::Tuple(current_frame))
+        })?;
     }
 
     let current_frame_ptr = roots.get(0)?;
-    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+    let current_frame = match runtime
+        .heap
+        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+    {
         Frame::Tuple(frame) => frame,
         _ => return frame_kind_error("tuple"),
     };
@@ -664,40 +718,53 @@ where
         _ => return frame_kind_error("list"),
     };
     if elems.is_empty() {
-        return Ok(EvalControl::Return(runtime.heap.alloc_ptr_empty()?));
+        let ptr = runtime
+            .heap
+            .with_locked(|heap| Ok(heap.alloc_ptr_empty()?.into_pointer()))?;
+        return Ok(EvalControl::Return(ptr));
     }
 
     frame.state = FrSequenceState::EvalItem;
     frame.children = Vec::with_capacity(elems.len());
     frame.values = vec![None; elems.len()];
     frame.remaining = elems.len();
-    runtime.heap.replace_frame(&frame_ptr, Frame::List(frame))?;
+    runtime
+        .heap
+        .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::List(frame)))?;
 
     let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
     for expr in elems {
         let current_frame_ptr = roots.get(0)?;
-        let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        let current_frame = match runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+        {
             Frame::List(frame) => frame,
             _ => return frame_kind_error("list"),
         };
-        let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
-            current_frame_ptr,
-            expr,
-            current_frame.env.clone(),
-        ))?;
+        let frame = frame_for_expr(current_frame_ptr, expr, current_frame.env.clone());
+        let child = runtime
+            .heap
+            .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
         let current_frame_ptr = roots.get(0)?;
-        let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        let mut current_frame = match runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+        {
             Frame::List(frame) => frame,
             _ => return frame_kind_error("list"),
         };
         current_frame.children.push(child);
-        runtime
-            .heap
-            .replace_frame(&current_frame_ptr, Frame::List(current_frame))?;
+        runtime.heap.with_locked(|heap| {
+            heap.replace_frame(&current_frame_ptr, Frame::List(current_frame))
+        })?;
     }
 
     let current_frame_ptr = roots.get(0)?;
-    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+    let current_frame = match runtime
+        .heap
+        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+    {
         Frame::List(frame) => frame,
         _ => return frame_kind_error("list"),
     };
@@ -714,42 +781,52 @@ where
 {
     let exprs = dict_exprs_for_keys(&frame, &frame.keys)?;
     if exprs.is_empty() {
-        return Ok(EvalControl::Return(
-            runtime.heap.alloc_ptr_dict(BTreeMap::new())?,
-        ));
+        return Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
+            Ok(heap.alloc_ptr_dict(BTreeMap::new())?.into_pointer())
+        })?));
     }
 
     frame.state = FrSequenceState::EvalItem;
     frame.children = Vec::with_capacity(exprs.len());
     frame.values = vec![None; exprs.len()];
     frame.remaining = exprs.len();
-    runtime.heap.replace_frame(&frame_ptr, Frame::Dict(frame))?;
+    runtime
+        .heap
+        .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Dict(frame)))?;
 
     let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
     for expr in exprs {
         let current_frame_ptr = roots.get(0)?;
-        let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        let current_frame = match runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+        {
             Frame::Dict(frame) => frame,
             _ => return frame_kind_error("dict"),
         };
-        let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
-            current_frame_ptr,
-            expr,
-            current_frame.env.clone(),
-        ))?;
+        let frame = frame_for_expr(current_frame_ptr, expr, current_frame.env.clone());
+        let child = runtime
+            .heap
+            .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
         let current_frame_ptr = roots.get(0)?;
-        let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        let mut current_frame = match runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+        {
             Frame::Dict(frame) => frame,
             _ => return frame_kind_error("dict"),
         };
         current_frame.children.push(child);
-        runtime
-            .heap
-            .replace_frame(&current_frame_ptr, Frame::Dict(current_frame))?;
+        runtime.heap.with_locked(|heap| {
+            heap.replace_frame(&current_frame_ptr, Frame::Dict(current_frame))
+        })?;
     }
 
     let current_frame_ptr = roots.get(0)?;
-    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+    let current_frame = match runtime
+        .heap
+        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+    {
         Frame::Dict(frame) => frame,
         _ => return frame_kind_error("dict"),
     };
@@ -771,33 +848,41 @@ where
     frame.remaining_updates = exprs.len();
     runtime
         .heap
-        .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
+        .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::RecordUpdate(frame)))?;
 
     let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
     for expr in exprs {
         let current_frame_ptr = roots.get(0)?;
-        let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        let current_frame = match runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+        {
             Frame::RecordUpdate(frame) => frame,
             _ => return frame_kind_error("record update"),
         };
-        let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
-            current_frame_ptr,
-            expr,
-            current_frame.env.clone(),
-        ))?;
+        let frame = frame_for_expr(current_frame_ptr, expr, current_frame.env.clone());
+        let child = runtime
+            .heap
+            .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
         let current_frame_ptr = roots.get(0)?;
-        let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        let mut current_frame = match runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+        {
             Frame::RecordUpdate(frame) => frame,
             _ => return frame_kind_error("record update"),
         };
         current_frame.update_children.push(child);
-        runtime
-            .heap
-            .replace_frame(&current_frame_ptr, Frame::RecordUpdate(current_frame))?;
+        runtime.heap.with_locked(|heap| {
+            heap.replace_frame(&current_frame_ptr, Frame::RecordUpdate(current_frame))
+        })?;
     }
 
     let current_frame_ptr = roots.get(0)?;
-    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+    let current_frame = match runtime
+        .heap
+        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+    {
         Frame::RecordUpdate(frame) => frame,
         _ => return frame_kind_error("record update"),
     };
@@ -837,53 +922,68 @@ where
     frame.next_arg_index = 0;
     frame.func = None;
     frame.arg = None;
-    runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
+    runtime
+        .heap
+        .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::App(frame)))?;
 
     let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
     let current_frame_ptr = roots.get(0)?;
-    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+    let current_frame = match runtime
+        .heap
+        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+    {
         Frame::App(frame) => frame,
         _ => return frame_kind_error("application"),
     };
-    let head_child = runtime.heap.alloc_ptr_frame(frame_for_expr(
-        current_frame_ptr,
-        head,
-        current_frame.env.clone(),
-    ))?;
+    let frame = frame_for_expr(current_frame_ptr, head, current_frame.env.clone());
+    let head_child = runtime
+        .heap
+        .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
     let current_frame_ptr = roots.get(0)?;
-    let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+    let mut current_frame = match runtime
+        .heap
+        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+    {
         Frame::App(frame) => frame,
         _ => return frame_kind_error("application"),
     };
     current_frame.head_child = Some(head_child);
     runtime
         .heap
-        .replace_frame(&current_frame_ptr, Frame::App(current_frame))?;
+        .with_locked(|heap| heap.replace_frame(&current_frame_ptr, Frame::App(current_frame)))?;
 
     for expr in arg_exprs {
         let current_frame_ptr = roots.get(0)?;
-        let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        let current_frame = match runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+        {
             Frame::App(frame) => frame,
             _ => return frame_kind_error("application"),
         };
-        let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
-            current_frame_ptr,
-            expr,
-            current_frame.env.clone(),
-        ))?;
+        let frame = frame_for_expr(current_frame_ptr, expr, current_frame.env.clone());
+        let child = runtime
+            .heap
+            .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
         let current_frame_ptr = roots.get(0)?;
-        let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        let mut current_frame = match runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+        {
             Frame::App(frame) => frame,
             _ => return frame_kind_error("application"),
         };
         current_frame.arg_children.push(child);
-        runtime
-            .heap
-            .replace_frame(&current_frame_ptr, Frame::App(current_frame))?;
+        runtime.heap.with_locked(|heap| {
+            heap.replace_frame(&current_frame_ptr, Frame::App(current_frame))
+        })?;
     }
 
     let current_frame_ptr = roots.get(0)?;
-    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+    let current_frame = match runtime
+        .heap
+        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+    {
         Frame::App(frame) => frame,
         _ => return frame_kind_error("application"),
     };
@@ -1069,11 +1169,13 @@ where
                     .ok_or_else(|| {
                         EngineError::Internal("tuple completed with missing result".into())
                     })?;
-                return Ok(EvalControl::Return(runtime.heap.alloc_ptr_tuple(values)?));
+                return Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
+                    Ok(heap.alloc_ptr_tuple(values)?.into_pointer())
+                })?));
             }
             runtime
                 .heap
-                .replace_frame(&frame_ptr, Frame::Tuple(frame))?;
+                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Tuple(frame)))?;
             Ok(EvalControl::Wait)
         }
         Frame::List(mut frame) => {
@@ -1094,7 +1196,9 @@ where
                     .alloc_ptr_list(completed_values("list", &frame.values)?)?;
                 return Ok(EvalControl::Return(list));
             }
-            runtime.heap.replace_frame(&frame_ptr, Frame::List(frame))?;
+            runtime
+                .heap
+                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::List(frame)))?;
             Ok(EvalControl::Wait)
         }
         Frame::Dict(mut frame) => {
@@ -1115,9 +1219,13 @@ where
                     &frame.keys,
                     completed_values("dict", &frame.values)?,
                 )?;
-                return Ok(EvalControl::Return(runtime.heap.alloc_ptr_dict(values)?));
+                return Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
+                    Ok(heap.alloc_ptr_dict(values)?.into_pointer())
+                })?));
             }
-            runtime.heap.replace_frame(&frame_ptr, Frame::Dict(frame))?;
+            runtime
+                .heap
+                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Dict(frame)))?;
             Ok(EvalControl::Wait)
         }
         Frame::RecordUpdate(mut frame) => match frame.state {
@@ -1150,9 +1258,9 @@ where
                     let result = apply_record_update_values(runtime, base, update_values)?;
                     return Ok(EvalControl::Return(result));
                 }
-                runtime
-                    .heap
-                    .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
+                runtime.heap.with_locked(|heap| {
+                    heap.replace_frame(&frame_ptr, Frame::RecordUpdate(frame))
+                })?;
                 Ok(EvalControl::Wait)
             }
             _ => unexpected_child_result("record update"),
@@ -1165,7 +1273,9 @@ where
                     frame.next_arg_index = 0;
                     return continue_app_after_apply(runtime, frame_ptr, frame, None);
                 }
-                runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
+                runtime
+                    .heap
+                    .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::App(frame)))?;
                 Ok(EvalControl::Wait)
             }
             FrAppState::ApplyArg => {
@@ -1190,7 +1300,9 @@ where
                 frame.state = FrLetState::EvalBody;
                 let env = frame.env.extend(name.clone(), value);
                 let body = Arc::clone(body);
-                runtime.heap.replace_frame(&frame_ptr, Frame::Let(frame))?;
+                runtime
+                    .heap
+                    .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Let(frame)))?;
                 Ok(EvalControl::Push { expr: body, env })
             }
             FrLetState::EvalBody => Ok(EvalControl::Return(value)),
@@ -1206,7 +1318,9 @@ where
                     EngineError::Internal("let rec frame slot index out of bounds".into())
                 })?;
                 let cell = runtime.heap.clone_cell(&value)?;
-                runtime.heap.overwrite(&slot, cell)?;
+                runtime
+                    .heap
+                    .with_locked(|heap| heap.overwrite(&slot, cell))?;
                 frame.binding_value = Some(value);
                 frame.next_binding_index += 1;
                 let recursive_env = frame.recursive_env.clone().ok_or_else(|| {
@@ -1217,7 +1331,7 @@ where
                     let body = Arc::clone(body);
                     runtime
                         .heap
-                        .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
+                        .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::LetRec(frame)))?;
                     return Ok(EvalControl::Push {
                         expr: body,
                         env: recursive_env,
@@ -1226,7 +1340,7 @@ where
                 let def = Arc::clone(&bindings[frame.next_binding_index].1);
                 runtime
                     .heap
-                    .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
+                    .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::LetRec(frame)))?;
                 Ok(EvalControl::Push {
                     expr: def,
                     env: recursive_env,
@@ -1245,7 +1359,10 @@ where
                 else {
                     return frame_kind_error("if");
                 };
-                let selected = match runtime.heap.pointer_as_bool(&value) {
+                let selected = match runtime
+                    .heap
+                    .with_locked(|heap| heap.pointer_as_bool(&value))
+                {
                     Ok(true) => Arc::clone(then_expr),
                     Ok(false) => Arc::clone(else_expr),
                     Err(EngineError::NativeType { got, .. }) => {
@@ -1257,7 +1374,9 @@ where
                 frame.selected = Some(Arc::clone(&selected));
                 frame.state = FrBranchState::EvalSelected;
                 let env = frame.env.clone();
-                runtime.heap.replace_frame(&frame_ptr, Frame::Ite(frame))?;
+                runtime
+                    .heap
+                    .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Ite(frame)))?;
                 Ok(EvalControl::Push {
                     expr: selected,
                     env,
@@ -1271,11 +1390,14 @@ where
                 frame.scrutinee_value = Some(value);
                 runtime
                     .heap
-                    .replace_frame(&frame_ptr, Frame::Match(frame))?;
+                    .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Match(frame)))?;
                 let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
                 loop {
                     let current_frame_ptr = roots.get(0)?;
-                    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+                    let current_frame = match runtime
+                        .heap
+                        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+                    {
                         Frame::Match(frame) => frame,
                         _ => return frame_kind_error("match"),
                     };
@@ -1289,26 +1411,28 @@ where
                     let arm = &current_frame.arms[idx];
                     let matched = match_pattern_ptr(&runtime.heap, &arm.pattern, &value);
                     let current_frame_ptr = roots.get(0)?;
-                    let mut current_frame =
-                        match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
-                            Frame::Match(frame) => frame,
-                            _ => return frame_kind_error("match"),
-                        };
+                    let mut current_frame = match runtime
+                        .heap
+                        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
+                    {
+                        Frame::Match(frame) => frame,
+                        _ => return frame_kind_error("match"),
+                    };
                     if let Some(bindings) = matched {
                         let env = current_frame.env.extend_many(bindings);
                         let expr = Arc::clone(&current_frame.arms[idx].expr);
                         current_frame.next_arm_index = idx;
                         current_frame.matched_env = Some(env.clone());
                         current_frame.state = FrMatchState::EvalArm;
-                        runtime
-                            .heap
-                            .replace_frame(&current_frame_ptr, Frame::Match(current_frame))?;
+                        runtime.heap.with_locked(|heap| {
+                            heap.replace_frame(&current_frame_ptr, Frame::Match(current_frame))
+                        })?;
                         return Ok(EvalControl::Push { expr, env });
                     }
                     current_frame.next_arm_index += 1;
-                    runtime
-                        .heap
-                        .replace_frame(&current_frame_ptr, Frame::Match(current_frame))?;
+                    runtime.heap.with_locked(|heap| {
+                        heap.replace_frame(&current_frame_ptr, Frame::Match(current_frame))
+                    })?;
                 }
             }
             FrMatchState::EvalArm => Ok(EvalControl::Return(value)),
@@ -1366,11 +1490,12 @@ where
     over.applied.push(arg);
     over.applied_types.push(actual_ty);
     if is_function_type(&rest_ty) {
-        return Ok(EvalApplyResult::Value(runtime.heap.alloc_ptr_overloaded(
-            over.name,
-            rest_ty,
-            over.applied,
-            over.applied_types,
+        return Ok(EvalApplyResult::Value(runtime.heap.with_locked(
+            |heap| {
+                Ok(heap
+                    .alloc_ptr_overloaded(over.name, rest_ty, over.applied, over.applied_types)?
+                    .into_pointer())
+            },
         )?));
     }
 
@@ -1461,7 +1586,10 @@ where
             eval_apply_overloaded_arg(runtime, parent, over, arg, func_type, arg_type)
         }
         _ => Err(EngineError::NotCallable(
-            runtime.heap.type_name(&func)?.into(),
+            runtime
+                .heap
+                .with_locked(|heap| heap.type_name(&func))?
+                .into(),
         )),
     }
 }
@@ -1481,7 +1609,7 @@ where
         frame.next_arg_index += 1;
         runtime
             .heap
-            .replace_frame(&frame_ptr, Frame::App(frame.clone()))?;
+            .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::App(frame.clone())))?;
     }
 
     loop {
@@ -1516,7 +1644,7 @@ where
         frame.state = FrAppState::ApplyArg;
         runtime
             .heap
-            .replace_frame(&frame_ptr, Frame::App(frame.clone()))?;
+            .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::App(frame.clone())))?;
         let roots = runtime.heap.temp_roots(vec![frame_ptr, func, arg])?;
         let apply_result = eval_apply_arg(
             runtime,
@@ -1527,7 +1655,10 @@ where
             Some(&arg_info.expr.typ),
         )?;
         frame_ptr = roots.get(0)?;
-        frame = match runtime.heap.pointer_as_frame(&frame_ptr)? {
+        frame = match runtime
+            .heap
+            .with_locked(|heap| heap.pointer_as_frame(&frame_ptr))?
+        {
             Frame::App(frame) => frame,
             _ => return frame_kind_error("application"),
         };
@@ -1536,9 +1667,9 @@ where
                 frame.arg = None;
                 frame.func = Some(applied);
                 frame.next_arg_index += 1;
-                runtime
-                    .heap
-                    .replace_frame(&frame_ptr, Frame::App(frame.clone()))?;
+                runtime.heap.with_locked(|heap| {
+                    heap.replace_frame(&frame_ptr, Frame::App(frame.clone()))
+                })?;
             }
             EvalApplyResult::Push { expr, env } => return Ok(EvalControl::Push { expr, env }),
             EvalApplyResult::PushNative(task) => {
@@ -1566,12 +1697,15 @@ where
     State: Clone + Send + Sync + 'static,
 {
     if let Some(ptr) = env.get(name) {
-        let native = runtime.heap.with_access(|heap| match heap.get(&ptr)? {
-            Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                Ok(Some(native.clone()))
-            }
-            _ => Ok(None),
-        })?;
+        let native =
+            runtime
+                .heap
+                .with_locked(|heap| match heap.get_cell_from_pointer(&ptr)? {
+                    Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                        Ok(Some(native.clone()))
+                    }
+                    _ => Ok(None),
+                })?;
         if let Some(native) = native {
             match native.call_zero_at_site(runtime, CallSite::child(parent))? {
                 NativeCallResult::Ready(value) => Ok(EvalVarResult::Value(value)),
@@ -1594,12 +1728,15 @@ where
         }
     } else {
         let ctx = Context::new_with_parent(runtime, parent).resolve_native(name.as_ref(), typ)?;
-        let native = runtime.heap.with_access(|heap| match heap.get(&ctx)? {
-            Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                Ok(Some(native.clone()))
-            }
-            _ => Ok(None),
-        })?;
+        let native =
+            runtime
+                .heap
+                .with_locked(|heap| match heap.get_cell_from_pointer(&ctx)? {
+                    Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                        Ok(Some(native.clone()))
+                    }
+                    _ => Ok(None),
+                })?;
         if let Some(native) = native {
             match native.call_zero_at_site(runtime, CallSite::child(parent))? {
                 NativeCallResult::Ready(ctx) => Ok(EvalVarResult::Value(ctx)),
@@ -1624,12 +1761,12 @@ where
         Adt(Symbol, BTreeMap<Symbol, Pointer>),
     }
 
-    let target = runtime.heap.with_access(|heap| {
-        let base_val = heap.get(&base_ptr)?;
+    let target = runtime.heap.with_locked(|heap| {
+        let base_val = heap.get_cell_from_pointer(&base_ptr)?;
         match base_val {
             Cell::Dict(map) => Ok(RecordUpdateTarget::Dict(map.clone())),
             Cell::Adt(tag, args) if args.len() == 1 => {
-                let inner = heap.get(&args[0])?;
+                let inner = heap.get_cell_from_pointer(&args[0])?;
                 match inner {
                     Cell::Dict(map) => Ok(RecordUpdateTarget::Adt(tag.clone(), map.clone())),
                     _ => Err(EngineError::UnsupportedExpr),
@@ -1644,20 +1781,26 @@ where
             for (key, value) in update_vals {
                 map.insert(key, value);
             }
-            runtime.heap.alloc_ptr_dict(map)
+            runtime
+                .heap
+                .with_locked(|heap| Ok(heap.alloc_ptr_dict(map)?.into_pointer()))
         }
         RecordUpdateTarget::Adt(tag, mut map) => {
             for (key, value) in update_vals {
                 map.insert(key, value);
             }
-            let dict = runtime.heap.alloc_ptr_dict(map)?;
-            runtime.heap.alloc_ptr_adt(tag, vec![dict])
+            let dict = runtime
+                .heap
+                .with_locked(|heap| Ok(heap.alloc_ptr_dict(map)?.into_pointer()))?;
+            runtime
+                .heap
+                .with_locked(|heap| Ok(heap.alloc_ptr_adt(tag, vec![dict])?.into_pointer()))
         }
     }
 }
 
 fn is_root_frame_parent(heap: &Heap, pointer: &Pointer) -> Result<bool, EngineError> {
-    heap.with_access(|heap| match heap.get(pointer)? {
+    heap.with_locked(|heap| match heap.get_cell_from_pointer(pointer)? {
         Cell::U64(0) => Ok(true),
         Cell::Frame(_) => Ok(false),
         other => Err(EngineError::Internal(format!(
@@ -1694,8 +1837,8 @@ fn match_pattern_ptr(
         Pattern::Named(_, name, ps) => {
             let expected = name.to_dotted_symbol();
             if let Some(args) = heap
-                .with_access(|heap| {
-                    let v = heap.get(value)?;
+                .with_locked(|heap| {
+                    let v = heap.get_cell_from_pointer(value)?;
                     match v {
                         Cell::Adt(vname, args)
                             if runtime_ctor_matches(vname, &expected) && args.len() == ps.len() =>
@@ -1731,7 +1874,7 @@ fn match_pattern_ptr(
         }
         Pattern::Tuple(_, ps) => {
             let xs = heap
-                .with_access(|heap| match heap.get(value)? {
+                .with_locked(|heap| match heap.get_cell_from_pointer(value)? {
                     Cell::Tuple(xs) if xs.len() == ps.len() => Ok(Some(xs.clone())),
                     _ => Ok(None),
                 })
@@ -1762,8 +1905,8 @@ fn match_pattern_ptr(
         }
         Pattern::Dict(_, fields) => {
             let values = heap
-                .with_access(|heap| {
-                    let v = heap.get(value)?;
+                .with_locked(|heap| {
+                    let v = heap.get_cell_from_pointer(value)?;
                     let Cell::Dict(map) = v else {
                         return Ok(None);
                     };
@@ -1812,7 +1955,7 @@ fn match_list_patterns(
         refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
         refresh_list_items_from_roots(&mut values, &value_roots)?;
 
-        let value = values.get(heap, index).ok()?;
+        let value = heap.with_locked(|heap| values.get(heap, index)).ok()?;
         let value_root = heap.temp_roots(vec![value]).ok()?;
         let value = value_root.get(0).ok()?;
         let sub = match_pattern_ptr(heap, pattern, &value)?;
@@ -1879,75 +2022,75 @@ fn runtime_ctor_matches(actual: &Symbol, expected: &Symbol) -> bool {
             .unwrap_or(expected.as_ref())
 }
 
-fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
-    engine: &RuntimeCore<State>,
+fn alloc_uint_literal_as<'a>(
+    heap: &'a mut HeapState,
     value: u64,
     typ: &Type,
-) -> Result<Pointer, EngineError> {
+) -> Result<Reference<'a>, EngineError> {
     match typ.as_ref() {
-        TypeKind::Var(_) => engine.heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
+        TypeKind::Var(_) => Ok(heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
             EngineError::NativeType {
                 expected: "i32".into(),
                 got: value.to_string(),
             }
-        })?),
+        })?)?),
         TypeKind::Con(tc) => match tc.builtin_id() {
             Some(BuiltinTypeId::U8) => {
-                engine.heap.alloc_ptr_u8(u8::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_u8(u8::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u8".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
             Some(BuiltinTypeId::U16) => {
-                engine.heap.alloc_ptr_u16(u16::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_u16(u16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u16".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
             Some(BuiltinTypeId::U32) => {
-                engine.heap.alloc_ptr_u32(u32::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_u32(u32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u32".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
-            Some(BuiltinTypeId::U64) => engine.heap.alloc_ptr_u64(value),
+            Some(BuiltinTypeId::U64) => Ok(heap.alloc_ptr_u64(value)?),
             Some(BuiltinTypeId::I8) => {
-                engine.heap.alloc_ptr_i8(i8::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_i8(i8::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i8".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
             Some(BuiltinTypeId::I16) => {
-                engine.heap.alloc_ptr_i16(i16::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_i16(i16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i16".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
             Some(BuiltinTypeId::I32) => {
-                engine.heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i32".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
             Some(BuiltinTypeId::I64) => {
-                engine.heap.alloc_ptr_i64(i64::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_i64(i64::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i64".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
             _ => Err(EngineError::NativeType {
                 expected: "integral".into(),
@@ -1961,75 +2104,75 @@ fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
     }
 }
 
-fn alloc_int_literal_as<State: Clone + Send + Sync + 'static>(
-    engine: &RuntimeCore<State>,
+fn alloc_int_literal_as<'a>(
+    heap: &'a mut HeapState,
     value: i64,
     typ: &Type,
-) -> Result<Pointer, EngineError> {
+) -> Result<Reference<'a>, EngineError> {
     match typ.as_ref() {
-        TypeKind::Var(_) => engine.heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
+        TypeKind::Var(_) => Ok(heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
             EngineError::NativeType {
                 expected: "i32".into(),
                 got: value.to_string(),
             }
-        })?),
+        })?)?),
         TypeKind::Con(tc) => match tc.builtin_id() {
             Some(BuiltinTypeId::I8) => {
-                engine.heap.alloc_ptr_i8(i8::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_i8(i8::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i8".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
             Some(BuiltinTypeId::I16) => {
-                engine.heap.alloc_ptr_i16(i16::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_i16(i16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i16".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
             Some(BuiltinTypeId::I32) => {
-                engine.heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i32".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
-            Some(BuiltinTypeId::I64) => engine.heap.alloc_ptr_i64(value),
+            Some(BuiltinTypeId::I64) => Ok(heap.alloc_ptr_i64(value)?),
             Some(BuiltinTypeId::U8) => {
-                engine.heap.alloc_ptr_u8(u8::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_u8(u8::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u8".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
             Some(BuiltinTypeId::U16) => {
-                engine.heap.alloc_ptr_u16(u16::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_u16(u16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u16".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
             Some(BuiltinTypeId::U32) => {
-                engine.heap.alloc_ptr_u32(u32::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_u32(u32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u32".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
             Some(BuiltinTypeId::U64) => {
-                engine.heap.alloc_ptr_u64(u64::try_from(value).map_err(|_| {
+                Ok(heap.alloc_ptr_u64(u64::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u64".into(),
                         got: value.to_string(),
                     }
-                })?)
+                })?)?)
             }
             _ => Err(EngineError::NativeType {
                 expected: "integral".into(),
@@ -2049,10 +2192,16 @@ fn alloc_float_literal_as<State: Clone + Send + Sync + 'static>(
     typ: &Type,
 ) -> Result<Pointer, EngineError> {
     match typ.as_ref() {
-        TypeKind::Var(_) => engine.heap.alloc_ptr_f32(value as f32),
+        TypeKind::Var(_) => engine
+            .heap
+            .with_locked(|heap| Ok(heap.alloc_ptr_f32(value as f32)?.into_pointer())),
         TypeKind::Con(tc) => match tc.builtin_id() {
-            Some(BuiltinTypeId::F32) => engine.heap.alloc_ptr_f32(value as f32),
-            Some(BuiltinTypeId::F64) => engine.heap.alloc_ptr_f64(value),
+            Some(BuiltinTypeId::F32) => engine
+                .heap
+                .with_locked(|heap| Ok(heap.alloc_ptr_f32(value as f32)?.into_pointer())),
+            Some(BuiltinTypeId::F64) => engine
+                .heap
+                .with_locked(|heap| Ok(heap.alloc_ptr_f64(value)?.into_pointer())),
             _ => Err(EngineError::NativeType {
                 expected: "f32 or f64".into(),
                 got: typ.to_string(),
@@ -2085,15 +2234,15 @@ enum EvalVarResult<State: Clone + Send + Sync + 'static> {
 }
 
 fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Pointer, EngineError> {
-    heap.with_access(|heap| project_pointer_with_access(heap, field, pointer))
+    heap.with_locked(|heap| project_pointer_with_access(heap, field, pointer))
 }
 
 fn project_pointer_with_access(
-    heap: &HeapAccess<'_>,
+    heap: &HeapState,
     field: &Symbol,
     pointer: &Pointer,
 ) -> Result<Pointer, EngineError> {
-    let value = heap.get(pointer)?;
+    let value = heap.get_cell_from_pointer(pointer)?;
     if let Ok(index) = field.as_ref().parse::<usize>() {
         return match value {
             Cell::Tuple(items) => {
@@ -2113,7 +2262,7 @@ fn project_pointer_with_access(
     }
     match value {
         Cell::Adt(_, args) if args.len() == 1 => {
-            let inner = heap.get(&args[0])?;
+            let inner = heap.get_cell_from_pointer(&args[0])?;
             match inner {
                 Cell::Dict(map) => {
                     map.get(field)
@@ -2182,10 +2331,10 @@ mod tests {
             .expect("binary list should allocate");
         let list = heap.handle(list).expect("binary list should be rooted");
         let pointer = list.pointer().expect("binary list pointer should resolve");
-        heap.set_collect_on_every_alloc(true)
+        heap.with_locked_ok(|heap| heap.set_collect_on_every_alloc(true))
             .expect("collection setting should succeed");
         let collections_before = heap
-            .collection_count()
+            .with_locked_ok(|heap| heap.collection_count())
             .expect("collection count should be available");
 
         let empty = Pattern::List(Span::default(), Vec::new());
@@ -2203,7 +2352,7 @@ mod tests {
             Some(BTreeMap::new())
         );
         assert_eq!(
-            heap.collection_count()
+            heap.with_locked(|heap| Ok(heap.collection_count()))
                 .expect("collection count should be available"),
             collections_before,
             "matching must not allocate a heap cell for each byte"
@@ -2234,26 +2383,30 @@ mod tests {
             ],
         );
 
-        heap.set_collect_on_every_alloc(true)
+        heap.with_locked_ok(|heap| heap.set_collect_on_every_alloc(true))
             .expect("collection setting should succeed");
         let collections_before = heap
-            .collection_count()
+            .with_locked_ok(|heap| heap.collection_count())
             .expect("collection count should be available");
         let bindings =
             match_pattern_ptr(&heap, &pattern, &pointer).expect("nested list pattern should match");
 
         assert_eq!(
-            heap.pointer_as_u8(bindings.get(&x).expect("x should be bound"))
-                .expect("x should be a u8"),
+            heap.with_locked(
+                |heap| heap.pointer_as_u8(bindings.get(&x).expect("x should be bound"))
+            )
+            .expect("x should be a u8"),
             10
         );
         assert_eq!(
-            heap.pointer_as_u8(bindings.get(&y).expect("y should be bound"))
-                .expect("y should be a u8"),
+            heap.with_locked(
+                |heap| heap.pointer_as_u8(bindings.get(&y).expect("y should be bound"))
+            )
+            .expect("y should be a u8"),
             20
         );
         assert_eq!(
-            heap.collection_count()
+            heap.with_locked(|heap| Ok(heap.collection_count()))
                 .expect("collection count should be available")
                 - collections_before,
             2,

@@ -189,6 +189,8 @@ pub enum EngineError {
     },
     #[error("internal error: {0}")]
     Internal(String),
+    #[error("heap state poisoned")]
+    HeapStatePoisoned,
     #[error(transparent)]
     Module(#[from] Box<ModuleError>),
     #[error("{0}")]

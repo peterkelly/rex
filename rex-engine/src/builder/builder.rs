@@ -988,8 +988,11 @@ where
         let ctor_name = ctor.clone();
         let func: SyncNativePointerCallable<State> =
             Arc::new(move |ctx: Context<State>, _: &Type, args: &[Pointer]| {
-                ctx.heap()
-                    .alloc_ptr_adt(runtime_ctor_symbol(&ctor_name), args.to_vec())
+                ctx.heap().with_locked(|heap| {
+                    Ok(heap
+                        .alloc_ptr_adt(runtime_ctor_symbol(&ctor_name), args.to_vec())?
+                        .into_pointer())
+                })
             });
         let arity = type_arity(&scheme.typ);
         register_native_parts(
@@ -1024,7 +1027,11 @@ where
         if let Some(existing) = env_rec.get(&decl.name.name) {
             slots.push(existing);
         } else {
-            let placeholder = heap.alloc_ptr_uninitialized(decl.name.name.clone())?;
+            let placeholder = heap.with_locked(|heap| {
+                Ok(heap
+                    .alloc_ptr_uninitialized(decl.name.name.clone())?
+                    .into_pointer())
+            })?;
             let placeholder = heap.handle(placeholder)?;
             env_rec = env_rec.extend(decl.name.name.clone(), placeholder.clone());
             slots.push(placeholder);
@@ -1074,16 +1081,20 @@ where
                 ));
             };
             let closure_env = env.to_environment()?;
-            let ptr = heap.alloc_ptr_closure(
-                closure_env,
-                param.clone(),
-                param_ty,
-                typed.typ.clone(),
-                Arc::new(body.as_ref().clone()),
-            )?;
+            let ptr = heap.with_locked(|heap| {
+                Ok(heap
+                    .alloc_ptr_closure(
+                        closure_env,
+                        param.clone(),
+                        param_ty,
+                        typed.typ.clone(),
+                        Arc::new(body.as_ref().clone()),
+                    )?
+                    .into_pointer())
+            })?;
             let value = heap.clone_cell(&ptr)?;
             let slot = slot.pointer()?;
-            heap.overwrite(&slot, value)?;
+            heap.with_locked(|heap| heap.overwrite(&slot, value))?;
         }
         Ok(())
     })();
@@ -1157,7 +1168,11 @@ fn publish_runtime_decl_interfaces_parts(
         if env.get(&df.name.name).is_some() {
             continue;
         }
-        let placeholder = heap.alloc_ptr_uninitialized(df.name.name.clone())?;
+        let placeholder = heap.with_locked(|heap| {
+            Ok(heap
+                .alloc_ptr_uninitialized(df.name.name.clone())?
+                .into_pointer())
+        })?;
         let placeholder = heap.handle(placeholder)?;
         *env = env.extend(df.name.name.clone(), placeholder);
     }

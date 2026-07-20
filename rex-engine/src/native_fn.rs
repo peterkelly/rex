@@ -137,7 +137,11 @@ impl NativeFn {
             } = self;
             return runtime
                 .heap
-                .alloc_ptr_native(native_id, name, arity, typ, applied, applied_types)
+                .with_locked(|heap| {
+                    Ok(heap
+                        .alloc_ptr_native(native_id, name, arity, typ, applied, applied_types)?
+                        .into_pointer())
+                })
                 .map(NativeApplyResult::Value);
         }
 

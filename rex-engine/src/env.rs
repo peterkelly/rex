@@ -190,12 +190,13 @@ mod tests {
             .extend(Symbol::intern("b"), b);
 
         heap.set_collect_on_every_alloc(true).unwrap();
-        heap.alloc_ptr_i32(3).unwrap();
+        heap.with_locked(|heap| Ok(heap.alloc_ptr_i32(3)?.into_pointer()))
+            .unwrap();
 
         let env = rooted.to_environment().unwrap();
         let a = env.get(&Symbol::intern("a")).unwrap();
         let b = env.get(&Symbol::intern("b")).unwrap();
-        assert_eq!(heap.pointer_as_i32(&a).unwrap(), 1);
-        assert_eq!(heap.pointer_as_i32(&b).unwrap(), 2);
+        assert_eq!(heap.with_locked(|heap| heap.pointer_as_i32(&a)).unwrap(), 1);
+        assert_eq!(heap.with_locked(|heap| heap.pointer_as_i32(&b)).unwrap(), 2);
     }
 }

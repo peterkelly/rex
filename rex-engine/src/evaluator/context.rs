@@ -183,10 +183,11 @@ where
             Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
                 let (name, typ, applied, applied_types) =
                     OverloadedFn::new(name.clone(), typ.clone()).into_parts();
-                let pointer =
-                    self.runtime
-                        .heap
-                        .alloc_ptr_overloaded(name, typ, applied, applied_types)?;
+                let pointer = self.runtime.heap.with_locked(|heap| {
+                    Ok(heap
+                        .alloc_ptr_overloaded(name, typ, applied, applied_types)?
+                        .into_pointer())
+                })?;
                 return Ok(Err(pointer));
             }
             Err(err) => return Err(err),
@@ -245,14 +246,11 @@ where
                 let imp = matches[0].clone();
                 let (native_id, name, arity, typ, applied, applied_types) =
                     imp.to_native_fn(typ.clone()).into_parts();
-                self.runtime.heap.alloc_ptr_native(
-                    native_id,
-                    name,
-                    arity,
-                    typ,
-                    applied,
-                    applied_types,
-                )
+                self.runtime.heap.with_locked(|heap| {
+                    Ok(heap
+                        .alloc_ptr_native(native_id, name, arity, typ, applied, applied_types)?
+                        .into_pointer())
+                })
             }
             _ => {
                 if typ.ftv().is_empty() {
@@ -263,9 +261,11 @@ where
                 } else if is_function_type(typ) {
                     let (name, typ, applied, applied_types) =
                         OverloadedFn::new(sym_name.clone(), typ.clone()).into_parts();
-                    self.runtime
-                        .heap
-                        .alloc_ptr_overloaded(name, typ, applied, applied_types)
+                    self.runtime.heap.with_locked(|heap| {
+                        Ok(heap
+                            .alloc_ptr_overloaded(name, typ, applied, applied_types)?
+                            .into_pointer())
+                    })
                 } else {
                     Err(EngineError::AmbiguousOverload { name: sym_name })
                 }

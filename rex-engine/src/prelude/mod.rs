@@ -90,7 +90,7 @@ use crate::{
     },
     stack::NativeUnaryShape,
     util::split_fun,
-    value::{Cell, Handle, Heap, HeapAccess, ListItems, Pointer, list_to_vec},
+    value::{Cell, Handle, Heap, HeapState, ListItems, Pointer, Reference, list_to_vec},
 };
 
 pub fn prelude_typeclasses_program() -> Result<&'static CompilationUnit, EngineError> {
@@ -371,14 +371,17 @@ fn result_types(typ: &Type) -> Result<(Type, Type), EngineError> {
     }
 }
 
-fn option_from_pointer(heap: &Heap, value: Option<Pointer>) -> Result<Pointer, EngineError> {
+fn option_from_pointer(
+    heap: &mut HeapState,
+    value: Option<Pointer>,
+) -> Result<Reference<'_>, EngineError> {
     match value {
         Some(v) => heap.alloc_ptr_adt(Symbol::intern("Some"), vec![v]),
         None => heap.alloc_ptr_adt(Symbol::intern("None"), vec![]),
     }
 }
 
-fn option_value(heap: &Heap, pointer: &Pointer) -> Result<Option<Pointer>, EngineError> {
+fn option_value(heap: &HeapState, pointer: &Pointer) -> Result<Option<Pointer>, EngineError> {
     let (tag, args) = heap.pointer_as_adt(pointer)?;
     if tag.as_ref() == "Some" && args.len() == 1 {
         Ok(Some(args[0]))
@@ -392,7 +395,10 @@ fn option_value(heap: &Heap, pointer: &Pointer) -> Result<Option<Pointer>, Engin
     }
 }
 
-fn result_value(heap: &Heap, pointer: &Pointer) -> Result<Result<Pointer, Pointer>, EngineError> {
+fn result_value(
+    heap: &HeapState,
+    pointer: &Pointer,
+) -> Result<Result<Pointer, Pointer>, EngineError> {
     let (tag, args) = heap.pointer_as_adt(pointer)?;
     if tag.as_ref() == "Ok" && args.len() == 1 {
         Ok(Ok(args[0]))
@@ -407,9 +413,9 @@ fn result_value(heap: &Heap, pointer: &Pointer) -> Result<Result<Pointer, Pointe
 }
 
 fn result_from_pointer(
-    heap: &Heap,
+    heap: &mut HeapState,
     value: Result<Pointer, Pointer>,
-) -> Result<Pointer, EngineError> {
+) -> Result<Reference<'_>, EngineError> {
     match value {
         Ok(v) => heap.alloc_ptr_adt(Symbol::intern("Ok"), vec![v]),
         Err(v) => heap.alloc_ptr_adt(Symbol::intern("Err"), vec![v]),
@@ -469,9 +475,9 @@ fn extremum_handle_by_type(
     for value in values {
         let value_ptr = value.pointer()?;
         let best_ptr = best.pointer()?;
-        let ord = heap.with_access(|heap| {
-            let cell = heap.get(&value_ptr)?;
-            let best_cell = heap.get(&best_ptr)?;
+        let ord = heap.with_locked(|heap| {
+            let cell = heap.get_cell_from_pointer(&value_ptr)?;
+            let best_cell = heap.get_cell_from_pointer(&best_ptr)?;
             cmp_cell_by_type(&name, elem_ty, cell, best_cell)
         })?;
         if ord == choose {
@@ -535,7 +541,11 @@ fn list_range_from_items(
                     "list slice range exceeds backing slice".into(),
                 ));
             }
-            heap.handle(heap.alloc_ptr_list_slice(slice_start, slice_end, elements)?)
+            heap.handle(heap.with_locked(|heap| {
+                Ok(heap
+                    .alloc_ptr_list_slice(slice_start, slice_end, elements)?
+                    .into_pointer())
+            })?)
         }
         ListItems::BinarySlice {
             elements,
@@ -554,7 +564,11 @@ fn list_range_from_items(
                     "list slice range exceeds backing slice".into(),
                 ));
             }
-            heap.handle(heap.alloc_ptr_list_slice(slice_start, slice_end, elements)?)
+            heap.handle(heap.with_locked(|heap| {
+                Ok(heap
+                    .alloc_ptr_list_slice(slice_start, slice_end, elements)?
+                    .into_pointer())
+            })?)
         }
         ListItems::Pointers(values) => {
             heap.handle(heap.alloc_ptr_list(values[start..end].to_vec())?)
@@ -1478,7 +1492,9 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let dict_ty = arg_tys[1].clone();
             let elem_ty = dict_elem_type(&dict_ty)?;
-            let map = engine.heap().pointer_as_dict(&args[1])?;
+            let map = engine
+                .heap()
+                .with_locked(|heap| heap.pointer_as_dict(&args[1]))?;
             Ok(SchedulerNativeResult::Task(NativeTask::DictMap(
                 NativeDictMap {
                     func: args[0],
@@ -1509,7 +1525,9 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let dict_ty = arg_tys[1].clone();
                 let elem_ty = dict_elem_type(&dict_ty)?;
-                let map = engine.heap().pointer_as_dict(&args[1])?;
+                let map = engine
+                    .heap()
+                    .with_locked(|heap| heap.pointer_as_dict(&args[1]))?;
                 Ok(SchedulerNativeResult::Task(NativeTask::DictTraverse(
                     NativeDictTraverse {
                         func: args[0],
@@ -1582,16 +1600,12 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             object: Symbol::intern("Object"),
         };
 
-        fn to_serde_json(
-            heap: &HeapAccess<'_>,
-            v: &Cell,
-            tags: &Tags,
-        ) -> Option<serde_json::Value> {
+        fn to_serde_json(heap: &HeapState, v: &Cell, tags: &Tags) -> Option<serde_json::Value> {
             match v {
                 Cell::Adt(tag, _) if tag == &tags.null => Some(serde_json::Value::Null),
                 Cell::Adt(tag, args) if tag == &tags.bool_ => match args.as_slice() {
                     [arg] => heap
-                        .get(arg)
+                        .get_cell_from_pointer(arg)
                         .ok()?
                         .cell_as_bool()
                         .ok()
@@ -1600,7 +1614,7 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 },
                 Cell::Adt(tag, args) if tag == &tags.string => match args.as_slice() {
                     [arg] => heap
-                        .get(arg)
+                        .get_cell_from_pointer(arg)
                         .ok()?
                         .cell_as_string()
                         .ok()
@@ -1609,7 +1623,7 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 },
                 Cell::Adt(tag, args) if tag == &tags.number => match args.as_slice() {
                     [arg] => {
-                        let n = heap.get(arg).ok()?.cell_as_f64().ok()?;
+                        let n = heap.get_cell_from_pointer(arg).ok()?.cell_as_f64().ok()?;
                         serde_json::Number::from_f64(n)
                             .map(serde_json::Value::Number)
                             .or(Some(serde_json::Value::Null))
@@ -1618,10 +1632,10 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 },
                 Cell::Adt(tag, args) if tag == &tags.array => match args.as_slice() {
                     [arg] => {
-                        let xs = list_to_vec(heap, heap.get(arg).ok()?).ok()?;
+                        let xs = list_to_vec(heap, heap.get_cell_from_pointer(arg).ok()?).ok()?;
                         let mut out = Vec::with_capacity(xs.len());
                         for x in &xs {
-                            let x_value = heap.get(x).ok()?;
+                            let x_value = heap.get_cell_from_pointer(x).ok()?;
                             out.push(to_serde_json(heap, x_value, tags)?);
                         }
                         Some(serde_json::Value::Array(out))
@@ -1630,10 +1644,10 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 },
                 Cell::Adt(tag, args) if tag == &tags.object => match args.as_slice() {
                     [arg] => {
-                        let map = heap.get(arg).ok()?.cell_as_dict().ok()?;
+                        let map = heap.get_cell_from_pointer(arg).ok()?.cell_as_dict().ok()?;
                         let mut out = serde_json::Map::with_capacity(map.len());
                         for (k, v) in &map {
-                            let v_value = heap.get(v).ok()?;
+                            let v_value = heap.get_cell_from_pointer(v).ok()?;
                             out.insert(k.as_ref().to_string(), to_serde_json(heap, v_value, tags)?);
                         }
                         Some(serde_json::Value::Object(out))
@@ -1646,8 +1660,8 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
 
         engine.export_native("prim_json_stringify", scheme, 1, move |engine, _, args| {
             let pointer = args[0].pointer()?;
-            let json = engine.heap().with_access(|heap| {
-                let value = heap.get(&pointer)?;
+            let json = engine.heap().with_locked(|heap| {
+                let value = heap.get_cell_from_pointer(&pointer)?;
                 Ok(to_serde_json(heap, value, &tags))
             })?;
             let Some(json) = json else {
@@ -1800,7 +1814,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let opt_ty = arg_tys[1].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
-            match option_value(engine.heap(), &args[1])? {
+            match engine
+                .heap()
+                .with_locked(|heap| option_value(heap, &args[1]))?
+            {
                 Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryMap(
                     NativeUnaryMap {
                         func: args[0],
@@ -1810,9 +1827,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                         shape: NativeUnaryShape::Option,
                     },
                 ))),
-                None => Ok(SchedulerNativeResult::Ready(option_from_pointer(
-                    engine.heap(),
-                    None,
+                None => Ok(SchedulerNativeResult::Ready(engine.heap().with_locked(
+                    |heap| Ok(option_from_pointer(heap, None)?.into_pointer()),
                 )?)),
             }
         })?;
@@ -1830,7 +1846,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let result_ty = arg_tys[1].clone();
             let (ok_ty, _err_ty) = result_types(&result_ty)?;
-            match result_value(engine.heap(), &args[1])? {
+            match engine
+                .heap()
+                .with_locked(|heap| result_value(heap, &args[1]))?
+            {
                 Ok(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryMap(
                     NativeUnaryMap {
                         func: args[0],
@@ -1840,9 +1859,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                         shape: NativeUnaryShape::Result,
                     },
                 ))),
-                Err(err) => Ok(SchedulerNativeResult::Ready(result_from_pointer(
-                    engine.heap(),
-                    Err(err),
+                Err(err) => Ok(SchedulerNativeResult::Ready(engine.heap().with_locked(
+                    |heap| Ok(result_from_pointer(heap, Err(err))?.into_pointer()),
                 )?)),
             }
         })?;
@@ -1902,8 +1920,13 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values =
-                ListItems::Pointers(option_value(engine.heap(), &args[2])?.into_iter().collect());
+            let values = ListItems::Pointers(
+                engine
+                    .heap()
+                    .with_locked(|heap| option_value(heap, &args[2]))?
+                    .into_iter()
+                    .collect(),
+            );
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1973,8 +1996,13 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values =
-                ListItems::Pointers(option_value(engine.heap(), &args[2])?.into_iter().collect());
+            let values = ListItems::Pointers(
+                engine
+                    .heap()
+                    .with_locked(|heap| option_value(heap, &args[2]))?
+                    .into_iter()
+                    .collect(),
+            );
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -2044,8 +2072,13 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values =
-                ListItems::Pointers(option_value(engine.heap(), &args[2])?.into_iter().collect());
+            let values = ListItems::Pointers(
+                engine
+                    .heap()
+                    .with_locked(|heap| option_value(heap, &args[2]))?
+                    .into_iter()
+                    .collect(),
+            );
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -2101,7 +2134,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let opt_ty = arg_tys[1].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
-            match option_value(engine.heap(), &args[1])? {
+            match engine
+                .heap()
+                .with_locked(|heap| option_value(heap, &args[1]))?
+            {
                 Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFilter(
                     NativeUnaryFilter {
                         func: args[0],
@@ -2111,9 +2147,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                         original: args[1],
                     },
                 ))),
-                None => Ok(SchedulerNativeResult::Ready(option_from_pointer(
-                    engine.heap(),
-                    None,
+                None => Ok(SchedulerNativeResult::Ready(engine.heap().with_locked(
+                    |heap| Ok(option_from_pointer(heap, None)?.into_pointer()),
                 )?)),
             }
         })?;
@@ -2168,7 +2203,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let opt_ty = arg_tys[1].clone();
                 let elem_ty = option_elem_type(&opt_ty)?;
-                match option_value(engine.heap(), &args[1])? {
+                match engine
+                    .heap()
+                    .with_locked(|heap| option_value(heap, &args[1]))?
+                {
                     Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFilterMap(
                         NativeUnaryFilterMap {
                             func: args[0],
@@ -2177,9 +2215,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                             value,
                         },
                     ))),
-                    None => Ok(SchedulerNativeResult::Ready(option_from_pointer(
-                        engine.heap(),
-                        None,
+                    None => Ok(SchedulerNativeResult::Ready(engine.heap().with_locked(
+                        |heap| Ok(option_from_pointer(heap, None)?.into_pointer()),
                     )?)),
                 }
             },
@@ -2226,7 +2263,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let opt_ty = arg_tys[1].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
-            match option_value(engine.heap(), &args[1])? {
+            match engine
+                .heap()
+                .with_locked(|heap| option_value(heap, &args[1]))?
+            {
                 Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFlatMap(
                     NativeUnaryFlatMap {
                         func: args[0],
@@ -2236,9 +2276,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                         shape: NativeUnaryShape::Option,
                     },
                 ))),
-                None => Ok(SchedulerNativeResult::Ready(option_from_pointer(
-                    engine.heap(),
-                    None,
+                None => Ok(SchedulerNativeResult::Ready(engine.heap().with_locked(
+                    |heap| Ok(option_from_pointer(heap, None)?.into_pointer()),
                 )?)),
             }
         })?;
@@ -2256,7 +2295,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let result_ty = arg_tys[1].clone();
             let (ok_ty, _err_ty) = result_types(&result_ty)?;
-            match result_value(engine.heap(), &args[1])? {
+            match engine
+                .heap()
+                .with_locked(|heap| result_value(heap, &args[1]))?
+            {
                 Ok(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFlatMap(
                     NativeUnaryFlatMap {
                         func: args[0],
@@ -2266,9 +2308,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                         shape: NativeUnaryShape::Result,
                     },
                 ))),
-                Err(err) => Ok(SchedulerNativeResult::Ready(result_from_pointer(
-                    engine.heap(),
-                    Err(err),
+                Err(err) => Ok(SchedulerNativeResult::Ready(engine.heap().with_locked(
+                    |heap| Ok(result_from_pointer(heap, Err(err))?.into_pointer()),
                 )?)),
             }
         })?;
@@ -2310,7 +2351,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
             let func_ty = arg_tys[0].clone();
             let opt_ty = arg_tys[1].clone();
-            if option_value(engine.heap(), &args[1])?.is_some() {
+            if engine
+                .heap()
+                .with_locked(|heap| option_value(heap, &args[1]))?
+                .is_some()
+            {
                 return Ok(SchedulerNativeResult::Ready(args[1]));
             }
             Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
@@ -2335,7 +2380,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
             let func_ty = arg_tys[0].clone();
             let result_ty = arg_tys[1].clone();
-            if result_value(engine.heap(), &args[1])?.is_ok() {
+            if engine
+                .heap()
+                .with_locked(|heap| result_value(heap, &args[1]))?
+                .is_ok()
+            {
                 return Ok(SchedulerNativeResult::Ready(args[1]));
             }
             Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
@@ -2378,8 +2427,13 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values =
-                ListItems::Pointers(option_value(engine.heap(), &args[0])?.into_iter().collect());
+            let values = ListItems::Pointers(
+                engine
+                    .heap()
+                    .with_locked(|heap| option_value(heap, &args[0]))?
+                    .into_iter()
+                    .collect(),
+            );
             Ok(SchedulerNativeResult::Task(NativeTask::Sum(NativeSum {
                 elem_type: elem_ty,
                 values,
@@ -2425,7 +2479,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values = match option_value(engine.heap(), &args[0])? {
+            let values = match engine
+                .heap()
+                .with_locked(|heap| option_value(heap, &args[0]))?
+            {
                 Some(value) => ListItems::Pointers(vec![value]),
                 None => return Err(EngineError::EmptySequence),
             };
@@ -2567,7 +2624,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let idx = args[0].as_i32()?;
             let values = expect_list_items(engine.heap(), args[1].pointer()?)?;
             let idx = checked_index(Symbol::intern("prim_get"), idx, values.len())?;
-            engine.heap().handle(values.get(engine.heap(), idx)?)
+            engine
+                .heap()
+                .handle(engine.heap().with_locked(|heap| values.get(heap, idx))?)
         })?;
     }
 
