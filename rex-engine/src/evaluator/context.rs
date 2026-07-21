@@ -15,9 +15,9 @@ use crate::{
     evaluator::{
         CallSite, application_result_type, eval::eval_typed_expr, runtime_core::RuntimeCore,
     },
+    memory::heap::{Handle, Heap, Pointer},
     overloaded_fn::OverloadedFn,
     util::{impl_matches_type, is_function_type},
-    value::{Handle, Heap, Pointer},
 };
 
 #[derive(Clone)]

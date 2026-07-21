@@ -83,6 +83,10 @@ use crate::{
             NativeUnaryFilterMap, NativeUnaryFlatMap, NativeUnaryMap,
         },
     },
+    memory::{
+        heap::{Cell, Handle, Heap, HeapState, Pointer, Reference},
+        lists::{ListItems, list_to_vec},
+    },
     modules::{
         CanonicalSymbol, CompilationPackage, Declarations, ModuleExports, ModuleId,
         PRELUDE_MODULE_NAME, ResolvedModule, ResolvedModuleContent, SymbolKind, VirtualModule,
@@ -90,7 +94,6 @@ use crate::{
     },
     stack::NativeUnaryShape,
     util::split_fun,
-    value::{Cell, Handle, Heap, HeapState, ListItems, Pointer, Reference, list_to_vec},
 };
 
 pub fn prelude_typeclasses_program() -> Result<&'static CompilationUnit, EngineError> {

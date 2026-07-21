@@ -6,9 +6,12 @@ use crate::{
         native_callable::{AsyncNativePointerCallable, SyncNativePointerCallable},
     },
     handlers::declare_fn_decl_from_scheme,
+    memory::{
+        heap::{Handle, Pointer},
+        traits::IntoRex,
+    },
     modules::ROOT_MODULE_NAME,
     util::{normalize_name, validate_native_export_scheme},
-    value::{Handle, IntoRex, Pointer},
 };
 use futures::{FutureExt, future::BoxFuture};
 use rex_ast::DeclareFnDecl;

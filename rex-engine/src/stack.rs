@@ -7,7 +7,7 @@ use rex_typesystem::types::{Type, TypedExpr};
 use crate::{
     env::Environment,
     evaluator::native_functions::NativeTask,
-    value::{Collection, Pointer},
+    memory::{heap::Pointer, traits::Collection},
 };
 
 #[derive(Clone, Debug, PartialEq)]

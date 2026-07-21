@@ -49,7 +49,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - `compiler/` owns program preparation, import rewriting, typechecking, module loading state, and
   `CompiledProgram` construction.
 - `evaluator/` owns execution, scheduling, native dispatch, `Context`, and the runtime core.
-- `modules/`, `value.rs`, and `config.rs` hold shared module identities, heap values/GC roots,
+- `modules/`, `memory/`, and `config.rs` hold shared module identities, heap values/GC roots,
   and runtime options.
 
 ## Design Notes

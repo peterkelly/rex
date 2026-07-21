@@ -2,11 +2,11 @@
 
 ## Problem
 
-`rex-engine/src/value.rs` combines heap implementation, GC roots, public handles, conversion traits, internal runtime cells, and public value views. The public `Value` enum includes variants that represent runtime implementation concepts rather than ordinary Rex values.
+`rex-engine/src/memory/heap.rs` combines heap implementation, GC roots, public handles, internal runtime cells, and public value views. The public `Value` enum includes variants that represent runtime implementation concepts rather than ordinary Rex values.
 
 ## Evidence
 
-`rex-engine/src/value.rs` defines:
+`rex-engine/src/memory/heap.rs` defines:
 
 - heap state and root slots,
 - copying GC support,
@@ -45,4 +45,3 @@ The file-level structure reinforces the problem. Because heap internals and publ
 This increases API coupling between embedders and the evaluator internals. It also makes future runtime refactors more expensive, especially if the evaluator changes how closures, frames, overloaded functions, or native values are represented.
 
 The smell is architectural: it does not mean the current GC/rooting design is wrong. It means the public value view and internal heap cell model need a clearer boundary.
-

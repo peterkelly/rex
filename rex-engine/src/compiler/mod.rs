@@ -17,11 +17,11 @@ use crate::{
     env::RootedEnvironment,
     evaluator::runtime_core::RuntimeCore,
     manifest::{MainInputSpec, MainSignature},
+    memory::heap::Heap,
     modules::{
         CompilationPackage, ImportChain, ImportRequest, Importer, ModuleId, ResolvedModuleContent,
         exports_from_package, package_from_resolved, parse_program_from_source, prefix_for_module,
     },
-    value::Heap,
 };
 
 pub(crate) mod program;

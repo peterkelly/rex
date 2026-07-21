@@ -3,7 +3,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use rex_typesystem::types::Type;
 
-use crate::{error::EngineError, evaluator::context::Context, value::Handle};
+use crate::{error::EngineError, evaluator::context::Context, memory::heap::Handle};
 
 /// Boxed future returned by a host-managed action effect.
 pub type HostActionFuture = BoxFuture<'static, Result<Handle, EngineError>>;

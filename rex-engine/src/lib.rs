@@ -16,6 +16,7 @@ mod error;
 mod evaluator;
 mod handlers;
 mod manifest;
+mod memory;
 pub mod module_semantics;
 mod modules;
 mod native_fn;
@@ -23,7 +24,6 @@ mod overloaded_fn;
 mod prelude;
 mod stack;
 mod util;
-mod value;
 
 pub use builder::{
     core::Builder,
@@ -44,6 +44,10 @@ pub use evaluator::{
 };
 pub use handlers::RexDefault;
 pub use manifest::{MainInputSpec, MainSignature, Manifest, build_manifest, type_has_vars};
+pub use memory::{
+    heap::{Handle, Heap, Value, ValueDisplayOptions},
+    traits::{FromRex, IntoRex},
+};
 pub use modules::{
     CanonicalSymbol, CompilationPackage, Declarations, DenyImporter, ImportRequest, Importer,
     Module, ModuleExports, ModuleId, ModuleInstance, ModuleKey, PRELUDE_MODULE_NAME,
@@ -52,4 +56,3 @@ pub use modules::{
 };
 pub use prelude::{prelude_typeclasses_program, standard_type_system};
 pub use util::collect_adts_error_to_engine;
-pub use value::{FromRex, Handle, Heap, IntoRex, Value, ValueDisplayOptions};

@@ -1,4 +1,4 @@
-use crate::value::{Collection, Pointer};
+use crate::memory::{heap::Pointer, traits::Collection};
 use rex_ast::Symbol;
 use rex_typesystem::types::Type;
 

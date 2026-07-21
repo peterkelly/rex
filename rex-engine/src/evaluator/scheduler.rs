@@ -3,7 +3,7 @@ use crate::{
     error::EngineError,
     evaluator::runtime_core::RuntimeCore,
     handlers::{NativeAsyncCall, NativeHandleFuture},
-    value::{Handle, Pointer, TempRoots},
+    memory::heap::{Handle, Pointer, TempRoots},
 };
 use futures::future::poll_fn;
 use std::{

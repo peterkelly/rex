@@ -10,8 +10,8 @@ use crate::{
         runtime_core::RuntimeCore,
     },
     handlers::NativeAsyncCall,
+    memory::{heap::Pointer, traits::Collection},
     util::{is_function_type, split_fun},
-    value::{Collection, Pointer},
 };
 use rex_ast::Symbol;
 use rex_typesystem::{

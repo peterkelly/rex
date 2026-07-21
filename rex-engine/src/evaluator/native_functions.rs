@@ -9,12 +9,16 @@ use crate::{
         },
         runtime_core::RuntimeCore,
     },
+    memory::{
+        heap::{Pointer, TempRoots},
+        lists::ListItems,
+        traits::Collection,
+    },
     overloaded_fn::OverloadedFn,
     stack::{
         FrNativeCall, FrNativeCallState, Frame, NativeUnaryShape, rewrite_entries,
         rewrite_map_values, rewrite_option, rewrite_pointer, rewrite_slice,
     },
-    value::{Collection, ListItems, Pointer, TempRoots},
 };
 use rex_ast::Symbol;
 use rex_typesystem::types::{BuiltinTypeId, Type, TypeKind, TypedExpr, TypedExprKind};

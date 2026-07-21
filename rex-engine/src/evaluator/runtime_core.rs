@@ -3,7 +3,7 @@ use crate::{
     config::{AsyncCallPolicy, ParallelismController},
     error::EngineError,
     evaluator::native_callable::NativeCallable,
-    value::{Heap, Pointer, TempRoots},
+    memory::heap::{Heap, Pointer, TempRoots},
 };
 use rex_ast::Symbol;
 use rex_typesystem::{types::Type, typesystem::TypeSystem};

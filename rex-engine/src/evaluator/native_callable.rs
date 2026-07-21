@@ -4,7 +4,7 @@ use crate::{
         CallSite, context::Context, native_functions::NativeTask, runtime_core::RuntimeCore,
     },
     handlers::{NativeAsyncCall, NativeHandleFuture},
-    value::Pointer,
+    memory::heap::Pointer,
 };
 use rex_typesystem::types::Type;
 use std::sync::Arc;

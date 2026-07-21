@@ -14,8 +14,8 @@ use crate::{
     compiler::program::CompiledProgram,
     error::EngineError,
     evaluator::{context::Context, eval::eval_typed_expr, runtime_core::RuntimeCore},
+    memory::heap::{Cell, Handle, Heap, HeapState, Pointer},
     util::split_fun,
-    value::{Cell, Handle, Heap, HeapState, Pointer},
 };
 
 pub(crate) mod context;

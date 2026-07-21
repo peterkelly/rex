@@ -4,7 +4,10 @@ use std::sync::Arc;
 use rex_ast::Symbol;
 
 use crate::EngineError;
-use crate::value::{Collection, Handle, Pointer};
+use crate::memory::{
+    heap::{Handle, Pointer},
+    traits::Collection,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Environment(Arc<EnvEntry>);
@@ -171,7 +174,7 @@ impl Default for RootedEnvironment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::value::Heap;
+    use crate::memory::heap::Heap;
 
     #[test]
     fn rooted_environment_survives_copying_gc() {

@@ -22,6 +22,10 @@ use crate::{
         },
     },
     handlers::RexDefault,
+    memory::{
+        heap::{Handle, Heap, Pointer},
+        traits::IntoRex,
+    },
     modules::{
         CompilationPackage, Declarations, ImportRequest, Importer, Module, ModuleExports, ModuleId,
         ModuleSystem, ROOT_MODULE_NAME, ResolvedModule, ResolvedModuleContent, StdlibImporter,
@@ -33,7 +37,6 @@ use crate::{
         adt_family_error_to_engine, normalize_name, split_fun, type_arity,
         validate_native_export_scheme,
     },
-    value::{Handle, Heap, IntoRex, Pointer},
 };
 use futures::future::BoxFuture;
 use rex_ast::{DeclareFnDecl, Expr, FnDecl, InstanceDecl, Scope, Symbol};

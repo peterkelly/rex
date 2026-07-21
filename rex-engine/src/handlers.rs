@@ -10,9 +10,12 @@ use crate::{
         native_callable::{AsyncNativePointerCallable, SyncNativePointerCallable},
         runtime_core::RuntimeCore,
     },
+    memory::{
+        heap::{Handle, Pointer, TempRoots},
+        traits::{FromRex, IntoRex},
+    },
     modules::ROOT_MODULE_NAME,
     util::{normalize_name, split_fun, type_expr_from_type, validate_native_export_scheme},
-    value::{FromRex, Handle, IntoRex, Pointer, TempRoots},
 };
 use futures::{FutureExt, future::BoxFuture};
 use rex_ast::Span;

@@ -11,6 +11,11 @@ use crate::{
         scheduler::{EvalScheduler, EvalWorkItem, poll_pending_native},
     },
     handlers::NativeAsyncCall,
+    memory::{
+        heap::{Cell, Closure, Handle, Heap, HeapState, Pointer, Reference, TempRoots},
+        lists::ListItems,
+        traits::Collection,
+    },
     native_fn::NativeApplyResult,
     overloaded_fn::OverloadedFn,
     stack::{
@@ -21,10 +26,6 @@ use crate::{
         FrValueState, FrVar, Frame,
     },
     util::{is_function_type, split_fun},
-    value::{
-        Cell, Closure, Collection, Handle, Heap, HeapState, ListItems, Pointer, Reference,
-        TempRoots,
-    },
 };
 use rex_ast::{Pattern, Symbol};
 use rex_typesystem::{
