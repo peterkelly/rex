@@ -59,6 +59,7 @@ pub(crate) struct HeapState {
 const DEFAULT_GC_SLOT_THRESHOLD: usize = 4_096;
 const GC_SLOT_GROWTH_NUMERATOR: usize = 3;
 const GC_SLOT_GROWTH_DENOMINATOR: usize = 2;
+const GC_EXTREME_STRESS: bool = false;
 
 impl HeapState {
     fn new() -> Self {
@@ -76,7 +77,9 @@ impl HeapState {
     }
 
     fn collect_needed(&self) -> bool {
-        self.collect_on_every_alloc || self.slots.len() >= self.next_gc_slot_count
+        GC_EXTREME_STRESS
+            || self.collect_on_every_alloc
+            || self.slots.len() >= self.next_gc_slot_count
     }
 
     fn push_cell<'a>(&'a mut self, cell: Cell) -> Result<Reference<'a>, EngineError> {
@@ -246,75 +249,109 @@ impl HeapState {
 
     fn collect(&mut self) -> Result<(), EngineError> {
         let mut forwarding = vec![None; self.slots.len()];
-        let mut new_slots = Vec::with_capacity(self.slots.len());
-
-        let root_indices = self
+        let roots = self
             .root_slots
             .iter()
             .enumerate()
             .filter_map(|(index, slot)| slot.pointer.map(|pointer| (index, pointer)))
             .collect::<Vec<_>>();
+        let mut work = roots
+            .iter()
+            .map(|(_, pointer)| *pointer)
+            .collect::<VecDeque<_>>();
+        let mut seen = vec![false; self.slots.len()];
+        let mut live = Vec::new();
 
-        for (index, pointer) in root_indices {
-            let relocated = self.copy_for_gc(pointer, &mut new_slots, &mut forwarding)?;
-            self.root_slots[index].pointer = Some(relocated);
+        while let Some(pointer) = work.pop_front() {
+            let slot = self.get_slot_checked(&pointer)?;
+            let index = pointer.index as usize;
+            if seen[index] {
+                continue;
+            }
+            seen[index] = true;
+
+            let mut cell = slot
+                .cell
+                .as_ref()
+                .ok_or_else(|| invalid_pointer(self.id, pointer.index, pointer.generation))?
+                .clone();
+            let mut children = Vec::new();
+            cell.trace_pointers(&mut children);
+            work.extend(children);
+            live.push((pointer, cell));
         }
 
-        let mut scan_index = 0;
-        while scan_index < new_slots.len() {
-            let mut cell = new_slots
-                .get_mut(scan_index)
-                .and_then(|slot| slot.cell.take())
-                .ok_or_else(|| EngineError::Internal("copying GC copied slot missing".into()))?;
-            cell.map_pointers(&mut |child| {
-                self.copy_for_gc(child, &mut new_slots, &mut forwarding)
+        let old_indices = live
+            .iter()
+            .map(|(pointer, _)| pointer.index)
+            .collect::<Vec<_>>();
+        let destinations = if GC_EXTREME_STRESS {
+            randomized_gc_destinations(&old_indices, self.collections)
+        } else {
+            (0..live.len()).collect()
+        };
+        for (live_index, (pointer, _)) in live.iter().enumerate() {
+            let slot = self.get_slot_checked(pointer)?;
+            let generation = slot
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| EngineError::Internal("heap object generation exhausted".into()))?;
+            let index = u32::try_from(destinations[live_index])
+                .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
+            forwarding[pointer.index as usize] = Some(Pointer {
+                heap_id: self.id,
+                index,
+                generation,
+            });
+        }
+
+        let relocated_roots = roots
+            .iter()
+            .map(|(index, pointer)| Ok((*index, self.forward_for_gc(*pointer, &forwarding)?)))
+            .collect::<Result<Vec<_>, EngineError>>()?;
+
+        let mut new_slots = vec![None; live.len()];
+        for (live_index, (old_pointer, mut cell)) in live.into_iter().enumerate() {
+            cell.map_pointers(&mut |child| self.forward_for_gc(child, &forwarding))?;
+            let pointer = self.forward_for_gc(old_pointer, &forwarding)?;
+            let slot = new_slots.get_mut(destinations[live_index]).ok_or_else(|| {
+                EngineError::Internal("copying GC destination out of bounds".into())
             })?;
-            new_slots[scan_index].cell = Some(cell);
-            scan_index += 1;
+            if slot.is_some() {
+                return Err(EngineError::Internal(
+                    "copying GC assigned a destination twice".into(),
+                ));
+            }
+            *slot = Some(HeapSlot {
+                generation: pointer.generation,
+                cell: Some(cell),
+            });
         }
+        let new_slots = new_slots
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| EngineError::Internal("copying GC left a destination empty".into()))?;
 
+        for (index, pointer) in relocated_roots {
+            self.root_slots[index].pointer = Some(pointer);
+        }
         self.finish_collection(new_slots)?;
         #[cfg(debug_assertions)]
         self.verify_after_collection()?;
         Ok(())
     }
 
-    fn copy_for_gc(
+    fn forward_for_gc(
         &self,
         pointer: Pointer,
-        new_slots: &mut Vec<HeapSlot>,
-        forwarding: &mut [Option<Pointer>],
+        forwarding: &[Option<Pointer>],
     ) -> Result<Pointer, EngineError> {
-        let slot = self.get_slot_checked(&pointer)?;
-        let forwarding_index = pointer.index as usize;
-        if let Some(relocated) = forwarding.get(forwarding_index).ok_or_else(|| {
-            EngineError::Internal("copying GC forwarding table missing slot".into())
-        })? {
-            return Ok(*relocated);
-        }
-
-        let cell = slot
-            .cell
-            .as_ref()
-            .ok_or_else(|| invalid_pointer(self.id, pointer.index, pointer.generation))?
-            .clone();
-        let index = u32::try_from(new_slots.len())
-            .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
-        let generation = slot
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| EngineError::Internal("heap object generation exhausted".into()))?;
-        let relocated = Pointer {
-            heap_id: self.id,
-            index,
-            generation,
-        };
-        forwarding[forwarding_index] = Some(relocated);
-        new_slots.push(HeapSlot {
-            generation,
-            cell: Some(cell),
-        });
-        Ok(relocated)
+        self.get_slot_checked(&pointer)?;
+        forwarding
+            .get(pointer.index as usize)
+            .copied()
+            .flatten()
+            .ok_or_else(|| EngineError::Internal("copying GC forwarding pointer missing".into()))
     }
 
     #[cfg(debug_assertions)]
@@ -2452,6 +2489,55 @@ fn invalid_root(root_id: RootId) -> EngineError {
         "invalid heap root (heap_id={}, index={}, generation={})",
         root_id.heap_id, root_id.index, root_id.generation
     ))
+}
+
+fn randomized_gc_destinations(old_indices: &[u32], completed_collections: u64) -> Vec<usize> {
+    let len = old_indices.len();
+    let mut destinations = (0..len).collect::<Vec<_>>();
+    let mut random_state = completed_collections
+        .wrapping_add(1)
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (len as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+
+    for index in (1..len).rev() {
+        random_state = random_state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut random = random_state;
+        random = (random ^ (random >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        random = (random ^ (random >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        random ^= random >> 31;
+        let swap_index = (random % (index as u64 + 1)) as usize;
+        destinations.swap(index, swap_index);
+    }
+
+    // Repair accidental fixed points against the objects' actual old slots,
+    // rather than their positions in the tracing order. Rotating two or more
+    // fixed destinations cannot create another fixed point because old slot
+    // indices are unique. A lone fixed point can swap with any other object.
+    let fixed = destinations
+        .iter()
+        .enumerate()
+        .filter_map(|(live_index, destination)| {
+            (*destination == old_indices[live_index] as usize).then_some(live_index)
+        })
+        .collect::<Vec<_>>();
+    match fixed.as_slice() {
+        [fixed] if len > 1 => {
+            destinations.swap(*fixed, (fixed + 1) % len);
+        }
+        [_, _, ..] => {
+            let mut fixed_destinations = fixed
+                .iter()
+                .map(|index| destinations[*index])
+                .collect::<Vec<_>>();
+            fixed_destinations.rotate_left(1);
+            for (index, destination) in fixed.into_iter().zip(fixed_destinations) {
+                destinations[index] = destination;
+            }
+        }
+        _ => {}
+    }
+
+    destinations
 }
 
 #[cfg(test)]
