@@ -542,10 +542,6 @@ impl HeapState {
         self.alloc_reference(Cell::DateTime(value))
     }
 
-    pub(crate) fn alloc_ptr_cell(&mut self, cell: Cell) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(cell)
-    }
-
     pub(crate) fn alloc_ptr_uninitialized(
         &mut self,
         name: Symbol,
@@ -697,55 +693,9 @@ impl HeapState {
         self.get_cell_from_pointer(pointer)?.cell_as_u8()
     }
 
-    pub(crate) fn pointer_as_u16(&self, pointer: &Pointer) -> Result<u16, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_u16()
-    }
-
-    pub(crate) fn pointer_as_u32(&self, pointer: &Pointer) -> Result<u32, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_u32()
-    }
-
-    pub(crate) fn pointer_as_u64(&self, pointer: &Pointer) -> Result<u64, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_u64()
-    }
-
-    pub(crate) fn pointer_as_i8(&self, pointer: &Pointer) -> Result<i8, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_i8()
-    }
-
-    pub(crate) fn pointer_as_i16(&self, pointer: &Pointer) -> Result<i16, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_i16()
-    }
-
+    #[cfg(test)]
     pub(crate) fn pointer_as_i32(&self, pointer: &Pointer) -> Result<i32, EngineError> {
         self.get_cell_from_pointer(pointer)?.cell_as_i32()
-    }
-
-    pub(crate) fn pointer_as_i64(&self, pointer: &Pointer) -> Result<i64, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_i64()
-    }
-
-    pub(crate) fn pointer_as_f32(&self, pointer: &Pointer) -> Result<f32, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_f32()
-    }
-
-    pub(crate) fn pointer_as_f64(&self, pointer: &Pointer) -> Result<f64, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_f64()
-    }
-
-    pub(crate) fn pointer_as_string(&self, pointer: &Pointer) -> Result<String, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_string()
-    }
-
-    pub(crate) fn pointer_as_uuid(&self, pointer: &Pointer) -> Result<Uuid, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_uuid()
-    }
-
-    pub(crate) fn pointer_as_datetime(
-        &self,
-        pointer: &Pointer,
-    ) -> Result<DateTime<Utc>, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_datetime()
     }
 
     pub(crate) fn pointer_as_tuple(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
