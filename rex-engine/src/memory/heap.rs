@@ -53,7 +53,7 @@ pub(crate) struct HeapState {
     free_root_list: Vec<u64>,
     next_gc_slot_count: usize,
     collect_on_every_alloc: bool,
-    collections: u64,
+    collection_epoch: u64,
 }
 
 const DEFAULT_GC_SLOT_THRESHOLD: usize = 4_096;
@@ -72,7 +72,7 @@ impl HeapState {
             free_root_list: Vec::new(),
             next_gc_slot_count: DEFAULT_GC_SLOT_THRESHOLD,
             collect_on_every_alloc: false,
-            collections: 0,
+            collection_epoch: 0,
         }
     }
 
@@ -85,14 +85,15 @@ impl HeapState {
     fn push_cell<'a>(&'a mut self, cell: Cell) -> Result<Reference<'a>, EngineError> {
         let index = u32::try_from(self.slots.len())
             .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
+        let generation = self.collection_epoch;
         self.slots.push(HeapSlot {
-            generation: 0,
+            generation,
             cell: Some(cell),
         });
         Ok(Reference {
             heap: self,
             index,
-            generation: 0,
+            generation,
         })
     }
 
@@ -101,17 +102,13 @@ impl HeapState {
     }
 
     pub(crate) fn collection_count(&self) -> u64 {
-        self.collections
+        self.collection_epoch
     }
 
-    fn finish_collection(&mut self, slots: Vec<HeapSlot>) -> Result<(), EngineError> {
+    fn finish_collection(&mut self, slots: Vec<HeapSlot>, next_epoch: u64) {
         self.slots = slots;
-        self.collections = self
-            .collections
-            .checked_add(1)
-            .ok_or_else(|| EngineError::Internal("heap collection count exhausted".into()))?;
+        self.collection_epoch = next_epoch;
         self.update_next_gc_slot_count();
-        Ok(())
     }
 
     #[cfg(test)]
@@ -248,6 +245,10 @@ impl HeapState {
     }
 
     fn collect(&mut self) -> Result<(), EngineError> {
+        let next_epoch = self
+            .collection_epoch
+            .checked_add(1)
+            .ok_or_else(|| EngineError::Internal("heap collection count exhausted".into()))?;
         let mut forwarding = vec![None; self.slots.len()];
         let roots = self
             .root_slots
@@ -286,22 +287,18 @@ impl HeapState {
             .map(|(pointer, _)| pointer.index)
             .collect::<Vec<_>>();
         let destinations = if GC_EXTREME_STRESS {
-            randomized_gc_destinations(&old_indices, self.collections)
+            randomized_gc_destinations(&old_indices, self.collection_epoch)
         } else {
             (0..live.len()).collect()
         };
         for (live_index, (pointer, _)) in live.iter().enumerate() {
-            let slot = self.get_slot_checked(pointer)?;
-            let generation = slot
-                .generation
-                .checked_add(1)
-                .ok_or_else(|| EngineError::Internal("heap object generation exhausted".into()))?;
+            self.get_slot_checked(pointer)?;
             let index = u32::try_from(destinations[live_index])
                 .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
             forwarding[pointer.index as usize] = Some(Pointer {
                 heap_id: self.id,
                 index,
-                generation,
+                generation: next_epoch,
             });
         }
 
@@ -335,7 +332,7 @@ impl HeapState {
         for (index, pointer) in relocated_roots {
             self.root_slots[index].pointer = Some(pointer);
         }
-        self.finish_collection(new_slots)?;
+        self.finish_collection(new_slots, next_epoch);
         #[cfg(debug_assertions)]
         self.verify_after_collection()?;
         Ok(())
@@ -400,6 +397,12 @@ impl HeapState {
         }
 
         for (index, slot) in self.slots.iter().enumerate() {
+            if slot.generation != self.collection_epoch {
+                return Err(EngineError::Internal(format!(
+                    "GC verification found generation {} at slot {index}, expected heap epoch {}",
+                    slot.generation, self.collection_epoch
+                )));
+            }
             if slot.cell.is_none() {
                 return Err(EngineError::Internal(format!(
                     "GC verification found empty slot {index} after collection"
@@ -2669,17 +2672,48 @@ mod tests {
     #[test]
     fn copying_gc_updates_handles_and_rejects_stale_pointers() {
         let heap = Heap::new();
-        let stale = heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_i32(42)?.into_pointer()))
-            .expect("alloc_i32 should succeed");
-        let handle = heap.handle(stale).expect("handle should root pointer");
+        let first = heap.alloc_i32(42).expect("first i32 should allocate");
+        let second = heap.alloc_i32(7).expect("second i32 should allocate");
+        let epoch_before = heap
+            .with_locked_ok(|heap| heap.collection_count())
+            .expect("collection epoch");
+        let stale = first.pointer().expect("first pointer should resolve");
+
+        assert_eq!(stale.generation, epoch_before);
+        assert_eq!(
+            second
+                .pointer()
+                .expect("second pointer should resolve")
+                .generation,
+            epoch_before
+        );
 
         heap.with_locked(|heap| heap.collect())
             .expect("collection should succeed");
 
+        let epoch_after = heap
+            .with_locked_ok(|heap| heap.collection_count())
+            .expect("collection epoch");
+        assert_eq!(epoch_after, epoch_before + 1);
         assert_eq!(
-            handle.as_i32().expect("handle should follow moved value"),
+            first
+                .as_i32()
+                .expect("first handle should follow moved value"),
             42
+        );
+        assert_eq!(
+            first
+                .pointer()
+                .expect("first pointer should resolve after collection")
+                .generation,
+            epoch_after
+        );
+        assert_eq!(
+            second
+                .pointer()
+                .expect("second pointer should resolve after collection")
+                .generation,
+            epoch_after
         );
         assert!(
             heap.with_locked(|heap| heap.pointer_as_i32(&stale))
