@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
 use rex_ast::Symbol;
@@ -471,6 +471,11 @@ impl HeapState {
         self.push_cell(cell)
     }
 
+    fn get_cell_from_root(&self, root_id: RootId) -> Result<&Cell, EngineError> {
+        let pointer = self.resolve_root(root_id)?;
+        self.get_cell_from_pointer(&pointer)
+    }
+
     pub(crate) fn get_cell_from_pointer(&self, pointer: &Pointer) -> Result<&Cell, EngineError> {
         if pointer.heap_id != self.id {
             return Err(wrong_heap_pointer(
@@ -910,117 +915,158 @@ impl fmt::Debug for Handle {
 
 impl Handle {
     pub fn type_name(&self) -> Result<&'static str, EngineError> {
-        let pointer = self.pointer()?;
-        self.heap().with_locked(|heap| heap.type_name(&pointer))
+        self.root
+            .heap
+            .with_locked(|heap| Self::type_name_l(heap, self.root.root_id))
+    }
+
+    fn type_name_l(heap: &HeapState, root_id: RootId) -> Result<&'static str, EngineError> {
+        let pointer = heap.resolve_root(root_id)?;
+        heap.type_name(&pointer)
     }
 
     pub fn value(&self) -> Result<Value, EngineError> {
-        let pointer = self.pointer()?;
-        self.heap().view(&pointer)
+        let cell = self
+            .root
+            .heap
+            .with_locked(|heap| Ok(heap.get_cell_from_root(self.root.root_id)?.clone()))?;
+
+        let heap = &self.root.heap;
+        Ok(match cell {
+            Cell::Bool(value) => Value::Bool(value),
+            Cell::U8(value) => Value::U8(value),
+            Cell::U16(value) => Value::U16(value),
+            Cell::U32(value) => Value::U32(value),
+            Cell::U64(value) => Value::U64(value),
+            Cell::I8(value) => Value::I8(value),
+            Cell::I16(value) => Value::I16(value),
+            Cell::I32(value) => Value::I32(value),
+            Cell::I64(value) => Value::I64(value),
+            Cell::F32(value) => Value::F32(value),
+            Cell::F64(value) => Value::F64(value),
+            Cell::String(value) => Value::String(value),
+            Cell::Uuid(value) => Value::Uuid(value),
+            Cell::DateTime(value) => Value::DateTime(value),
+            Cell::Tuple(values) => Value::Tuple(heap.handles_from_pointers(&values)?),
+            Cell::Empty => Value::Empty,
+            Cell::Cons(head, tail) => Value::Cons(heap.handle(head)?, heap.handle(tail)?),
+            Cell::ListSlice {
+                start,
+                end,
+                elements,
+            } => Value::ListSlice {
+                start,
+                end,
+                elements: heap.handle(elements)?,
+            },
+            Cell::Data(values) => Value::Data(heap.handles_from_pointers(&values)?),
+            Cell::BinaryData(values) => Value::BinaryData(values),
+            Cell::Dict(values) => {
+                let mut out = BTreeMap::new();
+                for (name, pointer) in values {
+                    out.insert(name, heap.handle(pointer)?);
+                }
+                Value::Dict(out)
+            }
+            Cell::Adt(name, args) => Value::Adt(name, heap.handles_from_pointers(&args)?),
+            Cell::Uninitialized(name) => Value::Uninitialized(name),
+            Cell::Closure(_) => Value::Closure,
+            Cell::Native(_) => Value::Native,
+            Cell::Overloaded(_) => Value::Overloaded,
+        })
     }
 
     pub fn as_bool(&self) -> Result<bool, EngineError> {
-        match self.value()? {
-            Value::Bool(value) => Ok(value),
-            _ => Err(self.type_error("bool")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_bool()
     }
 
     pub fn as_u8(&self) -> Result<u8, EngineError> {
-        match self.value()? {
-            Value::U8(value) => Ok(value),
-            _ => Err(self.type_error("u8")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_u8()
     }
 
     pub fn as_u16(&self) -> Result<u16, EngineError> {
-        match self.value()? {
-            Value::U16(value) => Ok(value),
-            _ => Err(self.type_error("u16")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_u16()
     }
 
     pub fn as_u32(&self) -> Result<u32, EngineError> {
-        match self.value()? {
-            Value::U32(value) => Ok(value),
-            _ => Err(self.type_error("u32")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_u32()
     }
 
     pub fn as_u64(&self) -> Result<u64, EngineError> {
-        match self.value()? {
-            Value::U64(value) => Ok(value),
-            _ => Err(self.type_error("u64")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_u64()
     }
 
     pub fn as_i8(&self) -> Result<i8, EngineError> {
-        match self.value()? {
-            Value::I8(value) => Ok(value),
-            _ => Err(self.type_error("i8")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_i8()
     }
 
     pub fn as_i16(&self) -> Result<i16, EngineError> {
-        match self.value()? {
-            Value::I16(value) => Ok(value),
-            _ => Err(self.type_error("i16")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_i16()
     }
 
     pub fn as_i32(&self) -> Result<i32, EngineError> {
-        match self.value()? {
-            Value::I32(value) => Ok(value),
-            _ => Err(self.type_error("i32")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_i32()
     }
 
     pub fn as_i64(&self) -> Result<i64, EngineError> {
-        match self.value()? {
-            Value::I64(value) => Ok(value),
-            _ => Err(self.type_error("i64")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_i64()
     }
 
     pub fn as_f32(&self) -> Result<f32, EngineError> {
-        match self.value()? {
-            Value::F32(value) => Ok(value),
-            _ => Err(self.type_error("f32")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_f32()
     }
 
     pub fn as_f64(&self) -> Result<f64, EngineError> {
-        match self.value()? {
-            Value::F64(value) => Ok(value),
-            _ => Err(self.type_error("f64")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_f64()
     }
 
     pub fn as_string(&self) -> Result<String, EngineError> {
-        match self.value()? {
-            Value::String(value) => Ok(value),
-            _ => Err(self.type_error("string")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_string()
     }
 
     pub fn as_uuid(&self) -> Result<Uuid, EngineError> {
-        match self.value()? {
-            Value::Uuid(value) => Ok(value),
-            _ => Err(self.type_error("uuid")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_uuid()
     }
 
     pub fn as_datetime(&self) -> Result<DateTime<Utc>, EngineError> {
-        match self.value()? {
-            Value::DateTime(value) => Ok(value),
-            _ => Err(self.type_error("datetime")),
-        }
+        let heap = self.lock()?;
+        let cell = heap.get_cell_from_root(self.root.root_id)?;
+        cell.cell_as_datetime()
     }
 
     pub fn as_tuple(&self) -> Result<Vec<Handle>, EngineError> {
         match self.value()? {
             Value::Tuple(values) => Ok(values),
-            _ => Err(self.type_error("tuple")),
+            _ => Err(self
+                .root
+                .heap
+                .with_locked_ok(|heap| Self::type_error(heap, self.root.root_id, "tuple"))?),
         }
     }
 
@@ -1036,14 +1082,20 @@ impl Handle {
     pub fn as_dict(&self) -> Result<BTreeMap<Symbol, Handle>, EngineError> {
         match self.value()? {
             Value::Dict(values) => Ok(values),
-            _ => Err(self.type_error("dict")),
+            _ => Err(self
+                .root
+                .heap
+                .with_locked_ok(|heap| Self::type_error(heap, self.root.root_id, "dict"))?),
         }
     }
 
     pub fn as_adt(&self) -> Result<(Symbol, Vec<Handle>), EngineError> {
         match self.value()? {
             Value::Adt(tag, args) => Ok((tag, args)),
-            _ => Err(self.type_error("adt")),
+            _ => Err(self
+                .root
+                .heap
+                .with_locked_ok(|heap| Self::type_error(heap, self.root.root_id, "adt"))?),
         }
     }
 
@@ -1056,23 +1108,13 @@ impl Handle {
     }
 
     pub fn display_with(&self, opts: ValueDisplayOptions) -> Result<String, EngineError> {
-        let heap = self
-            .root
-            .heap
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
+        let heap = self.lock()?;
         let pointer = heap.resolve_root(self.root.root_id)?;
         pointer_display_with(&heap, &pointer, opts)
     }
 
     pub fn debug(&self) -> Result<String, EngineError> {
-        let heap = self
-            .root
-            .heap
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
+        let heap = self.lock()?;
         let pointer = heap.resolve_root(self.root.root_id)?;
         pointer_debug(&heap, &pointer)
     }
@@ -1084,10 +1126,12 @@ impl Handle {
             .with_locked(|heap| pointer_eq(heap, &self_pointer, &pointer))
     }
 
-    fn type_error(&self, expected: &'static str) -> EngineError {
+    fn type_error(heap: &HeapState, root_id: RootId, expected: &'static str) -> EngineError {
         EngineError::NativeType {
             expected: expected.to_string(),
-            got: self.type_name().unwrap_or("<invalid handle>").to_string(),
+            got: Self::type_name_l(heap, root_id)
+                .unwrap_or("<invalid handle>")
+                .to_string(),
         }
     }
 
@@ -1113,85 +1157,19 @@ impl Handle {
         }
         Ok(pointer)
     }
+
+    fn lock(&self) -> Result<MutexGuard<'_, HeapState>, EngineError> {
+        self.root
+            .heap
+            .state
+            .lock()
+            .map_err(|_| EngineError::HeapStatePoisoned)
+    }
 }
 
 impl Default for Heap {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-enum ValueSeed {
-    Bool(bool),
-    U8(u8),
-    U16(u16),
-    U32(u32),
-    U64(u64),
-    I8(i8),
-    I16(i16),
-    I32(i32),
-    I64(i64),
-    F32(f32),
-    F64(f64),
-    String(String),
-    Uuid(Uuid),
-    DateTime(DateTime<Utc>),
-    Tuple(Vec<Pointer>),
-    Empty,
-    Cons(Pointer, Pointer),
-    ListSlice {
-        start: usize,
-        end: usize,
-        elements: Pointer,
-    },
-    Data(Vec<Pointer>),
-    BinaryData(Vec<u8>),
-    Dict(BTreeMap<Symbol, Pointer>),
-    Adt(Symbol, Vec<Pointer>),
-    Uninitialized(Symbol),
-    Closure,
-    Native,
-    Overloaded,
-}
-
-impl ValueSeed {
-    fn from_cell(cell: &Cell) -> Self {
-        match cell {
-            Cell::Bool(value) => Self::Bool(*value),
-            Cell::U8(value) => Self::U8(*value),
-            Cell::U16(value) => Self::U16(*value),
-            Cell::U32(value) => Self::U32(*value),
-            Cell::U64(value) => Self::U64(*value),
-            Cell::I8(value) => Self::I8(*value),
-            Cell::I16(value) => Self::I16(*value),
-            Cell::I32(value) => Self::I32(*value),
-            Cell::I64(value) => Self::I64(*value),
-            Cell::F32(value) => Self::F32(*value),
-            Cell::F64(value) => Self::F64(*value),
-            Cell::String(value) => Self::String(value.clone()),
-            Cell::Uuid(value) => Self::Uuid(*value),
-            Cell::DateTime(value) => Self::DateTime(*value),
-            Cell::Tuple(values) => Self::Tuple(values.clone()),
-            Cell::Empty => Self::Empty,
-            Cell::Cons(head, tail) => Self::Cons(*head, *tail),
-            Cell::ListSlice {
-                start,
-                end,
-                elements,
-            } => Self::ListSlice {
-                start: *start,
-                end: *end,
-                elements: *elements,
-            },
-            Cell::Data(values) => Self::Data(values.clone()),
-            Cell::BinaryData(values) => Self::BinaryData(values.clone()),
-            Cell::Dict(values) => Self::Dict(values.clone()),
-            Cell::Adt(name, args) => Self::Adt(name.clone(), args.clone()),
-            Cell::Uninitialized(name) => Self::Uninitialized(name.clone()),
-            Cell::Closure(_) => Self::Closure,
-            Cell::Native(_) => Self::Native,
-            Cell::Overloaded(_) => Self::Overloaded,
-        }
     }
 }
 
@@ -1223,7 +1201,6 @@ impl Heap {
         f(&mut state)
     }
 
-    #[cfg(test)]
     pub(crate) fn with_locked_ok<R>(
         &self,
         f: impl FnOnce(&mut HeapState) -> R,
@@ -1484,57 +1461,6 @@ impl Heap {
 
     pub(crate) fn clone_cell(&self, pointer: &Pointer) -> Result<Cell, EngineError> {
         self.with_locked(|heap| Ok(heap.get_cell_from_pointer(pointer)?.clone()))
-    }
-
-    pub(crate) fn view(&self, pointer: &Pointer) -> Result<Value, EngineError> {
-        let seed = self
-            .with_locked(|heap| Ok(ValueSeed::from_cell(heap.get_cell_from_pointer(pointer)?)))?;
-        self.view_seed(seed)
-    }
-
-    fn view_seed(&self, seed: ValueSeed) -> Result<Value, EngineError> {
-        Ok(match seed {
-            ValueSeed::Bool(value) => Value::Bool(value),
-            ValueSeed::U8(value) => Value::U8(value),
-            ValueSeed::U16(value) => Value::U16(value),
-            ValueSeed::U32(value) => Value::U32(value),
-            ValueSeed::U64(value) => Value::U64(value),
-            ValueSeed::I8(value) => Value::I8(value),
-            ValueSeed::I16(value) => Value::I16(value),
-            ValueSeed::I32(value) => Value::I32(value),
-            ValueSeed::I64(value) => Value::I64(value),
-            ValueSeed::F32(value) => Value::F32(value),
-            ValueSeed::F64(value) => Value::F64(value),
-            ValueSeed::String(value) => Value::String(value),
-            ValueSeed::Uuid(value) => Value::Uuid(value),
-            ValueSeed::DateTime(value) => Value::DateTime(value),
-            ValueSeed::Tuple(values) => Value::Tuple(self.handles_from_pointers(&values)?),
-            ValueSeed::Empty => Value::Empty,
-            ValueSeed::Cons(head, tail) => Value::Cons(self.handle(head)?, self.handle(tail)?),
-            ValueSeed::ListSlice {
-                start,
-                end,
-                elements,
-            } => Value::ListSlice {
-                start,
-                end,
-                elements: self.handle(elements)?,
-            },
-            ValueSeed::Data(values) => Value::Data(self.handles_from_pointers(&values)?),
-            ValueSeed::BinaryData(values) => Value::BinaryData(values),
-            ValueSeed::Dict(values) => {
-                let mut out = BTreeMap::new();
-                for (name, pointer) in values {
-                    out.insert(name, self.handle(pointer)?);
-                }
-                Value::Dict(out)
-            }
-            ValueSeed::Adt(name, args) => Value::Adt(name, self.handles_from_pointers(&args)?),
-            ValueSeed::Uninitialized(name) => Value::Uninitialized(name),
-            ValueSeed::Closure => Value::Closure,
-            ValueSeed::Native => Value::Native,
-            ValueSeed::Overloaded => Value::Overloaded,
-        })
     }
 
     fn handles_from_pointers(&self, values: &[Pointer]) -> Result<Vec<Handle>, EngineError> {
