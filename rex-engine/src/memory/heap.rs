@@ -10,9 +10,7 @@ use rex_ast::Symbol;
 use rex_typesystem::types::{Type, TypedExpr};
 use uuid::Uuid;
 
-use crate::{
-    EngineError, Environment, native_fn::NativeFn, overloaded_fn::OverloadedFn, stack::Frame,
-};
+use crate::{EngineError, Environment, native_fn::NativeFn, overloaded_fn::OverloadedFn};
 
 use super::{
     lists::{
@@ -589,25 +587,6 @@ impl HeapState {
         self.alloc_reference(Cell::Uninitialized(name))
     }
 
-    pub(crate) fn alloc_ptr_frame(&mut self, frame: Frame) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Frame(frame))
-    }
-
-    pub(crate) fn replace_frame(
-        &mut self,
-        pointer: &Pointer,
-        frame: Frame,
-    ) -> Result<(), EngineError> {
-        self.pointer_as_frame(pointer)?;
-        self.overwrite(pointer, Cell::Frame(frame))
-    }
-
-    pub(crate) fn alloc_ptr_root_frame_parent<'a>(
-        &'a mut self,
-    ) -> Result<Reference<'a>, EngineError> {
-        self.alloc_ptr_u64(0)
-    }
-
     pub(crate) fn alloc_ptr_tuple(
         &mut self,
         values: Vec<Pointer>,
@@ -755,10 +734,6 @@ impl HeapState {
     ) -> Result<(Symbol, Vec<Pointer>), EngineError> {
         self.get_cell_from_pointer(pointer)?.cell_as_adt()
     }
-
-    pub(crate) fn pointer_as_frame(&self, pointer: &Pointer) -> Result<Frame, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_frame()
-    }
 }
 
 #[derive(Clone)]
@@ -844,7 +819,6 @@ pub enum Value {
     Dict(BTreeMap<Symbol, Handle>),
     Adt(Symbol, Vec<Handle>),
     Uninitialized(Symbol),
-    Frame,
     Closure,
     Native,
     Overloaded,
@@ -874,7 +848,6 @@ impl Value {
             Value::Dict(..) => "dict",
             Value::Adt(..) => "adt",
             Value::Uninitialized(..) => "uninitialized",
-            Value::Frame => "frame",
             Value::Closure => "closure",
             Value::Native => "native",
             Value::Overloaded => "overloaded",
@@ -1176,7 +1149,6 @@ enum ValueSeed {
     Dict(BTreeMap<Symbol, Pointer>),
     Adt(Symbol, Vec<Pointer>),
     Uninitialized(Symbol),
-    Frame,
     Closure,
     Native,
     Overloaded,
@@ -1216,7 +1188,6 @@ impl ValueSeed {
             Cell::Dict(values) => Self::Dict(values.clone()),
             Cell::Adt(name, args) => Self::Adt(name.clone(), args.clone()),
             Cell::Uninitialized(name) => Self::Uninitialized(name.clone()),
-            Cell::Frame(_) => Self::Frame,
             Cell::Closure(_) => Self::Closure,
             Cell::Native(_) => Self::Native,
             Cell::Overloaded(_) => Self::Overloaded,
@@ -1560,7 +1531,6 @@ impl Heap {
             }
             ValueSeed::Adt(name, args) => Value::Adt(name, self.handles_from_pointers(&args)?),
             ValueSeed::Uninitialized(name) => Value::Uninitialized(name),
-            ValueSeed::Frame => Value::Frame,
             ValueSeed::Closure => Value::Closure,
             ValueSeed::Native => Value::Native,
             ValueSeed::Overloaded => Value::Overloaded,
@@ -1765,7 +1735,6 @@ pub(crate) enum Cell {
     Dict(BTreeMap<Symbol, Pointer>),
     Adt(Symbol, Vec<Pointer>),
     Uninitialized(Symbol),
-    Frame(Frame),
     Closure(Closure),
     Native(NativeFn),
     Overloaded(OverloadedFn),
@@ -1795,7 +1764,6 @@ impl Cell {
             Cell::Dict(..) => "dict",
             Cell::Adt(..) => "adt",
             Cell::Uninitialized(..) => "uninitialized",
-            Cell::Frame(..) => "frame",
             Cell::Closure(..) => "closure",
             Cell::Native(..) => "native",
             Cell::Overloaded(..) => "overloaded",
@@ -1934,13 +1902,6 @@ impl Cell {
             _ => Err(self.cell_type_error("adt")),
         }
     }
-
-    pub(crate) fn cell_as_frame(&self) -> Result<Frame, EngineError> {
-        match self {
-            Cell::Frame(frame) => Ok(frame.clone()),
-            _ => Err(self.cell_type_error("frame")),
-        }
-    }
 }
 
 impl Collection for Cell {
@@ -1970,7 +1931,6 @@ impl Collection for Cell {
                 }
                 Ok(())
             }
-            Cell::Frame(frame) => frame.map_pointers(map),
             Cell::Closure(closure) => closure.env.map_pointers(map),
             Cell::Native(native) => native.map_pointers(map),
             Cell::Overloaded(overloaded) => overloaded.map_pointers(map),
@@ -2178,7 +2138,6 @@ fn cell_debug_inner(
             rendered.join(" ")
         }
         Cell::Uninitialized(name) => format!("<uninitialized:{name}>"),
-        Cell::Frame(frame) => format!("<frame:{frame:?}>"),
         Cell::Closure(closure) => closure_debug_inner(heap, closure, active)?,
         Cell::Native(native) => format!("<native:{}>", native.name()),
         Cell::Overloaded(over) => format!("<overloaded:{}>", over.name()),
@@ -2307,7 +2266,6 @@ fn cell_display_inner(
             rendered.join(" ")
         }
         Cell::Uninitialized(name) => format!("<uninitialized:{name}>"),
-        Cell::Frame(frame) => format!("<frame:{frame:?}>"),
         Cell::Closure(..) => "<closure>".to_string(),
         Cell::Native(native) => format!("<native:{}>", native.name()),
         Cell::Overloaded(over) => format!("<overloaded:{}>", over.name()),
@@ -2451,7 +2409,6 @@ fn cell_eq_inner(
             Ok(true)
         }
         (Cell::Uninitialized(lhs), Cell::Uninitialized(rhs)) => Ok(lhs == rhs),
-        (Cell::Frame(lhs), Cell::Frame(rhs)) => Ok(lhs == rhs),
         (Cell::Closure(lhs), Cell::Closure(rhs)) => closure_eq_inner(heap, lhs, rhs, seen),
         (Cell::Native(lhs), Cell::Native(rhs)) => Ok(lhs == rhs),
         (Cell::Overloaded(lhs), Cell::Overloaded(rhs)) => Ok(lhs == rhs),

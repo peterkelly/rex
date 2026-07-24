@@ -15,6 +15,7 @@ use crate::{
     error::EngineError,
     evaluator::{context::Context, eval::eval_typed_expr, runtime_core::RuntimeCore},
     memory::heap::{Cell, Handle, Heap, HeapState, Pointer},
+    stack::FrameId,
     util::split_fun,
 };
 
@@ -40,11 +41,11 @@ where
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[doc(hidden)]
 pub(crate) struct CallSite {
-    pub parent: Option<Pointer>,
+    pub parent: Option<FrameId>,
 }
 
 impl CallSite {
-    pub(crate) fn child(parent: Pointer) -> Self {
+    pub(crate) fn child(parent: FrameId) -> Self {
         Self {
             parent: Some(parent),
         }
@@ -257,7 +258,6 @@ fn cell_type(heap: &HeapState, cell: &Cell) -> Result<Type, EngineError> {
         }
         Cell::Adt(tag, _args) => Err(EngineError::UnknownType(tag.clone())),
         Cell::Uninitialized(..) => Err(EngineError::UnknownType(Symbol::intern("uninitialized"))),
-        Cell::Frame(..) => Err(EngineError::UnknownType(Symbol::intern("frame"))),
         Cell::Closure(..) => Err(EngineError::UnknownType(Symbol::intern("closure"))),
         Cell::Native(..) => Err(EngineError::UnknownType(Symbol::intern("native"))),
         Cell::Overloaded(..) => Err(EngineError::UnknownType(Symbol::intern("overloaded"))),

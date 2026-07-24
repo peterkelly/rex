@@ -3,11 +3,15 @@ use crate::{
     error::EngineError,
     evaluator::runtime_core::RuntimeCore,
     handlers::{NativeAsyncCall, NativeHandleFuture},
-    memory::heap::{Handle, Pointer, TempRoots},
+    memory::{
+        heap::{Handle, Pointer, TempRoots},
+        traits::Collection,
+    },
+    stack::{FrameId, FrameStore},
 };
 use futures::future::poll_fn;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     sync::Arc,
     task::{Context as TaskContext, Poll},
 };
@@ -25,7 +29,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     pub(crate) fn new(
-        root: Pointer,
+        root: FrameId,
         parallelism_controller: Arc<dyn ParallelismController>,
     ) -> Self {
         let mut ready = VecDeque::new();
@@ -44,7 +48,7 @@ where
         self.enforce_ready_limit();
     }
 
-    pub(crate) fn schedule_pending_native(&mut self, frame: Pointer, call: NativeAsyncCall<State>) {
+    pub(crate) fn schedule_pending_native(&mut self, frame: FrameId, call: NativeAsyncCall<State>) {
         self.deferred_native
             .push_back(DeferredNative::new(frame, call));
     }
@@ -155,7 +159,7 @@ where
     fn take_pending_native_completion(
         &mut self,
         index: usize,
-    ) -> Result<(Pointer, Handle), EngineError> {
+    ) -> Result<(FrameId, Handle), EngineError> {
         if index >= self.pending_native.len() {
             return Err(EngineError::Internal(
                 "pending native completion index out of bounds".into(),
@@ -171,30 +175,23 @@ where
         for item in &self.deferred_ready {
             item.trace_pointers(out);
         }
-        for pending in &self.pending_native {
-            pending.trace_pointers(out);
-        }
         for pending in &self.deferred_native {
             pending.trace_pointers(out);
         }
     }
 
-    pub(crate) fn refresh_from_roots(
+    pub(crate) fn map_pointers<E>(
         &mut self,
-        roots: &TempRoots,
-        cursor: &mut usize,
-    ) -> Result<(), EngineError> {
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
         for item in &mut self.ready {
-            item.refresh_from_roots(roots, cursor)?;
+            item.map_pointers(rewrite)?;
         }
         for item in &mut self.deferred_ready {
-            item.refresh_from_roots(roots, cursor)?;
-        }
-        for pending in &mut self.pending_native {
-            pending.refresh_from_roots(roots, cursor)?;
+            item.map_pointers(rewrite)?;
         }
         for pending in &mut self.deferred_native {
-            pending.refresh_from_roots(roots, cursor)?;
+            pending.map_pointers(rewrite)?;
         }
         Ok(())
     }
@@ -202,13 +199,25 @@ where
 
 pub(crate) async fn poll_pending_native<State>(
     runtime: &mut RuntimeCore<State>,
+    frames: &mut FrameStore,
     scheduler: &mut EvalScheduler<State>,
     wait: bool,
 ) -> Result<bool, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
+    if !scheduler.has_pending_native() && !scheduler.has_deferred_native() {
+        return Ok(false);
+    }
+
+    let mut protected = Vec::new();
+    frames.trace_pointers(&mut protected);
+    scheduler.trace_pointers(&mut protected);
+    runtime.trace_pointers(&mut protected)?;
+    let roots = runtime.heap.temp_roots(protected.clone())?;
+
     poll_fn(|cx| Poll::Ready(scheduler.admit_available_deferred_native(cx, runtime))).await?;
+    refresh_scheduler_roots(runtime, frames, scheduler, &roots, &protected)?;
     if !scheduler.has_pending_native() {
         if !wait || !scheduler.has_deferred_native() {
             return Ok(false);
@@ -220,14 +229,10 @@ where
             Poll::Pending => Poll::Pending,
         })
         .await?;
-        return Ok(scheduler.activate_permitted_deferred_native(runtime));
+        let activated = scheduler.activate_permitted_deferred_native(runtime);
+        refresh_scheduler_roots(runtime, frames, scheduler, &roots, &protected)?;
+        return Ok(activated);
     }
-
-    let mut protected = Vec::new();
-    scheduler.trace_pointers(&mut protected);
-    runtime.trace_pointers(&mut protected)?;
-    let roots = runtime.heap.temp_roots(protected)?;
-    refresh_scheduler_roots(runtime, scheduler, &roots)?;
 
     enum NativeWaitEvent {
         Completion(usize),
@@ -271,13 +276,15 @@ where
         .await?
     };
 
-    refresh_scheduler_roots(runtime, scheduler, &roots)?;
+    refresh_scheduler_roots(runtime, frames, scheduler, &roots, &protected)?;
 
     let Some(event) = event else {
         return Ok(false);
     };
     let NativeWaitEvent::Completion(index) = event else {
-        return Ok(scheduler.activate_permitted_deferred_native(runtime));
+        let activated = scheduler.activate_permitted_deferred_native(runtime);
+        refresh_scheduler_roots(runtime, frames, scheduler, &roots, &protected)?;
+        return Ok(activated);
     };
     let (frame, handle) = scheduler.take_pending_native_completion(index)?;
     let value = handle.pointer_for_heap(&runtime.heap)?;
@@ -287,8 +294,10 @@ where
 
 fn refresh_scheduler_roots<State>(
     runtime: &mut RuntimeCore<State>,
+    frames: &mut FrameStore,
     scheduler: &mut EvalScheduler<State>,
     roots: &TempRoots,
+    originals: &[Pointer],
 ) -> Result<(), EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -297,9 +306,15 @@ where
         return Ok(());
     }
 
-    let mut cursor = 0;
-    scheduler.refresh_from_roots(roots, &mut cursor)?;
-    runtime.refresh_from_roots(roots, &mut cursor)
+    let mut rewrites = HashMap::with_capacity(originals.len());
+    for (index, original) in originals.iter().enumerate() {
+        rewrites.insert(*original, roots.get(index)?);
+    }
+    let mut rewrite =
+        |pointer| Ok::<_, EngineError>(rewrites.get(&pointer).copied().unwrap_or(pointer));
+    frames.map_pointers(&mut rewrite)?;
+    scheduler.map_pointers(&mut rewrite)?;
+    runtime.map_pointers(&mut rewrite)
 }
 
 enum PendingNativeState {
@@ -308,19 +323,19 @@ enum PendingNativeState {
 }
 
 struct PendingNative {
-    frame: Pointer,
+    frame: FrameId,
     state: PendingNativeState,
     _permit: Option<NativeAsyncPermit>,
 }
 
 struct DeferredNative<State: Clone + Send + Sync + 'static> {
-    frame: Pointer,
+    frame: FrameId,
     call: NativeAsyncCall<State>,
     permit: Option<NativeAsyncPermit>,
 }
 
 impl PendingNative {
-    fn new(frame: Pointer, future: NativeHandleFuture, permit: NativeAsyncPermit) -> Self {
+    fn new(frame: FrameId, future: NativeHandleFuture, permit: NativeAsyncPermit) -> Self {
         Self {
             frame,
             state: PendingNativeState::Polling(future),
@@ -328,7 +343,7 @@ impl PendingNative {
         }
     }
 
-    fn ready(frame: Pointer, result: Result<Handle, EngineError>) -> Self {
+    fn ready(frame: FrameId, result: Result<Handle, EngineError>) -> Self {
         Self {
             frame,
             state: PendingNativeState::Ready(result),
@@ -337,7 +352,7 @@ impl PendingNative {
     }
 
     fn ready_with_permit(
-        frame: Pointer,
+        frame: FrameId,
         result: Result<Handle, EngineError>,
         permit: NativeAsyncPermit,
     ) -> Self {
@@ -361,21 +376,7 @@ impl PendingNative {
         }
     }
 
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.frame);
-    }
-
-    fn refresh_from_roots(
-        &mut self,
-        roots: &TempRoots,
-        cursor: &mut usize,
-    ) -> Result<(), EngineError> {
-        self.frame = roots.get(*cursor)?;
-        *cursor += 1;
-        Ok(())
-    }
-
-    fn into_completion(self) -> Result<(Pointer, Handle), EngineError> {
+    fn into_completion(self) -> Result<(FrameId, Handle), EngineError> {
         match self.state {
             PendingNativeState::Ready(result) => result.map(|handle| (self.frame, handle)),
             PendingNativeState::Polling(_) => Err(EngineError::Internal(
@@ -389,7 +390,7 @@ impl<State> DeferredNative<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    fn new(frame: Pointer, call: NativeAsyncCall<State>) -> Self {
+    fn new(frame: FrameId, call: NativeAsyncCall<State>) -> Self {
         Self {
             frame,
             call,
@@ -413,42 +414,37 @@ where
     }
 
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.frame);
         self.call.trace_pointers(out);
     }
 
-    fn refresh_from_roots(
+    fn map_pointers<E>(
         &mut self,
-        roots: &TempRoots,
-        cursor: &mut usize,
-    ) -> Result<(), EngineError> {
-        self.frame = roots.get(*cursor)?;
-        *cursor += 1;
-        self.call.refresh_from_roots(roots, cursor)?;
-        Ok(())
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        self.call.map_pointers(rewrite)
     }
 }
 
 pub(crate) struct EvalWorkItem {
-    pub(crate) frame: Pointer,
+    pub(crate) frame: FrameId,
     pub(crate) returned: Option<EvalReturned>,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct EvalReturned {
-    pub(crate) child: Pointer,
+    pub(crate) child: FrameId,
     pub(crate) value: Pointer,
 }
 
 impl EvalWorkItem {
-    pub(crate) fn enter(frame: Pointer) -> Self {
+    pub(crate) fn enter(frame: FrameId) -> Self {
         Self {
             frame,
             returned: None,
         }
     }
 
-    pub(crate) fn receive(frame: Pointer, child: Pointer, value: Pointer) -> Self {
+    pub(crate) fn receive(frame: FrameId, child: FrameId, value: Pointer) -> Self {
         Self {
             frame,
             returned: Some(EvalReturned { child, value }),
@@ -456,25 +452,17 @@ impl EvalWorkItem {
     }
 
     pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.push(self.frame);
         if let Some(returned) = self.returned.as_ref() {
-            out.push(returned.child);
             out.push(returned.value);
         }
     }
 
-    pub(crate) fn refresh_from_roots(
+    pub(crate) fn map_pointers<E>(
         &mut self,
-        roots: &TempRoots,
-        cursor: &mut usize,
-    ) -> Result<(), EngineError> {
-        self.frame = roots.get(*cursor)?;
-        *cursor += 1;
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
         if let Some(returned) = self.returned.as_mut() {
-            returned.child = roots.get(*cursor)?;
-            *cursor += 1;
-            returned.value = roots.get(*cursor)?;
-            *cursor += 1;
+            returned.value = rewrite(returned.value)?;
         }
         Ok(())
     }

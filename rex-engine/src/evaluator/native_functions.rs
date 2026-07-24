@@ -16,8 +16,8 @@ use crate::{
     },
     overloaded_fn::OverloadedFn,
     stack::{
-        FrNativeCall, FrNativeCallState, Frame, NativeUnaryShape, rewrite_entries,
-        rewrite_map_values, rewrite_option, rewrite_pointer, rewrite_slice,
+        FrNativeCall, FrNativeCallState, Frame, FrameId, FrameStore, NativeUnaryShape,
+        rewrite_entries, rewrite_map_values, rewrite_option, rewrite_pointer, rewrite_slice,
     },
 };
 use rex_ast::Symbol;
@@ -41,7 +41,8 @@ struct NativeChildSpec {
 
 fn native_step_to_control<State>(
     runtime: &RuntimeCore<State>,
-    frame_ptr: Pointer,
+    frames: &mut FrameStore,
+    frame_id: FrameId,
     mut frame: FrNativeCall,
     step: NativeStep,
 ) -> Result<EvalControl<State>, EngineError>
@@ -50,60 +51,36 @@ where
 {
     match step {
         NativeStep::Wait => {
-            runtime
-                .heap
-                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::NativeCall(frame)))?;
+            frames.replace(frame_id, Frame::NativeCall(frame))?;
             Ok(EvalControl::Wait)
         }
         NativeStep::Return(value) => Ok(EvalControl::Return(value)),
         NativeStep::Push { expr, env } => {
             frame.state = FrNativeCallState::Waiting;
-            runtime
-                .heap
-                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::NativeCall(frame)))?;
+            frames.replace(frame_id, Frame::NativeCall(frame))?;
             Ok(EvalControl::Push { expr, env })
         }
         NativeStep::Schedule(child_count) => {
             frame.state = FrNativeCallState::Waiting;
-            runtime
-                .heap
-                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::NativeCall(frame)))?;
+            frames.replace(frame_id, Frame::NativeCall(frame))?;
 
-            let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
             for index in 0..child_count {
-                let current_frame_ptr = roots.get(0)?;
-                let current_frame = match runtime
-                    .heap
-                    .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-                {
+                let current_frame = match frames.get(frame_id)?.clone() {
                     Frame::NativeCall(frame) => frame,
                     _ => return frame_kind_error("native call"),
                 };
                 let child_spec = current_frame.task.scheduled_child_spec(runtime, index)?;
-                let current_frame_ptr = roots.get(0)?;
-                let frame = frame_for_expr(current_frame_ptr, child_spec.expr, child_spec.env);
-                let child = runtime
-                    .heap
-                    .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
-                let current_frame_ptr = roots.get(0)?;
-                let mut current_frame = match runtime
-                    .heap
-                    .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-                {
+                let frame = frame_for_expr(Some(frame_id), child_spec.expr, child_spec.env);
+                let child = frames.insert(frame);
+                let mut current_frame = match frames.get(frame_id)?.clone() {
                     Frame::NativeCall(frame) => frame,
                     _ => return frame_kind_error("native call"),
                 };
                 current_frame.task.push_scheduled_child(child)?;
-                runtime.heap.with_locked(|heap| {
-                    heap.replace_frame(&current_frame_ptr, Frame::NativeCall(current_frame))
-                })?;
+                frames.replace(frame_id, Frame::NativeCall(current_frame))?;
             }
 
-            let current_frame_ptr = roots.get(0)?;
-            let current_frame = match runtime
-                .heap
-                .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-            {
+            let current_frame = match frames.get(frame_id)?.clone() {
                 Frame::NativeCall(frame) => frame,
                 _ => return frame_kind_error("native call"),
             };
@@ -116,7 +93,8 @@ where
 
 pub(crate) fn eval_native_enter<State>(
     runtime: &RuntimeCore<State>,
-    frame_ptr: Pointer,
+    frames: &mut FrameStore,
+    frame_id: FrameId,
     mut frame: FrNativeCall,
 ) -> Result<EvalControl<State>, EngineError>
 where
@@ -125,20 +103,20 @@ where
     if frame.state != FrNativeCallState::Enter {
         return unexpected_child_result("native call");
     }
-    let mut protected = vec![frame_ptr];
+    let mut protected = Vec::new();
     Frame::NativeCall(frame.clone()).trace_pointers(&mut protected);
     let roots = runtime.heap.temp_roots(protected.clone())?;
     let step = frame.task.enter(runtime)?;
-    let frame_ptr = roots.get(0)?;
-    refresh_native_frame_from_roots(&mut frame, &protected, &roots, 1)?;
-    native_step_to_control(runtime, frame_ptr, frame, step)
+    refresh_native_frame_from_roots(&mut frame, &protected, &roots, 0)?;
+    native_step_to_control(runtime, frames, frame_id, frame, step)
 }
 
 pub(crate) fn eval_native_receive<State>(
     runtime: &RuntimeCore<State>,
-    frame_ptr: Pointer,
+    frames: &mut FrameStore,
+    frame_id: FrameId,
     mut frame: FrNativeCall,
-    child: Pointer,
+    child: FrameId,
     value: Pointer,
 ) -> Result<EvalControl<State>, EngineError>
 where
@@ -149,16 +127,15 @@ where
     }
     if !<NativeTask as Coroutine<State>>::receive_may_allocate(&frame.task) {
         let step = frame.task.receive(runtime, child, value)?;
-        return native_step_to_control(runtime, frame_ptr, frame, step);
+        return native_step_to_control(runtime, frames, frame_id, frame, step);
     }
 
-    let mut protected = vec![frame_ptr, child, value];
+    let mut protected = vec![value];
     Frame::NativeCall(frame.clone()).trace_pointers(&mut protected);
     let roots = runtime.heap.temp_roots(protected.clone())?;
     let step = frame.task.receive(runtime, child, value)?;
-    let frame_ptr = roots.get(0)?;
     refresh_native_frame_from_roots(&mut frame, &protected, &roots, 1)?;
-    native_step_to_control(runtime, frame_ptr, frame, step)
+    native_step_to_control(runtime, frames, frame_id, frame, step)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -206,7 +183,7 @@ impl Collection for NativeTask {
 }
 
 impl NativeTask {
-    fn push_scheduled_child(&mut self, child: Pointer) -> Result<(), EngineError> {
+    fn push_scheduled_child(&mut self, child: FrameId) -> Result<(), EngineError> {
         match self {
             NativeTask::SequenceMap(task) => {
                 task.children.push(child);
@@ -234,7 +211,7 @@ impl NativeTask {
         }
     }
 
-    fn scheduled_children(&self) -> Result<Vec<Pointer>, EngineError> {
+    fn scheduled_children(&self) -> Result<Vec<FrameId>, EngineError> {
         match self {
             NativeTask::SequenceMap(task) => Ok(task.children.clone()),
             NativeTask::SequenceFilter(task) => Ok(task.children.clone()),
@@ -298,7 +275,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        child: Pointer,
+        child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -439,7 +416,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        child: Pointer,
+        child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>;
 
@@ -480,7 +457,7 @@ where
     fn receive(
         &mut self,
         _runtime: &RuntimeCore<State>,
-        _child: Pointer,
+        _child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError> {
         Ok(NativeStep::Return(value))
@@ -498,7 +475,7 @@ pub(crate) struct NativeSequenceMap {
     pub elem_type: Type,
     pub values: ListItems,
     pub shape: NativeSequenceShape,
-    pub children: Vec<Pointer>,
+    pub children: Vec<FrameId>,
     pub output: Vec<Option<Pointer>>,
     pub remaining: usize,
 }
@@ -510,7 +487,6 @@ impl Collection for NativeSequenceMap {
     ) -> Result<(), E> {
         rewrite_pointer(&mut self.func, map)?;
         self.values.map_pointers(map)?;
-        rewrite_slice(&mut self.children, map)?;
         rewrite_options(&mut self.output, map)
     }
 }
@@ -538,7 +514,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        child: Pointer,
+        child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -616,7 +592,7 @@ pub(crate) struct NativeSequenceFilter {
     pub elem_type: Type,
     pub values: ListItems,
     pub shape: NativeSequenceShape,
-    pub children: Vec<Pointer>,
+    pub children: Vec<FrameId>,
     pub keep: Vec<Option<bool>>,
     pub remaining: usize,
 }
@@ -628,7 +604,7 @@ impl Collection for NativeSequenceFilter {
     ) -> Result<(), E> {
         rewrite_pointer(&mut self.func, map)?;
         self.values.map_pointers(map)?;
-        rewrite_slice(&mut self.children, map)
+        Ok(())
     }
 }
 
@@ -656,7 +632,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        child: Pointer,
+        child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -744,7 +720,7 @@ pub(crate) struct NativeSequenceFilterMap {
     pub elem_type: Type,
     pub values: ListItems,
     pub shape: NativeSequenceShape,
-    pub children: Vec<Pointer>,
+    pub children: Vec<FrameId>,
     pub output: Vec<Option<Option<Pointer>>>,
     pub remaining: usize,
 }
@@ -756,7 +732,6 @@ impl Collection for NativeSequenceFilterMap {
     ) -> Result<(), E> {
         rewrite_pointer(&mut self.func, map)?;
         self.values.map_pointers(map)?;
-        rewrite_slice(&mut self.children, map)?;
         rewrite_nested_options(&mut self.output, map)
     }
 }
@@ -785,7 +760,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        child: Pointer,
+        child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -865,7 +840,7 @@ pub(crate) struct NativeSequenceFlatMap {
     pub elem_type: Type,
     pub values: ListItems,
     pub shape: NativeSequenceShape,
-    pub children: Vec<Pointer>,
+    pub children: Vec<FrameId>,
     pub output: Vec<Option<Vec<Pointer>>>,
     pub remaining: usize,
 }
@@ -877,7 +852,6 @@ impl Collection for NativeSequenceFlatMap {
     ) -> Result<(), E> {
         rewrite_pointer(&mut self.func, map)?;
         self.values.map_pointers(map)?;
-        rewrite_slice(&mut self.children, map)?;
         rewrite_option_vecs(&mut self.output, map)
     }
 }
@@ -906,7 +880,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        child: Pointer,
+        child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1013,7 +987,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        _child: Pointer,
+        _child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1067,7 +1041,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        _child: Pointer,
+        _child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1123,7 +1097,7 @@ where
     fn receive(
         &mut self,
         _runtime: &RuntimeCore<State>,
-        _child: Pointer,
+        _child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError> {
         Ok(NativeStep::Return(value))
@@ -1169,7 +1143,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        _child: Pointer,
+        _child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1244,7 +1218,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        _child: Pointer,
+        _child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1338,7 +1312,7 @@ pub struct NativeDictMap {
     pub func_type: Type,
     pub elem_type: Type,
     pub entries: Vec<(Symbol, Pointer)>,
-    pub children: Vec<Pointer>,
+    pub children: Vec<FrameId>,
     pub output: BTreeMap<Symbol, Pointer>,
     pub remaining: usize,
 }
@@ -1350,7 +1324,6 @@ impl Collection for NativeDictMap {
     ) -> Result<(), E> {
         rewrite_pointer(&mut self.func, map)?;
         rewrite_entries(&mut self.entries, map)?;
-        rewrite_slice(&mut self.children, map)?;
         rewrite_map_values(&mut self.output, map)
     }
 }
@@ -1377,7 +1350,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        child: Pointer,
+        child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1479,7 +1452,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        _child: Pointer,
+        _child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1572,7 +1545,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        _child: Pointer,
+        _child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1714,7 +1687,7 @@ where
     fn receive(
         &mut self,
         _runtime: &RuntimeCore<State>,
-        _child: Pointer,
+        _child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1859,7 +1832,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
-        _child: Pointer,
+        _child: FrameId,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where

@@ -3,7 +3,7 @@ use crate::{
     config::{AsyncCallPolicy, ParallelismController},
     error::EngineError,
     evaluator::native_callable::NativeCallable,
-    memory::heap::{Heap, Pointer, TempRoots},
+    memory::heap::{Heap, Pointer},
 };
 use rex_ast::Symbol;
 use rex_typesystem::{types::Type, typesystem::TypeSystem};
@@ -40,23 +40,16 @@ where
         Ok(())
     }
 
-    pub(crate) fn refresh_from_roots(
+    pub(crate) fn map_pointers(
         &mut self,
-        roots: &TempRoots,
-        cursor: &mut usize,
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
-        // Root slots only diverge from stored pointers after a copying collection.
-        if !roots.has_collected_since_creation()? {
-            return Ok(());
-        }
-
         let mut cache = self
             .typeclass_cache
             .lock()
             .map_err(|_| EngineError::Internal("typeclass cache poisoned".into()))?;
         for pointer in cache.values_mut() {
-            *pointer = roots.get(*cursor)?;
-            *cursor += 1;
+            *pointer = rewrite(*pointer)?;
         }
         Ok(())
     }

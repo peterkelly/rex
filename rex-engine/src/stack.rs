@@ -6,9 +6,76 @@ use rex_typesystem::types::{Type, TypedExpr};
 
 use crate::{
     env::Environment,
+    error::EngineError,
     evaluator::native_functions::NativeTask,
     memory::{heap::Pointer, traits::Collection},
 };
+
+/// Stable identity for an evaluator control frame.
+///
+/// Frame identifiers select entries in one evaluation's [`FrameStore`]. They
+/// are not heap pointers and therefore never need relocation by the collector.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct FrameId(usize);
+
+/// Evaluator-owned storage for control frames.
+///
+/// The store itself lives for one evaluation. Its frames remain outside the
+/// GC heap, while [`Collection`] exposes the Rex value pointers held by those
+/// frames so collection can still treat them as roots and rewrite them.
+/// Completed frames are removed promptly; their identifiers are never reused.
+#[derive(Default)]
+pub(crate) struct FrameStore {
+    next_id: usize,
+    frames: BTreeMap<FrameId, Frame>,
+}
+
+impl FrameStore {
+    pub(crate) fn insert(&mut self, frame: Frame) -> FrameId {
+        let id = FrameId(self.next_id);
+        assert_ne!(
+            self.next_id,
+            usize::MAX,
+            "evaluator frame identifier overflow"
+        );
+        self.next_id += 1;
+        self.frames.insert(id, frame);
+        id
+    }
+
+    pub(crate) fn get(&self, id: FrameId) -> Result<&Frame, EngineError> {
+        self.frames
+            .get(&id)
+            .ok_or_else(|| EngineError::Internal(format!("unknown evaluator frame {id:?}")))
+    }
+
+    pub(crate) fn replace(&mut self, id: FrameId, frame: Frame) -> Result<(), EngineError> {
+        let slot = self
+            .frames
+            .get_mut(&id)
+            .ok_or_else(|| EngineError::Internal(format!("unknown evaluator frame {id:?}")))?;
+        *slot = frame;
+        Ok(())
+    }
+
+    pub(crate) fn remove(&mut self, id: FrameId) -> Result<Frame, EngineError> {
+        self.frames
+            .remove(&id)
+            .ok_or_else(|| EngineError::Internal(format!("unknown evaluator frame {id:?}")))
+    }
+}
+
+impl Collection for FrameStore {
+    fn map_pointers<E>(
+        &mut self,
+        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        for frame in self.frames.values_mut() {
+            frame.map_pointers(map)?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Frame {
@@ -37,90 +104,30 @@ pub enum Frame {
 }
 
 impl Frame {
-    pub fn parent(&self) -> &Pointer {
+    pub fn parent(&self) -> Option<FrameId> {
         match self {
-            Frame::Bool(frame) => &frame.parent,
-            Frame::Uint(frame) => &frame.parent,
-            Frame::Int(frame) => &frame.parent,
-            Frame::Float(frame) => &frame.parent,
-            Frame::String(frame) => &frame.parent,
-            Frame::Uuid(frame) => &frame.parent,
-            Frame::DateTime(frame) => &frame.parent,
-            Frame::Hole(frame) => &frame.parent,
-            Frame::Tuple(frame) => &frame.parent,
-            Frame::List(frame) => &frame.parent,
-            Frame::Dict(frame) => &frame.parent,
-            Frame::RecordUpdate(frame) => &frame.parent,
-            Frame::Var(frame) => &frame.parent,
-            Frame::App(frame) => &frame.parent,
-            Frame::Project(frame) => &frame.parent,
-            Frame::Lam(frame) => &frame.parent,
-            Frame::Let(frame) => &frame.parent,
-            Frame::LetRec(frame) => &frame.parent,
-            Frame::Ite(frame) => &frame.parent,
-            Frame::Match(frame) => &frame.parent,
-            Frame::NativeCall(frame) => &frame.parent,
-            Frame::NativeAsync(frame) => &frame.parent,
-        }
-    }
-
-    pub(crate) fn mark_complete(&mut self, value: Pointer) {
-        match self {
-            Frame::Bool(frame) => {
-                frame.state = FrValueState::Complete;
-                frame.value = Some(value);
-            }
-            Frame::Uint(frame) => {
-                frame.state = FrValueState::Complete;
-                frame.value = Some(value);
-            }
-            Frame::Int(frame) => {
-                frame.state = FrValueState::Complete;
-                frame.value = Some(value);
-            }
-            Frame::Float(frame) => {
-                frame.state = FrValueState::Complete;
-                frame.value = Some(value);
-            }
-            Frame::String(frame) => {
-                frame.state = FrValueState::Complete;
-                frame.value = Some(value);
-            }
-            Frame::Uuid(frame) => {
-                frame.state = FrValueState::Complete;
-                frame.value = Some(value);
-            }
-            Frame::DateTime(frame) => {
-                frame.state = FrValueState::Complete;
-                frame.value = Some(value);
-            }
-            Frame::Hole(frame) => {
-                frame.state = FrValueState::Complete;
-                frame.value = Some(value);
-            }
-            Frame::Tuple(frame) => frame.state = FrSequenceState::Complete,
-            Frame::List(frame) => frame.state = FrSequenceState::Complete,
-            Frame::Dict(frame) => frame.state = FrSequenceState::Complete,
-            Frame::RecordUpdate(frame) => frame.state = FrRecordUpdateState::Complete,
-            Frame::Var(frame) => {
-                frame.state = FrValueState::Complete;
-                frame.value = Some(value);
-            }
-            Frame::App(frame) => frame.state = FrAppState::Complete,
-            Frame::Project(frame) => {
-                frame.state = FrValueState::Complete;
-                frame.value = Some(value);
-            }
-            Frame::Lam(frame) => {
-                frame.state = FrValueState::Complete;
-                frame.value = Some(value);
-            }
-            Frame::Let(frame) => frame.state = FrLetState::Complete,
-            Frame::LetRec(frame) => frame.state = FrLetRecState::Complete,
-            Frame::Ite(frame) => frame.state = FrBranchState::Complete,
-            Frame::Match(frame) => frame.state = FrMatchState::Complete,
-            Frame::NativeCall(frame) => frame.state = FrNativeCallState::Complete,
-            Frame::NativeAsync(_) => {}
+            Frame::Bool(frame) => frame.parent,
+            Frame::Uint(frame) => frame.parent,
+            Frame::Int(frame) => frame.parent,
+            Frame::Float(frame) => frame.parent,
+            Frame::String(frame) => frame.parent,
+            Frame::Uuid(frame) => frame.parent,
+            Frame::DateTime(frame) => frame.parent,
+            Frame::Hole(frame) => frame.parent,
+            Frame::Tuple(frame) => frame.parent,
+            Frame::List(frame) => frame.parent,
+            Frame::Dict(frame) => frame.parent,
+            Frame::RecordUpdate(frame) => frame.parent,
+            Frame::Var(frame) => frame.parent,
+            Frame::App(frame) => frame.parent,
+            Frame::Project(frame) => frame.parent,
+            Frame::Lam(frame) => frame.parent,
+            Frame::Let(frame) => frame.parent,
+            Frame::LetRec(frame) => frame.parent,
+            Frame::Ite(frame) => frame.parent,
+            Frame::Match(frame) => frame.parent,
+            Frame::NativeCall(frame) => frame.parent,
+            Frame::NativeAsync(frame) => frame.parent,
         }
     }
 }
@@ -131,80 +138,47 @@ impl Collection for Frame {
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
     ) -> Result<(), E> {
         match self {
-            Frame::Bool(frame) => {
-                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
-            }
-            Frame::Uint(frame) => {
-                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
-            }
-            Frame::Int(frame) => {
-                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
-            }
-            Frame::Float(frame) => {
-                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
-            }
-            Frame::String(frame) => {
-                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
-            }
-            Frame::Uuid(frame) => {
-                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
-            }
+            Frame::Bool(frame) => rewrite_value_frame(&mut frame.env, &mut frame.value, rewrite),
+            Frame::Uint(frame) => rewrite_value_frame(&mut frame.env, &mut frame.value, rewrite),
+            Frame::Int(frame) => rewrite_value_frame(&mut frame.env, &mut frame.value, rewrite),
+            Frame::Float(frame) => rewrite_value_frame(&mut frame.env, &mut frame.value, rewrite),
+            Frame::String(frame) => rewrite_value_frame(&mut frame.env, &mut frame.value, rewrite),
+            Frame::Uuid(frame) => rewrite_value_frame(&mut frame.env, &mut frame.value, rewrite),
             Frame::DateTime(frame) => {
-                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
+                rewrite_value_frame(&mut frame.env, &mut frame.value, rewrite)
             }
-            Frame::Hole(frame) => {
-                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
-            }
-            Frame::Var(frame) => {
-                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
-            }
-            Frame::Project(frame) => {
-                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
-            }
-            Frame::Lam(frame) => {
-                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
-            }
+            Frame::Hole(frame) => rewrite_value_frame(&mut frame.env, &mut frame.value, rewrite),
+            Frame::Var(frame) => rewrite_value_frame(&mut frame.env, &mut frame.value, rewrite),
+            Frame::Project(frame) => rewrite_value_frame(&mut frame.env, &mut frame.value, rewrite),
+            Frame::Lam(frame) => rewrite_value_frame(&mut frame.env, &mut frame.value, rewrite),
             Frame::Tuple(frame) => {
-                rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.map_pointers(rewrite)?;
-                rewrite_slice(&mut frame.children, rewrite)?;
                 rewrite_option_slice(&mut frame.values, rewrite)
             }
             Frame::List(frame) => {
-                rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.map_pointers(rewrite)?;
-                rewrite_slice(&mut frame.children, rewrite)?;
                 rewrite_option_slice(&mut frame.values, rewrite)
             }
             Frame::Dict(frame) => {
-                rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.map_pointers(rewrite)?;
-                rewrite_slice(&mut frame.children, rewrite)?;
                 rewrite_option_slice(&mut frame.values, rewrite)
             }
             Frame::RecordUpdate(frame) => {
-                rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.map_pointers(rewrite)?;
                 rewrite_option(&mut frame.base_value, rewrite)?;
-                rewrite_slice(&mut frame.update_children, rewrite)?;
                 rewrite_option_slice(&mut frame.update_values, rewrite)
             }
             Frame::App(frame) => {
-                rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.map_pointers(rewrite)?;
-                rewrite_option(&mut frame.head_child, rewrite)?;
-                rewrite_slice(&mut frame.arg_children, rewrite)?;
                 rewrite_option_slice(&mut frame.arg_values, rewrite)?;
                 rewrite_option(&mut frame.func, rewrite)?;
                 rewrite_option(&mut frame.arg, rewrite)
             }
             Frame::Let(frame) => {
-                rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.map_pointers(rewrite)?;
                 rewrite_option(&mut frame.def_value, rewrite)
             }
             Frame::LetRec(frame) => {
-                rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.map_pointers(rewrite)?;
                 if let Some(env) = &mut frame.recursive_env {
                     env.map_pointers(rewrite)?;
@@ -213,12 +187,10 @@ impl Collection for Frame {
                 rewrite_option(&mut frame.binding_value, rewrite)
             }
             Frame::Ite(frame) => {
-                rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.map_pointers(rewrite)?;
                 rewrite_option(&mut frame.cond_value, rewrite)
             }
             Frame::Match(frame) => {
-                rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.map_pointers(rewrite)?;
                 rewrite_option(&mut frame.scrutinee_value, rewrite)?;
                 if let Some(env) = &mut frame.matched_env {
@@ -226,11 +198,8 @@ impl Collection for Frame {
                 }
                 Ok(())
             }
-            Frame::NativeCall(frame) => {
-                rewrite_pointer(&mut frame.parent, rewrite)?;
-                frame.task.map_pointers(rewrite)
-            }
-            Frame::NativeAsync(frame) => rewrite_pointer(&mut frame.parent, rewrite),
+            Frame::NativeCall(frame) => frame.task.map_pointers(rewrite),
+            Frame::NativeAsync(_) => Ok(()),
         }
     }
 }
@@ -284,12 +253,10 @@ pub(crate) fn rewrite_map_values<E>(
 }
 
 fn rewrite_value_frame<E>(
-    parent: &mut Pointer,
     env: &mut Environment,
     value: &mut Option<Pointer>,
     rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
 ) -> Result<(), E> {
-    rewrite_pointer(parent, rewrite)?;
     env.map_pointers(rewrite)?;
     rewrite_option(value, rewrite)
 }
@@ -297,14 +264,12 @@ fn rewrite_value_frame<E>(
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrValueState {
     Enter,
-    Complete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrSequenceState {
     Enter,
     EvalItem,
-    Complete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -312,7 +277,6 @@ pub enum FrRecordUpdateState {
     Enter,
     EvalBase,
     EvalUpdate,
-    Complete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -320,7 +284,6 @@ pub enum FrAppState {
     Enter,
     EvalChildren,
     ApplyArg,
-    Complete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -328,7 +291,6 @@ pub enum FrLetState {
     Enter,
     EvalDef,
     EvalBody,
-    Complete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -336,7 +298,6 @@ pub enum FrLetRecState {
     Enter,
     EvalBinding,
     EvalBody,
-    Complete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -344,7 +305,6 @@ pub enum FrBranchState {
     Enter,
     EvalCondition,
     EvalSelected,
-    Complete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -352,14 +312,12 @@ pub enum FrMatchState {
     Enter,
     EvalScrutinee,
     EvalArm,
-    Complete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrNativeCallState {
     Enter,
     Waiting,
-    Complete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -394,7 +352,7 @@ macro_rules! value_frame {
     ($name:ident) => {
         #[derive(Clone, Debug, PartialEq)]
         pub struct $name {
-            pub parent: Pointer,
+            pub parent: Option<FrameId>,
             pub expr: Arc<TypedExpr>,
             pub env: Environment,
             pub state: FrValueState,
@@ -417,61 +375,61 @@ value_frame!(FrLam);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrTuple {
-    pub parent: Pointer,
+    pub parent: Option<FrameId>,
     pub expr: Arc<TypedExpr>,
     pub env: Environment,
     pub state: FrSequenceState,
-    pub children: Vec<Pointer>,
+    pub children: Vec<FrameId>,
     pub values: Vec<Option<Pointer>>,
     pub remaining: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrList {
-    pub parent: Pointer,
+    pub parent: Option<FrameId>,
     pub expr: Arc<TypedExpr>,
     pub env: Environment,
     pub state: FrSequenceState,
-    pub children: Vec<Pointer>,
+    pub children: Vec<FrameId>,
     pub values: Vec<Option<Pointer>>,
     pub remaining: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrDict {
-    pub parent: Pointer,
+    pub parent: Option<FrameId>,
     pub expr: Arc<TypedExpr>,
     pub env: Environment,
     pub state: FrSequenceState,
     pub keys: Vec<Symbol>,
-    pub children: Vec<Pointer>,
+    pub children: Vec<FrameId>,
     pub values: Vec<Option<Pointer>>,
     pub remaining: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrRecordUpdate {
-    pub parent: Pointer,
+    pub parent: Option<FrameId>,
     pub expr: Arc<TypedExpr>,
     pub env: Environment,
     pub state: FrRecordUpdateState,
     pub base_value: Option<Pointer>,
     pub update_keys: Vec<Symbol>,
-    pub update_children: Vec<Pointer>,
+    pub update_children: Vec<FrameId>,
     pub update_values: Vec<Option<Pointer>>,
     pub remaining_updates: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrApp {
-    pub parent: Pointer,
+    pub parent: Option<FrameId>,
     pub expr: Arc<TypedExpr>,
     pub env: Environment,
     pub state: FrAppState,
     pub head: Option<Arc<TypedExpr>>,
     pub spine: Vec<FrAppArg>,
-    pub head_child: Option<Pointer>,
-    pub arg_children: Vec<Pointer>,
+    pub head_child: Option<FrameId>,
+    pub arg_children: Vec<FrameId>,
     pub arg_values: Vec<Option<Pointer>>,
     pub remaining: usize,
     pub next_arg_index: usize,
@@ -481,7 +439,7 @@ pub struct FrApp {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrLet {
-    pub parent: Pointer,
+    pub parent: Option<FrameId>,
     pub expr: Arc<TypedExpr>,
     pub env: Environment,
     pub state: FrLetState,
@@ -490,7 +448,7 @@ pub struct FrLet {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrLetRec {
-    pub parent: Pointer,
+    pub parent: Option<FrameId>,
     pub expr: Arc<TypedExpr>,
     pub env: Environment,
     pub state: FrLetRecState,
@@ -502,7 +460,7 @@ pub struct FrLetRec {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrIte {
-    pub parent: Pointer,
+    pub parent: Option<FrameId>,
     pub expr: Arc<TypedExpr>,
     pub env: Environment,
     pub state: FrBranchState,
@@ -512,7 +470,7 @@ pub struct FrIte {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrMatch {
-    pub parent: Pointer,
+    pub parent: Option<FrameId>,
     pub expr: Arc<TypedExpr>,
     pub env: Environment,
     pub state: FrMatchState,
@@ -524,12 +482,12 @@ pub struct FrMatch {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrNativeCall {
-    pub parent: Pointer,
+    pub parent: Option<FrameId>,
     pub state: FrNativeCallState,
     pub task: NativeTask,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrNativeAsync {
-    pub parent: Pointer,
+    pub parent: Option<FrameId>,
 }

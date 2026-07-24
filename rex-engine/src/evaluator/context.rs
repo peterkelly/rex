@@ -17,6 +17,7 @@ use crate::{
     },
     memory::heap::{Handle, Heap, Pointer},
     overloaded_fn::OverloadedFn,
+    stack::FrameId,
     util::{impl_matches_type, is_function_type},
 };
 
@@ -42,7 +43,7 @@ where
         }
     }
 
-    pub(crate) fn new_with_parent(runtime: &RuntimeCore<State>, parent: Pointer) -> Self {
+    pub(crate) fn new_with_parent(runtime: &RuntimeCore<State>, parent: FrameId) -> Self {
         Self::new_at_call_site(runtime, CallSite::child(parent))
     }
 

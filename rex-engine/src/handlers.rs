@@ -410,10 +410,17 @@ where
     }
 
     pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        if let Some(parent) = self.call_site.parent {
-            out.push(parent);
-        }
         out.extend(self.args.iter().copied());
+    }
+
+    pub(crate) fn map_pointers<E>(
+        &mut self,
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+    ) -> Result<(), E> {
+        for arg in &mut self.args {
+            *arg = rewrite(*arg)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn refresh_from_roots(
@@ -421,10 +428,6 @@ where
         roots: &TempRoots,
         cursor: &mut usize,
     ) -> Result<(), EngineError> {
-        if self.call_site.parent.is_some() {
-            self.call_site.parent = Some(roots.get(*cursor)?);
-            *cursor += 1;
-        }
         for arg in &mut self.args {
             *arg = roots.get(*cursor)?;
             *cursor += 1;

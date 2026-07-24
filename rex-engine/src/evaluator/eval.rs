@@ -23,7 +23,7 @@ use crate::{
         FrInt, FrIte, FrLam, FrLet, FrLetRec, FrLetRecState, FrLetState, FrList, FrMatch,
         FrMatchArm, FrMatchState, FrNativeAsync, FrNativeCall, FrNativeCallState, FrProject,
         FrRecordUpdate, FrRecordUpdateState, FrSequenceState, FrString, FrTuple, FrUint, FrUuid,
-        FrValueState, FrVar, Frame,
+        FrValueState, FrVar, Frame, FrameId, FrameStore,
     },
     util::{is_function_type, split_fun},
 };
@@ -43,7 +43,7 @@ pub(crate) enum EvalControl<State: Clone + Send + Sync + 'static> {
         env: Environment,
     },
     PushFrame(Box<Frame>),
-    Schedule(Vec<Pointer>),
+    Schedule(Vec<FrameId>),
     Wait,
     AwaitNative(NativeAsyncCall<State>),
     Return(Pointer),
@@ -58,10 +58,6 @@ pub(crate) async fn eval_typed_expr<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let root_parent_ptr = runtime
-        .heap
-        .with_locked(|heap| Ok(heap.alloc_ptr_root_frame_parent()?.into_pointer()))?;
-    let root_parent = runtime.heap.handle(root_parent_ptr)?;
     let env = rooted_env.to_environment()?;
     let (env, expr) = if input_args.is_empty() {
         (env, expr)
@@ -76,37 +72,24 @@ where
     // rooted_env and input_args intentionally remain in scope across this
     // await; their handles root the raw pointers stored in env and the
     // synthetic input application.
-    eval_typed_expr_from_parent(runtime, root_parent, EvalStop::RootSentinel, env, expr).await
+    eval_typed_expr_inner(runtime, env, expr).await
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum EvalStop {
-    RootSentinel,
-    #[allow(dead_code)]
-    Parent(Pointer),
-}
-
-pub(crate) async fn eval_typed_expr_from_parent<State>(
+async fn eval_typed_expr_inner<State>(
     mut runtime: RuntimeCore<State>,
-    initial_parent: Handle,
-    stop: EvalStop,
     env: Environment,
     expr: Arc<TypedExpr>,
 ) -> Result<Handle, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    let initial_parent = initial_parent.pointer_for_heap(&runtime.heap)?;
-    let root_frame = runtime.heap.with_locked(|heap| {
-        Ok(heap
-            .alloc_ptr_frame(frame_for_expr(initial_parent, expr, env))?
-            .into_pointer())
-    })?;
+    let mut frames = FrameStore::default();
+    let root_frame = frames.insert(frame_for_expr(None, expr, env));
     let mut scheduler = EvalScheduler::new(root_frame, runtime.parallelism_controller.clone());
 
     let mut iteration = 0;
     loop {
-        if poll_pending_native(&mut runtime, &mut scheduler, false).await? {
+        if poll_pending_native(&mut runtime, &mut frames, &mut scheduler, false).await? {
             continue;
         }
 
@@ -118,7 +101,7 @@ where
         let mut item = match scheduler.pop_next() {
             Some(item) => item,
             None => {
-                if poll_pending_native(&mut runtime, &mut scheduler, true).await? {
+                if poll_pending_native(&mut runtime, &mut frames, &mut scheduler, true).await? {
                     continue;
                 }
                 return Err(EngineError::Internal(
@@ -127,37 +110,49 @@ where
             }
         };
         let mut protected = Vec::new();
+        frames.trace_pointers(&mut protected);
         item.trace_pointers(&mut protected);
         scheduler.trace_pointers(&mut protected);
         runtime.trace_pointers(&mut protected)?;
-        let roots = runtime.heap.temp_roots(protected)?;
-        refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
+        let roots = runtime.heap.temp_roots(protected.clone())?;
+        refresh_eval_roots(
+            &mut runtime,
+            &mut frames,
+            &mut item,
+            &mut scheduler,
+            &roots,
+            &protected,
+        )?;
 
-        let frame = runtime
-            .heap
-            .with_locked(|heap| heap.pointer_as_frame(&item.frame))?;
+        let frame = frames.get(item.frame)?.clone();
         let control = match item.returned {
-            Some(returned) => {
-                eval_receive(&runtime, item.frame, frame, returned.child, returned.value)?
-            }
-            None => eval_enter(&runtime, item.frame, frame)?,
+            Some(returned) => eval_receive(
+                &runtime,
+                &mut frames,
+                item.frame,
+                frame,
+                returned.child,
+                returned.value,
+            )?,
+            None => eval_enter(&runtime, &mut frames, item.frame, frame)?,
         };
-        refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
+        refresh_eval_roots(
+            &mut runtime,
+            &mut frames,
+            &mut item,
+            &mut scheduler,
+            &roots,
+            &protected,
+        )?;
 
         match control {
             EvalControl::Push { expr, env } => {
-                let frame = frame_for_expr(item.frame, expr, env);
-                let child = runtime
-                    .heap
-                    .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
-                refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
+                let frame = frame_for_expr(Some(item.frame), expr, env);
+                let child = frames.insert(frame);
                 scheduler.schedule_next(EvalWorkItem::enter(child));
             }
             EvalControl::PushFrame(frame) => {
-                let child = runtime
-                    .heap
-                    .with_locked(|heap| Ok(heap.alloc_ptr_frame(*frame)?.into_pointer()))?;
-                refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
+                let child = frames.insert(*frame);
                 scheduler.schedule_next(EvalWorkItem::enter(child));
             }
             EvalControl::Schedule(children) => {
@@ -170,11 +165,10 @@ where
                 let mut protected = Vec::new();
                 call.trace_pointers(&mut protected);
                 let call_roots = runtime.heap.temp_roots(protected)?;
-                let frame = Frame::NativeAsync(FrNativeAsync { parent: item.frame });
-                let child = runtime
-                    .heap
-                    .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
-                refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
+                let frame = Frame::NativeAsync(FrNativeAsync {
+                    parent: Some(item.frame),
+                });
+                let child = frames.insert(frame);
                 if call_roots.has_collected_since_creation()? {
                     let mut cursor = 0;
                     call.refresh_from_roots(&call_roots, &mut cursor)?;
@@ -182,31 +176,11 @@ where
                 scheduler.schedule_pending_native(child, call);
             }
             EvalControl::Return(value) => {
-                let mut frame = runtime
-                    .heap
-                    .with_locked(|heap| heap.pointer_as_frame(&item.frame))?;
-                let parent = *frame.parent();
-                frame.mark_complete(value);
-                runtime
-                    .heap
-                    .with_locked(|heap| heap.replace_frame(&item.frame, frame))?;
-                match stop {
-                    EvalStop::RootSentinel => {
-                        if is_root_frame_parent(&runtime.heap, &parent)? {
-                            return runtime.heap.handle(value);
-                        }
-                    }
-                    EvalStop::Parent(stop_parent) => {
-                        if parent == stop_parent {
-                            return runtime.heap.handle(value);
-                        }
-                        if is_root_frame_parent(&runtime.heap, &parent)? {
-                            return Err(EngineError::Internal(
-                                "child evaluation reached root before parent frame".into(),
-                            ));
-                        }
-                    }
-                }
+                let frame = frames.remove(item.frame)?;
+                let parent = frame.parent();
+                let Some(parent) = parent else {
+                    return runtime.heap.handle(value);
+                };
                 scheduler.schedule_next(EvalWorkItem::receive(parent, item.frame, value));
             }
         }
@@ -215,9 +189,11 @@ where
 
 fn refresh_eval_roots<State>(
     runtime: &mut RuntimeCore<State>,
+    frames: &mut FrameStore,
     item: &mut EvalWorkItem,
     scheduler: &mut EvalScheduler<State>,
     roots: &TempRoots,
+    originals: &[Pointer],
 ) -> Result<(), EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -226,13 +202,23 @@ where
         return Ok(());
     }
 
-    let mut cursor = 0;
-    item.refresh_from_roots(roots, &mut cursor)?;
-    scheduler.refresh_from_roots(roots, &mut cursor)?;
-    runtime.refresh_from_roots(roots, &mut cursor)
+    let mut rewrites = HashMap::with_capacity(originals.len());
+    for (index, original) in originals.iter().enumerate() {
+        rewrites.insert(*original, roots.get(index)?);
+    }
+    let mut rewrite =
+        |pointer| Ok::<_, EngineError>(rewrites.get(&pointer).copied().unwrap_or(pointer));
+    frames.map_pointers(&mut rewrite)?;
+    item.map_pointers(&mut rewrite)?;
+    scheduler.map_pointers(&mut rewrite)?;
+    runtime.map_pointers(&mut rewrite)
 }
 
-pub(crate) fn frame_for_expr(parent: Pointer, expr: Arc<TypedExpr>, env: Environment) -> Frame {
+pub(crate) fn frame_for_expr(
+    parent: Option<FrameId>,
+    expr: Arc<TypedExpr>,
+    env: Environment,
+) -> Frame {
     let kind = Arc::clone(&expr.kind);
     match kind.as_ref() {
         TypedExprKind::Bool(_) => Frame::Bool(FrBool {
@@ -412,7 +398,8 @@ pub(crate) fn frame_for_expr(parent: Pointer, expr: Arc<TypedExpr>, env: Environ
 
 fn eval_enter<State>(
     runtime: &RuntimeCore<State>,
-    frame_ptr: Pointer,
+    frames: &mut FrameStore,
+    frame_id: FrameId,
     frame: Frame,
 ) -> Result<EvalControl<State>, EngineError>
 where
@@ -476,9 +463,9 @@ where
             _ => frame_kind_error("datetime"),
         },
         Frame::Hole(_) => Err(EngineError::UnsupportedExpr),
-        Frame::Tuple(frame) => eval_tuple_enter(runtime, frame_ptr, frame),
-        Frame::List(frame) => eval_list_enter(runtime, frame_ptr, frame),
-        Frame::Dict(frame) => eval_dict_enter(runtime, frame_ptr, frame),
+        Frame::Tuple(frame) => eval_tuple_enter(runtime, frames, frame_id, frame),
+        Frame::List(frame) => eval_list_enter(runtime, frames, frame_id, frame),
+        Frame::Dict(frame) => eval_dict_enter(runtime, frames, frame_id, frame),
         Frame::RecordUpdate(mut frame) => {
             let base = match frame.expr.kind.as_ref() {
                 TypedExprKind::RecordUpdate { base, .. } => Arc::clone(base),
@@ -486,34 +473,28 @@ where
             };
             frame.state = FrRecordUpdateState::EvalBase;
             let env = frame.env.clone();
-            runtime
-                .heap
-                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::RecordUpdate(frame)))?;
+            frames.replace(frame_id, Frame::RecordUpdate(frame))?;
             Ok(EvalControl::Push { expr: base, env })
         }
         Frame::Var(mut frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Var { name, .. } => {
-                match eval_resolve_var(runtime, frame_ptr, &frame.env, name, &frame.expr.typ)? {
+                match eval_resolve_var(runtime, frame_id, &frame.env, name, &frame.expr.typ)? {
                     EvalVarResult::Value(value) => Ok(EvalControl::Return(value)),
                     EvalVarResult::Push { expr, env } => {
                         frame.state = FrValueState::Enter;
-                        runtime.heap.with_locked(|heap| {
-                            heap.replace_frame(&frame_ptr, Frame::Var(frame))
-                        })?;
+                        frames.replace(frame_id, Frame::Var(frame))?;
                         Ok(EvalControl::Push { expr, env })
                     }
                     EvalVarResult::AwaitNative(future) => {
                         frame.state = FrValueState::Enter;
-                        runtime.heap.with_locked(|heap| {
-                            heap.replace_frame(&frame_ptr, Frame::Var(frame))
-                        })?;
+                        frames.replace(frame_id, Frame::Var(frame))?;
                         Ok(EvalControl::AwaitNative(future))
                     }
                 }
             }
             _ => frame_kind_error("var"),
         },
-        Frame::App(frame) => eval_app_enter(runtime, frame_ptr, frame),
+        Frame::App(frame) => eval_app_enter(runtime, frames, frame_id, frame),
         Frame::Project(mut frame) => {
             let expr = match frame.expr.kind.as_ref() {
                 TypedExprKind::Project { expr, .. } => Arc::clone(expr),
@@ -521,9 +502,7 @@ where
             };
             frame.state = FrValueState::Enter;
             let env = frame.env.clone();
-            runtime
-                .heap
-                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Project(frame)))?;
+            frames.replace(frame_id, Frame::Project(frame))?;
             Ok(EvalControl::Push { expr, env })
         }
         Frame::Lam(frame) => match frame.expr.kind.as_ref() {
@@ -553,9 +532,7 @@ where
             };
             frame.state = FrLetState::EvalDef;
             let env = frame.env.clone();
-            runtime
-                .heap
-                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Let(frame)))?;
+            frames.replace(frame_id, Frame::Let(frame))?;
             Ok(EvalControl::Push { expr: def, env })
         }
         Frame::LetRec(frame) => {
@@ -564,7 +541,7 @@ where
             };
             let bindings = bindings.clone();
             let body = Arc::clone(body);
-            let mut protected = vec![frame_ptr];
+            let mut protected = Vec::new();
             Frame::LetRec(frame.clone()).trace_pointers(&mut protected);
             let frame_roots = runtime.heap.temp_roots(protected.clone())?;
             let mut slot_roots = Vec::with_capacity(bindings.len());
@@ -574,9 +551,8 @@ where
                 })?;
                 slot_roots.push(runtime.heap.temp_roots(vec![placeholder])?);
             }
-            let frame_ptr = frame_roots.get(0)?;
             let mut wrapped = Frame::LetRec(frame);
-            refresh_frame_from_roots(&mut wrapped, &protected, &frame_roots, 1)?;
+            refresh_frame_from_roots(&mut wrapped, &protected, &frame_roots, 0)?;
             let Frame::LetRec(mut frame) = wrapped else {
                 return frame_kind_error("let rec");
             };
@@ -591,9 +567,7 @@ where
             frame.slots = slots;
             if bindings.is_empty() {
                 frame.state = FrLetRecState::EvalBody;
-                runtime
-                    .heap
-                    .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::LetRec(frame)))?;
+                frames.replace(frame_id, Frame::LetRec(frame))?;
                 return Ok(EvalControl::Push {
                     expr: body,
                     env: recursive_env,
@@ -601,9 +575,7 @@ where
             }
             frame.state = FrLetRecState::EvalBinding;
             let def = Arc::clone(&bindings[0].1);
-            runtime
-                .heap
-                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::LetRec(frame)))?;
+            frames.replace(frame_id, Frame::LetRec(frame))?;
             Ok(EvalControl::Push {
                 expr: def,
                 env: recursive_env,
@@ -616,9 +588,7 @@ where
             };
             frame.state = FrBranchState::EvalCondition;
             let env = frame.env.clone();
-            runtime
-                .heap
-                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Ite(frame)))?;
+            frames.replace(frame_id, Frame::Ite(frame))?;
             Ok(EvalControl::Push { expr: cond, env })
         }
         Frame::Match(mut frame) => {
@@ -628,22 +598,21 @@ where
             };
             frame.state = FrMatchState::EvalScrutinee;
             let env = frame.env.clone();
-            runtime
-                .heap
-                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Match(frame)))?;
+            frames.replace(frame_id, Frame::Match(frame))?;
             Ok(EvalControl::Push {
                 expr: scrutinee,
                 env,
             })
         }
-        Frame::NativeCall(frame) => eval_native_enter(runtime, frame_ptr, frame),
+        Frame::NativeCall(frame) => eval_native_enter(runtime, frames, frame_id, frame),
         Frame::NativeAsync(_) => unexpected_child_result("native async"),
     }
 }
 
 fn eval_tuple_enter<State>(
     runtime: &RuntimeCore<State>,
-    frame_ptr: Pointer,
+    frames: &mut FrameStore,
+    frame_id: FrameId,
     mut frame: FrTuple,
 ) -> Result<EvalControl<State>, EngineError>
 where
@@ -663,52 +632,20 @@ where
     frame.children = Vec::with_capacity(elems.len());
     frame.values = vec![None; elems.len()];
     frame.remaining = elems.len();
-    runtime
-        .heap
-        .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Tuple(frame)))?;
-
-    let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
+    let env = frame.env.clone();
     for expr in elems {
-        let current_frame_ptr = roots.get(0)?;
-        let current_frame = match runtime
-            .heap
-            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-        {
-            Frame::Tuple(frame) => frame,
-            _ => return frame_kind_error("tuple"),
-        };
-        let frame = frame_for_expr(current_frame_ptr, expr, current_frame.env.clone());
-        let child = runtime
-            .heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
-        let current_frame_ptr = roots.get(0)?;
-        let mut current_frame = match runtime
-            .heap
-            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-        {
-            Frame::Tuple(frame) => frame,
-            _ => return frame_kind_error("tuple"),
-        };
-        current_frame.children.push(child);
-        runtime.heap.with_locked(|heap| {
-            heap.replace_frame(&current_frame_ptr, Frame::Tuple(current_frame))
-        })?;
+        let child = frames.insert(frame_for_expr(Some(frame_id), expr, env.clone()));
+        frame.children.push(child);
     }
-
-    let current_frame_ptr = roots.get(0)?;
-    let current_frame = match runtime
-        .heap
-        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-    {
-        Frame::Tuple(frame) => frame,
-        _ => return frame_kind_error("tuple"),
-    };
-    Ok(EvalControl::Schedule(current_frame.children))
+    let children = frame.children.clone();
+    frames.replace(frame_id, Frame::Tuple(frame))?;
+    Ok(EvalControl::Schedule(children))
 }
 
 fn eval_list_enter<State>(
     runtime: &RuntimeCore<State>,
-    frame_ptr: Pointer,
+    frames: &mut FrameStore,
+    frame_id: FrameId,
     mut frame: FrList,
 ) -> Result<EvalControl<State>, EngineError>
 where
@@ -729,52 +666,20 @@ where
     frame.children = Vec::with_capacity(elems.len());
     frame.values = vec![None; elems.len()];
     frame.remaining = elems.len();
-    runtime
-        .heap
-        .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::List(frame)))?;
-
-    let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
+    let env = frame.env.clone();
     for expr in elems {
-        let current_frame_ptr = roots.get(0)?;
-        let current_frame = match runtime
-            .heap
-            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-        {
-            Frame::List(frame) => frame,
-            _ => return frame_kind_error("list"),
-        };
-        let frame = frame_for_expr(current_frame_ptr, expr, current_frame.env.clone());
-        let child = runtime
-            .heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
-        let current_frame_ptr = roots.get(0)?;
-        let mut current_frame = match runtime
-            .heap
-            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-        {
-            Frame::List(frame) => frame,
-            _ => return frame_kind_error("list"),
-        };
-        current_frame.children.push(child);
-        runtime.heap.with_locked(|heap| {
-            heap.replace_frame(&current_frame_ptr, Frame::List(current_frame))
-        })?;
+        let child = frames.insert(frame_for_expr(Some(frame_id), expr, env.clone()));
+        frame.children.push(child);
     }
-
-    let current_frame_ptr = roots.get(0)?;
-    let current_frame = match runtime
-        .heap
-        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-    {
-        Frame::List(frame) => frame,
-        _ => return frame_kind_error("list"),
-    };
-    Ok(EvalControl::Schedule(current_frame.children))
+    let children = frame.children.clone();
+    frames.replace(frame_id, Frame::List(frame))?;
+    Ok(EvalControl::Schedule(children))
 }
 
 fn eval_dict_enter<State>(
     runtime: &RuntimeCore<State>,
-    frame_ptr: Pointer,
+    frames: &mut FrameStore,
+    frame_id: FrameId,
     mut frame: FrDict,
 ) -> Result<EvalControl<State>, EngineError>
 where
@@ -791,52 +696,20 @@ where
     frame.children = Vec::with_capacity(exprs.len());
     frame.values = vec![None; exprs.len()];
     frame.remaining = exprs.len();
-    runtime
-        .heap
-        .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Dict(frame)))?;
-
-    let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
+    let env = frame.env.clone();
     for expr in exprs {
-        let current_frame_ptr = roots.get(0)?;
-        let current_frame = match runtime
-            .heap
-            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-        {
-            Frame::Dict(frame) => frame,
-            _ => return frame_kind_error("dict"),
-        };
-        let frame = frame_for_expr(current_frame_ptr, expr, current_frame.env.clone());
-        let child = runtime
-            .heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
-        let current_frame_ptr = roots.get(0)?;
-        let mut current_frame = match runtime
-            .heap
-            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-        {
-            Frame::Dict(frame) => frame,
-            _ => return frame_kind_error("dict"),
-        };
-        current_frame.children.push(child);
-        runtime.heap.with_locked(|heap| {
-            heap.replace_frame(&current_frame_ptr, Frame::Dict(current_frame))
-        })?;
+        let child = frames.insert(frame_for_expr(Some(frame_id), expr, env.clone()));
+        frame.children.push(child);
     }
-
-    let current_frame_ptr = roots.get(0)?;
-    let current_frame = match runtime
-        .heap
-        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-    {
-        Frame::Dict(frame) => frame,
-        _ => return frame_kind_error("dict"),
-    };
-    Ok(EvalControl::Schedule(current_frame.children))
+    let children = frame.children.clone();
+    frames.replace(frame_id, Frame::Dict(frame))?;
+    Ok(EvalControl::Schedule(children))
 }
 
 fn eval_record_update_updates_enter<State>(
-    runtime: &RuntimeCore<State>,
-    frame_ptr: Pointer,
+    _runtime: &RuntimeCore<State>,
+    frames: &mut FrameStore,
+    frame_id: FrameId,
     mut frame: FrRecordUpdate,
 ) -> Result<EvalControl<State>, EngineError>
 where
@@ -847,52 +720,20 @@ where
     frame.update_children = Vec::with_capacity(exprs.len());
     frame.update_values = vec![None; exprs.len()];
     frame.remaining_updates = exprs.len();
-    runtime
-        .heap
-        .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::RecordUpdate(frame)))?;
-
-    let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
+    let env = frame.env.clone();
     for expr in exprs {
-        let current_frame_ptr = roots.get(0)?;
-        let current_frame = match runtime
-            .heap
-            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-        {
-            Frame::RecordUpdate(frame) => frame,
-            _ => return frame_kind_error("record update"),
-        };
-        let frame = frame_for_expr(current_frame_ptr, expr, current_frame.env.clone());
-        let child = runtime
-            .heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
-        let current_frame_ptr = roots.get(0)?;
-        let mut current_frame = match runtime
-            .heap
-            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-        {
-            Frame::RecordUpdate(frame) => frame,
-            _ => return frame_kind_error("record update"),
-        };
-        current_frame.update_children.push(child);
-        runtime.heap.with_locked(|heap| {
-            heap.replace_frame(&current_frame_ptr, Frame::RecordUpdate(current_frame))
-        })?;
+        let child = frames.insert(frame_for_expr(Some(frame_id), expr, env.clone()));
+        frame.update_children.push(child);
     }
-
-    let current_frame_ptr = roots.get(0)?;
-    let current_frame = match runtime
-        .heap
-        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-    {
-        Frame::RecordUpdate(frame) => frame,
-        _ => return frame_kind_error("record update"),
-    };
-    Ok(EvalControl::Schedule(current_frame.update_children))
+    let children = frame.update_children.clone();
+    frames.replace(frame_id, Frame::RecordUpdate(frame))?;
+    Ok(EvalControl::Schedule(children))
 }
 
 fn eval_app_enter<State>(
-    runtime: &RuntimeCore<State>,
-    frame_ptr: Pointer,
+    _runtime: &RuntimeCore<State>,
+    frames: &mut FrameStore,
+    frame_id: FrameId,
     mut frame: FrApp,
 ) -> Result<EvalControl<State>, EngineError>
 where
@@ -923,87 +764,31 @@ where
     frame.next_arg_index = 0;
     frame.func = None;
     frame.arg = None;
-    runtime
-        .heap
-        .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::App(frame)))?;
-
-    let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
-    let current_frame_ptr = roots.get(0)?;
-    let current_frame = match runtime
-        .heap
-        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-    {
-        Frame::App(frame) => frame,
-        _ => return frame_kind_error("application"),
-    };
-    let frame = frame_for_expr(current_frame_ptr, head, current_frame.env.clone());
-    let head_child = runtime
-        .heap
-        .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
-    let current_frame_ptr = roots.get(0)?;
-    let mut current_frame = match runtime
-        .heap
-        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-    {
-        Frame::App(frame) => frame,
-        _ => return frame_kind_error("application"),
-    };
-    current_frame.head_child = Some(head_child);
-    runtime
-        .heap
-        .with_locked(|heap| heap.replace_frame(&current_frame_ptr, Frame::App(current_frame)))?;
-
+    let env = frame.env.clone();
+    let head_child = frames.insert(frame_for_expr(Some(frame_id), head, env.clone()));
+    frame.head_child = Some(head_child);
     for expr in arg_exprs {
-        let current_frame_ptr = roots.get(0)?;
-        let current_frame = match runtime
-            .heap
-            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-        {
-            Frame::App(frame) => frame,
-            _ => return frame_kind_error("application"),
-        };
-        let frame = frame_for_expr(current_frame_ptr, expr, current_frame.env.clone());
-        let child = runtime
-            .heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_frame(frame)?.into_pointer()))?;
-        let current_frame_ptr = roots.get(0)?;
-        let mut current_frame = match runtime
-            .heap
-            .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-        {
-            Frame::App(frame) => frame,
-            _ => return frame_kind_error("application"),
-        };
-        current_frame.arg_children.push(child);
-        runtime.heap.with_locked(|heap| {
-            heap.replace_frame(&current_frame_ptr, Frame::App(current_frame))
-        })?;
+        let child = frames.insert(frame_for_expr(Some(frame_id), expr, env.clone()));
+        frame.arg_children.push(child);
     }
 
-    let current_frame_ptr = roots.get(0)?;
-    let current_frame = match runtime
-        .heap
-        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-    {
-        Frame::App(frame) => frame,
-        _ => return frame_kind_error("application"),
-    };
-    let mut children = Vec::with_capacity(1 + current_frame.arg_children.len());
+    let mut children = Vec::with_capacity(1 + frame.arg_children.len());
     children.push(
-        current_frame
+        frame
             .head_child
             .ok_or_else(|| EngineError::Internal("application frame missing head child".into()))?,
     );
-    children.extend(current_frame.arg_children.iter().copied());
+    children.extend(frame.arg_children.iter().copied());
+    frames.replace(frame_id, Frame::App(frame))?;
     Ok(EvalControl::Schedule(children))
 }
 
 fn receive_sequence_value(
     kind: &'static str,
-    children: &[Pointer],
+    children: &[FrameId],
     values: &mut [Option<Pointer>],
     remaining: &mut usize,
-    child: Pointer,
+    child: FrameId,
     value: Pointer,
 ) -> Result<(), EngineError> {
     let index = children
@@ -1029,7 +814,7 @@ fn receive_sequence_value(
 
 fn receive_app_child_value(
     frame: &mut FrApp,
-    child: Pointer,
+    child: FrameId,
     value: Pointer,
 ) -> Result<(), EngineError> {
     if frame.head_child == Some(child) {
@@ -1129,9 +914,10 @@ fn record_update_exprs_for_keys(
 
 fn eval_receive<State>(
     runtime: &RuntimeCore<State>,
-    frame_ptr: Pointer,
+    frames: &mut FrameStore,
+    frame_id: FrameId,
     frame: Frame,
-    child: Pointer,
+    child: FrameId,
     value: Pointer,
 ) -> Result<EvalControl<State>, EngineError>
 where
@@ -1174,9 +960,7 @@ where
                     Ok(heap.alloc_ptr_tuple(values)?.into_pointer())
                 })?));
             }
-            runtime
-                .heap
-                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Tuple(frame)))?;
+            frames.replace(frame_id, Frame::Tuple(frame))?;
             Ok(EvalControl::Wait)
         }
         Frame::List(mut frame) => {
@@ -1197,9 +981,7 @@ where
                     .alloc_ptr_list(completed_values("list", &frame.values)?)?;
                 return Ok(EvalControl::Return(list));
             }
-            runtime
-                .heap
-                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::List(frame)))?;
+            frames.replace(frame_id, Frame::List(frame))?;
             Ok(EvalControl::Wait)
         }
         Frame::Dict(mut frame) => {
@@ -1224,9 +1006,7 @@ where
                     Ok(heap.alloc_ptr_dict(values)?.into_pointer())
                 })?));
             }
-            runtime
-                .heap
-                .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Dict(frame)))?;
+            frames.replace(frame_id, Frame::Dict(frame))?;
             Ok(EvalControl::Wait)
         }
         Frame::RecordUpdate(mut frame) => match frame.state {
@@ -1236,7 +1016,7 @@ where
                     let result = apply_record_update_values(runtime, value, BTreeMap::new())?;
                     return Ok(EvalControl::Return(result));
                 }
-                eval_record_update_updates_enter(runtime, frame_ptr, frame)
+                eval_record_update_updates_enter(runtime, frames, frame_id, frame)
             }
             FrRecordUpdateState::EvalUpdate => {
                 receive_sequence_value(
@@ -1259,9 +1039,7 @@ where
                     let result = apply_record_update_values(runtime, base, update_values)?;
                     return Ok(EvalControl::Return(result));
                 }
-                runtime.heap.with_locked(|heap| {
-                    heap.replace_frame(&frame_ptr, Frame::RecordUpdate(frame))
-                })?;
+                frames.replace(frame_id, Frame::RecordUpdate(frame))?;
                 Ok(EvalControl::Wait)
             }
             _ => unexpected_child_result("record update"),
@@ -1272,15 +1050,13 @@ where
                 receive_app_child_value(&mut frame, child, value)?;
                 if frame.remaining == 0 {
                     frame.next_arg_index = 0;
-                    return continue_app_after_apply(runtime, frame_ptr, frame, None);
+                    return continue_app_after_apply(runtime, frames, frame_id, frame, None);
                 }
-                runtime
-                    .heap
-                    .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::App(frame)))?;
+                frames.replace(frame_id, Frame::App(frame))?;
                 Ok(EvalControl::Wait)
             }
             FrAppState::ApplyArg => {
-                continue_app_after_apply(runtime, frame_ptr, frame, Some(value))
+                continue_app_after_apply(runtime, frames, frame_id, frame, Some(value))
             }
             _ => unexpected_child_result("application"),
         },
@@ -1301,9 +1077,7 @@ where
                 frame.state = FrLetState::EvalBody;
                 let env = frame.env.extend(name.clone(), value);
                 let body = Arc::clone(body);
-                runtime
-                    .heap
-                    .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Let(frame)))?;
+                frames.replace(frame_id, Frame::Let(frame))?;
                 Ok(EvalControl::Push { expr: body, env })
             }
             FrLetState::EvalBody => Ok(EvalControl::Return(value)),
@@ -1330,18 +1104,14 @@ where
                 if frame.next_binding_index == bindings.len() {
                     frame.state = FrLetRecState::EvalBody;
                     let body = Arc::clone(body);
-                    runtime
-                        .heap
-                        .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::LetRec(frame)))?;
+                    frames.replace(frame_id, Frame::LetRec(frame))?;
                     return Ok(EvalControl::Push {
                         expr: body,
                         env: recursive_env,
                     });
                 }
                 let def = Arc::clone(&bindings[frame.next_binding_index].1);
-                runtime
-                    .heap
-                    .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::LetRec(frame)))?;
+                frames.replace(frame_id, Frame::LetRec(frame))?;
                 Ok(EvalControl::Push {
                     expr: def,
                     env: recursive_env,
@@ -1375,9 +1145,7 @@ where
                 frame.selected = Some(Arc::clone(&selected));
                 frame.state = FrBranchState::EvalSelected;
                 let env = frame.env.clone();
-                runtime
-                    .heap
-                    .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Ite(frame)))?;
+                frames.replace(frame_id, Frame::Ite(frame))?;
                 Ok(EvalControl::Push {
                     expr: selected,
                     env,
@@ -1389,57 +1157,49 @@ where
         Frame::Match(mut frame) => match frame.state {
             FrMatchState::EvalScrutinee => {
                 frame.scrutinee_value = Some(value);
-                runtime
-                    .heap
-                    .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::Match(frame)))?;
-                let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
+                let mut protected = Vec::new();
+                Frame::Match(frame.clone()).trace_pointers(&mut protected);
+                let frame_roots = runtime.heap.temp_roots(protected.clone())?;
                 loop {
-                    let current_frame_ptr = roots.get(0)?;
-                    let current_frame = match runtime
-                        .heap
-                        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-                    {
+                    let mut wrapped = Frame::Match(frame);
+                    refresh_frame_from_roots(&mut wrapped, &protected, &frame_roots, 0)?;
+                    frame = match wrapped {
                         Frame::Match(frame) => frame,
                         _ => return frame_kind_error("match"),
                     };
-                    let value = current_frame.scrutinee_value.ok_or_else(|| {
+                    let value = frame.scrutinee_value.ok_or_else(|| {
                         EngineError::Internal("match frame missing scrutinee".into())
                     })?;
-                    if current_frame.next_arm_index >= current_frame.arms.len() {
+                    if frame.next_arm_index >= frame.arms.len() {
                         return Err(EngineError::MatchFailure);
                     }
-                    let idx = current_frame.next_arm_index;
-                    let arm = &current_frame.arms[idx];
+                    let idx = frame.next_arm_index;
+                    let arm = &frame.arms[idx];
                     let matched = match_pattern_ptr(&runtime.heap, &arm.pattern, &value);
-                    let current_frame_ptr = roots.get(0)?;
-                    let mut current_frame = match runtime
-                        .heap
-                        .with_locked(|heap| heap.pointer_as_frame(&current_frame_ptr))?
-                    {
+                    let mut wrapped = Frame::Match(frame);
+                    refresh_frame_from_roots(&mut wrapped, &protected, &frame_roots, 0)?;
+                    frame = match wrapped {
                         Frame::Match(frame) => frame,
                         _ => return frame_kind_error("match"),
                     };
                     if let Some(bindings) = matched {
-                        let env = current_frame.env.extend_many(bindings);
-                        let expr = Arc::clone(&current_frame.arms[idx].expr);
-                        current_frame.next_arm_index = idx;
-                        current_frame.matched_env = Some(env.clone());
-                        current_frame.state = FrMatchState::EvalArm;
-                        runtime.heap.with_locked(|heap| {
-                            heap.replace_frame(&current_frame_ptr, Frame::Match(current_frame))
-                        })?;
+                        let env = frame.env.extend_many(bindings);
+                        let expr = Arc::clone(&frame.arms[idx].expr);
+                        frame.next_arm_index = idx;
+                        frame.matched_env = Some(env.clone());
+                        frame.state = FrMatchState::EvalArm;
+                        frames.replace(frame_id, Frame::Match(frame))?;
                         return Ok(EvalControl::Push { expr, env });
                     }
-                    current_frame.next_arm_index += 1;
-                    runtime.heap.with_locked(|heap| {
-                        heap.replace_frame(&current_frame_ptr, Frame::Match(current_frame))
-                    })?;
+                    frame.next_arm_index += 1;
                 }
             }
             FrMatchState::EvalArm => Ok(EvalControl::Return(value)),
             _ => unexpected_child_result("match"),
         },
-        Frame::NativeCall(frame) => eval_native_receive(runtime, frame_ptr, frame, child, value),
+        Frame::NativeCall(frame) => {
+            eval_native_receive(runtime, frames, frame_id, frame, child, value)
+        }
         Frame::NativeAsync(_) => Ok(EvalControl::Return(value)),
         _ => unexpected_child_result("value"),
     }
@@ -1464,7 +1224,7 @@ pub(crate) fn refresh_frame_from_roots(
 
 fn eval_apply_overloaded_arg<State>(
     runtime: &RuntimeCore<State>,
-    parent: Pointer,
+    parent: FrameId,
     mut over: OverloadedFn,
     arg: Pointer,
     func_type: Option<&Type>,
@@ -1538,7 +1298,7 @@ where
 
 fn eval_apply_arg<State>(
     runtime: &RuntimeCore<State>,
-    parent: Pointer,
+    parent: FrameId,
     func: Pointer,
     arg: Pointer,
     func_type: Option<&Type>,
@@ -1597,7 +1357,8 @@ where
 
 fn continue_app_after_apply<State>(
     runtime: &RuntimeCore<State>,
-    mut frame_ptr: Pointer,
+    frames: &mut FrameStore,
+    frame_id: FrameId,
     mut frame: FrApp,
     applied: Option<Pointer>,
 ) -> Result<EvalControl<State>, EngineError>
@@ -1608,9 +1369,7 @@ where
         frame.arg = None;
         frame.func = Some(applied);
         frame.next_arg_index += 1;
-        runtime
-            .heap
-            .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::App(frame.clone())))?;
+        frames.replace(frame_id, Frame::App(frame.clone()))?;
     }
 
     loop {
@@ -1643,23 +1402,21 @@ where
 
         frame.arg = Some(arg);
         frame.state = FrAppState::ApplyArg;
-        runtime
-            .heap
-            .with_locked(|heap| heap.replace_frame(&frame_ptr, Frame::App(frame.clone())))?;
-        let roots = runtime.heap.temp_roots(vec![frame_ptr, func, arg])?;
+        frames.replace(frame_id, Frame::App(frame.clone()))?;
+        let mut protected = vec![func, arg];
+        Frame::App(frame.clone()).trace_pointers(&mut protected);
+        let roots = runtime.heap.temp_roots(protected.clone())?;
         let apply_result = eval_apply_arg(
             runtime,
-            frame_ptr,
+            frame_id,
             func,
             arg,
             Some(&arg_info.func_type),
             Some(&arg_info.expr.typ),
         )?;
-        frame_ptr = roots.get(0)?;
-        frame = match runtime
-            .heap
-            .with_locked(|heap| heap.pointer_as_frame(&frame_ptr))?
-        {
+        let mut wrapped = Frame::App(frame);
+        refresh_frame_from_roots(&mut wrapped, &protected, &roots, 0)?;
+        frame = match wrapped {
             Frame::App(frame) => frame,
             _ => return frame_kind_error("application"),
         };
@@ -1668,15 +1425,13 @@ where
                 frame.arg = None;
                 frame.func = Some(applied);
                 frame.next_arg_index += 1;
-                runtime.heap.with_locked(|heap| {
-                    heap.replace_frame(&frame_ptr, Frame::App(frame.clone()))
-                })?;
+                frames.replace(frame_id, Frame::App(frame.clone()))?;
             }
             EvalApplyResult::Push { expr, env } => return Ok(EvalControl::Push { expr, env }),
             EvalApplyResult::PushNative(task) => {
                 return Ok(EvalControl::PushFrame(Box::new(Frame::NativeCall(
                     FrNativeCall {
-                        parent: frame_ptr,
+                        parent: Some(frame_id),
                         state: FrNativeCallState::Enter,
                         task,
                     },
@@ -1689,7 +1444,7 @@ where
 
 fn eval_resolve_var<State>(
     runtime: &RuntimeCore<State>,
-    parent: Pointer,
+    parent: FrameId,
     env: &Environment,
     name: &Symbol,
     typ: &Type,
@@ -1798,17 +1553,6 @@ where
                 .with_locked(|heap| Ok(heap.alloc_ptr_adt(tag, vec![dict])?.into_pointer()))
         }
     }
-}
-
-fn is_root_frame_parent(heap: &Heap, pointer: &Pointer) -> Result<bool, EngineError> {
-    heap.with_locked(|heap| match heap.get_cell_from_pointer(pointer)? {
-        Cell::U64(0) => Ok(true),
-        Cell::Frame(_) => Ok(false),
-        other => Err(EngineError::Internal(format!(
-            "unexpected frame parent value {}",
-            other.cell_type_name()
-        ))),
-    })
 }
 
 pub(crate) fn frame_kind_error<T>(expected: &'static str) -> Result<T, EngineError> {
