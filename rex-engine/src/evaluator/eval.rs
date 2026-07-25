@@ -1175,7 +1175,7 @@ where
                     }
                     let idx = frame.next_arm_index;
                     let arm = &frame.arms[idx];
-                    let matched = match_pattern_ptr(&runtime.heap, &arm.pattern, &value);
+                    let matched = match_pattern_ptr(&runtime.heap, &arm.pattern, &value)?;
                     let mut wrapped = Frame::Match(frame);
                     refresh_frame_from_roots(&mut wrapped, &protected, &frame_roots, 0)?;
                     frame = match wrapped {
@@ -1571,32 +1571,33 @@ fn match_pattern_ptr(
     heap: &Heap,
     pat: &Pattern,
     value: &Pointer,
-) -> Option<BTreeMap<Symbol, Pointer>> {
+) -> Result<Option<BTreeMap<Symbol, Pointer>>, EngineError> {
     match pat {
-        Pattern::Wildcard(..) => Some(BTreeMap::new()),
+        Pattern::Wildcard(..) => Ok(Some(BTreeMap::new())),
         Pattern::Var(var) => {
             let mut bindings = BTreeMap::new();
             bindings.insert(var.name.clone(), *value);
-            Some(bindings)
+            Ok(Some(bindings))
         }
         Pattern::Named(_, name, ps) => {
             let expected = name.to_dotted_symbol();
-            if let Some(args) = heap
-                .with_locked(|heap| {
-                    let v = heap.get_cell_from_pointer(value)?;
-                    match v {
-                        Cell::Adt(vname, args)
-                            if runtime_ctor_matches(vname, &expected) && args.len() == ps.len() =>
-                        {
-                            Ok(Some(args.clone()))
-                        }
-                        _ => Ok(None),
+            let (args, is_list) = heap.with_locked(|heap| {
+                let v = heap.get_cell_from_pointer(value)?;
+                match v {
+                    Cell::Adt(vname, args)
+                        if runtime_ctor_matches(vname, &expected) && args.len() == ps.len() =>
+                    {
+                        Ok((Some(args.clone()), false))
                     }
-                })
-                .ok()
-                .flatten()
-            {
+                    Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. } => Ok((None, true)),
+                    _ => Ok((None, false)),
+                }
+            })?;
+            if let Some(args) = args {
                 return match_patterns(heap, ps, &args);
+            }
+            if !is_list {
+                return Ok(None);
             }
 
             match expected
@@ -1605,43 +1606,43 @@ fn match_pattern_ptr(
                 .next()
                 .unwrap_or(expected.as_ref())
             {
-                "Empty" if ps.is_empty() => heap
-                    .list_len(value)
-                    .ok()
-                    .filter(|len| *len == 0)
-                    .map(|_| BTreeMap::new()),
+                "Empty" if ps.is_empty() => Ok((heap.list_len(value)? == 0).then(BTreeMap::new)),
                 "Cons" if ps.len() == 2 => {
-                    let (head, tail) = heap.list_head_tail(value).ok().flatten()?;
+                    let Some((head, tail)) = heap.list_head_tail(value)? else {
+                        return Ok(None);
+                    };
                     match_patterns(heap, ps, &[head, tail])
                 }
-                _ => None,
+                _ => Ok(None),
             }
         }
         Pattern::Tuple(_, ps) => {
-            let xs = heap
-                .with_locked(|heap| match heap.get_cell_from_pointer(value)? {
-                    Cell::Tuple(xs) if xs.len() == ps.len() => Ok(Some(xs.clone())),
-                    _ => Ok(None),
-                })
-                .ok()
-                .flatten()?;
+            let Some(xs) = heap.with_locked(|heap| match heap.get_cell_from_pointer(value)? {
+                Cell::Tuple(xs) if xs.len() == ps.len() => Ok(Some(xs.clone())),
+                _ => Ok(None),
+            })?
+            else {
+                return Ok(None);
+            };
             match_patterns(heap, ps, &xs)
         }
         Pattern::List(_, ps) => {
-            if heap.list_len(value).ok()? != ps.len() {
-                return None;
+            if heap.list_len(value)? != ps.len() {
+                return Ok(None);
             }
             if ps
                 .iter()
                 .all(|pattern| matches!(pattern, Pattern::Wildcard(..)))
             {
-                return Some(BTreeMap::new());
+                return Ok(Some(BTreeMap::new()));
             }
-            let values = heap.list_items(*value).ok()?;
+            let values = heap.list_items(*value)?;
             match_list_patterns(heap, ps, values)
         }
         Pattern::Cons(_, head, tail) => {
-            let (head_value, tail_value) = heap.list_head_tail(value).ok().flatten()?;
+            let Some((head_value, tail_value)) = heap.list_head_tail(value)? else {
+                return Ok(None);
+            };
             match_patterns(
                 heap,
                 &[head.as_ref().clone(), tail.as_ref().clone()],
@@ -1649,23 +1650,23 @@ fn match_pattern_ptr(
             )
         }
         Pattern::Dict(_, fields) => {
-            let values = heap
-                .with_locked(|heap| {
-                    let v = heap.get_cell_from_pointer(value)?;
-                    let Cell::Dict(map) = v else {
+            let Some(values) = heap.with_locked(|heap| {
+                let v = heap.get_cell_from_pointer(value)?;
+                let Cell::Dict(map) = v else {
+                    return Ok(None);
+                };
+                let mut values = Vec::with_capacity(fields.len());
+                for (key, _) in fields {
+                    let Some(pointer) = map.get(key) else {
                         return Ok(None);
                     };
-                    let mut values = Vec::with_capacity(fields.len());
-                    for (key, _) in fields {
-                        let Some(pointer) = map.get(key) else {
-                            return Ok(None);
-                        };
-                        values.push(*pointer);
-                    }
-                    Ok(Some(values))
-                })
-                .ok()
-                .flatten()?;
+                    values.push(*pointer);
+                }
+                Ok(Some(values))
+            })?
+            else {
+                return Ok(None);
+            };
             let patterns = fields
                 .iter()
                 .map(|(_, pattern)| pattern.clone())
@@ -1679,14 +1680,14 @@ fn match_list_patterns(
     heap: &Heap,
     patterns: &[Pattern],
     mut values: ListItems,
-) -> Option<BTreeMap<Symbol, Pointer>> {
+) -> Result<Option<BTreeMap<Symbol, Pointer>>, EngineError> {
     if patterns.len() != values.len() {
-        return None;
+        return Ok(None);
     }
 
     let mut value_pointers = Vec::new();
     values.trace_pointers(&mut value_pointers);
-    let value_roots = heap.temp_roots(value_pointers).ok()?;
+    let value_roots = heap.temp_roots(value_pointers)?;
     let mut bindings = BTreeMap::new();
 
     for (index, pattern) in patterns.iter().enumerate() {
@@ -1694,64 +1695,70 @@ fn match_list_patterns(
             continue;
         }
 
-        let binding_roots = heap
-            .temp_roots(bindings.values().copied().collect::<Vec<_>>())
-            .ok()?;
+        let binding_roots = heap.temp_roots(bindings.values().copied().collect::<Vec<_>>())?;
         refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
         refresh_list_items_from_roots(&mut values, &value_roots)?;
 
-        let value = heap.with_locked(|heap| values.get(heap, index)).ok()?;
-        let value_root = heap.temp_roots(vec![value]).ok()?;
-        let value = value_root.get(0).ok()?;
-        let sub = match_pattern_ptr(heap, pattern, &value)?;
+        let value = heap.with_locked(|heap| values.get(heap, index))?;
+        let value_root = heap.temp_roots(vec![value])?;
+        let value = value_root.get(0)?;
+        let Some(sub) = match_pattern_ptr(heap, pattern, &value)? else {
+            return Ok(None);
+        };
 
         refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
         refresh_list_items_from_roots(&mut values, &value_roots)?;
         bindings.extend(sub);
     }
-    Some(bindings)
+    Ok(Some(bindings))
 }
 
 fn match_patterns(
     heap: &Heap,
     patterns: &[Pattern],
     values: &[Pointer],
-) -> Option<BTreeMap<Symbol, Pointer>> {
-    let value_roots = heap.temp_roots(values.to_vec()).ok()?;
+) -> Result<Option<BTreeMap<Symbol, Pointer>>, EngineError> {
+    let value_roots = heap.temp_roots(values.to_vec())?;
     let mut bindings = BTreeMap::new();
     for (index, p) in patterns.iter().enumerate() {
-        let binding_roots = heap
-            .temp_roots(bindings.values().copied().collect::<Vec<_>>())
-            .ok()?;
+        let binding_roots = heap.temp_roots(bindings.values().copied().collect::<Vec<_>>())?;
         refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
-        let value = value_roots.get(index).ok()?;
-        let sub = match_pattern_ptr(heap, p, &value)?;
+        let value = value_roots.get(index)?;
+        let Some(sub) = match_pattern_ptr(heap, p, &value)? else {
+            return Ok(None);
+        };
         refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
         bindings.extend(sub);
     }
-    Some(bindings)
+    Ok(Some(bindings))
 }
 
 fn refresh_bindings_from_roots(
     bindings: &mut BTreeMap<Symbol, Pointer>,
     roots: &TempRoots,
-) -> Option<()> {
+) -> Result<(), EngineError> {
     for (index, pointer) in bindings.values_mut().enumerate() {
-        *pointer = roots.get(index).ok()?;
+        *pointer = roots.get(index)?;
     }
-    Some(())
+    Ok(())
 }
 
-fn refresh_list_items_from_roots(items: &mut ListItems, roots: &TempRoots) -> Option<()> {
+fn refresh_list_items_from_roots(
+    items: &mut ListItems,
+    roots: &TempRoots,
+) -> Result<(), EngineError> {
     let mut index = 0;
-    items
-        .map_pointers(&mut |_| {
-            let pointer = roots.get(index);
-            index += 1;
-            pointer
-        })
-        .ok()?;
-    (index == roots.len()).then_some(())
+    items.map_pointers(&mut |_| {
+        let pointer = roots.get(index);
+        index += 1;
+        pointer
+    })?;
+    if index != roots.len() {
+        return Err(EngineError::Internal(
+            "list item root count does not match pointer count".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn runtime_ctor_matches(actual: &Symbol, expected: &Symbol) -> bool {
@@ -2083,17 +2090,26 @@ mod tests {
             .expect("collection count should be available");
 
         let empty = Pattern::List(Span::default(), Vec::new());
-        assert!(match_pattern_ptr(&heap, &empty, &pointer).is_none());
+        assert!(
+            match_pattern_ptr(&heap, &empty, &pointer)
+                .expect("pattern matching should not error")
+                .is_none()
+        );
 
         let wrong_len = Pattern::List(Span::default(), vec![wildcard()]);
-        assert!(match_pattern_ptr(&heap, &wrong_len, &pointer).is_none());
+        assert!(
+            match_pattern_ptr(&heap, &wrong_len, &pointer)
+                .expect("pattern matching should not error")
+                .is_none()
+        );
 
         let exact_wildcards = Pattern::List(
             Span::default(),
             vec![wildcard(), wildcard(), wildcard(), wildcard()],
         );
         assert_eq!(
-            match_pattern_ptr(&heap, &exact_wildcards, &pointer),
+            match_pattern_ptr(&heap, &exact_wildcards, &pointer)
+                .expect("pattern matching should not error"),
             Some(BTreeMap::new())
         );
         assert_eq!(
@@ -2133,8 +2149,9 @@ mod tests {
         let collections_before = heap
             .with_locked_ok(|heap| heap.collection_count())
             .expect("collection count should be available");
-        let bindings =
-            match_pattern_ptr(&heap, &pattern, &pointer).expect("nested list pattern should match");
+        let bindings = match_pattern_ptr(&heap, &pattern, &pointer)
+            .expect("pattern matching should not error")
+            .expect("nested list pattern should match");
 
         assert_eq!(
             heap.with_locked(
