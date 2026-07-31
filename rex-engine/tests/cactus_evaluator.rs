@@ -12,6 +12,7 @@ use std::sync::{
     mpsc,
 };
 use std::task::{Context as TaskContext, Poll, Waker};
+use std::time::Duration;
 
 async fn eval_value<State>(
     source: &str,
@@ -769,6 +770,36 @@ async fn async_call_policy_accepts_executor_closures() {
     let result = eval_i32("bump 10 + bump 20", builder).await;
     assert_eq!(result, 32);
     assert_eq!(spawned.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn sync_calls_bypass_async_admission_and_executor() {
+    let invoked = Arc::new(AtomicUsize::new(0));
+    let spawned = Arc::new(AtomicUsize::new(0));
+    let mut builder = Builder::with_prelude(()).unwrap();
+    builder.set_parallelism_controller(DynamicPermitController::new(0));
+    builder.set_async_call_policy(AsyncCallPolicy::executor(CountingCallExecutor {
+        spawned: Arc::clone(&spawned),
+    }));
+
+    let mut module = Module::global();
+    module
+        .export("bump", {
+            let invoked = Arc::clone(&invoked);
+            move |_: &(), value: i32| {
+                invoked.fetch_add(1, Ordering::SeqCst);
+                Ok(value + 1)
+            }
+        })
+        .unwrap();
+    builder.inject_module(module).unwrap();
+
+    let value = tokio::time::timeout(Duration::from_secs(10), eval_i32("bump 41", builder))
+        .await
+        .expect("sync evaluation waited for an async native permit");
+    assert_eq!(invoked.load(Ordering::SeqCst), 1);
+    assert_eq!(value, 42);
+    assert_eq!(spawned.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

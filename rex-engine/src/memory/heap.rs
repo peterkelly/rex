@@ -179,6 +179,27 @@ impl HeapState {
         })
     }
 
+    fn register_roots(
+        &mut self,
+        pointers: impl IntoIterator<Item = Pointer>,
+    ) -> Result<Vec<RootId>, EngineError> {
+        let mut root_ids = Vec::new();
+        for pointer in pointers {
+            match self.register_root(pointer) {
+                Ok(root_id) => root_ids.push(root_id),
+                Err(error) => {
+                    if let Err(cleanup_error) = self.unregister_roots(root_ids) {
+                        return Err(EngineError::Internal(format!(
+                            "failed to register heap roots: {error}; cleanup also failed: {cleanup_error}"
+                        )));
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        Ok(root_ids)
+    }
+
     fn unregister_root(&mut self, root_id: RootId) -> Result<(), EngineError> {
         if root_id.heap_id != self.id {
             return Err(invalid_root(root_id));
@@ -784,6 +805,12 @@ pub(crate) struct TempRoots {
     collection_count: u64,
 }
 
+pub(crate) struct PersistentRoots {
+    heap: Heap,
+    root_ids: Vec<RootId>,
+    collection_count: u64,
+}
+
 /// A rooted reference to a Rex heap value.
 ///
 /// Cloning a handle clones the root, so the underlying value remains visible to
@@ -893,6 +920,55 @@ impl TempRoots {
             .get(index)
             .ok_or_else(|| EngineError::Internal("temporary root index out of bounds".into()))?;
         self.heap.with_locked(|heap| heap.resolve_root(root_id))
+    }
+
+    pub(crate) fn to_handles(&self, heap: &Heap) -> Result<Vec<Handle>, EngineError> {
+        let root_ids = {
+            let mut state = heap
+                .state
+                .lock()
+                .map_err(|_| EngineError::HeapStatePoisoned)?;
+            let pointers = self
+                .root_ids
+                .iter()
+                .map(|root_id| state.resolve_root(*root_id))
+                .collect::<Result<Vec<_>, _>>()?;
+            state.register_roots(pointers)?
+        };
+        Ok(heap.handles_from_root_ids(root_ids))
+    }
+}
+
+impl Drop for PersistentRoots {
+    fn drop(&mut self) {
+        let _ = self
+            .heap
+            .with_locked(|heap| heap.unregister_roots(std::mem::take(&mut self.root_ids)));
+    }
+}
+
+impl PersistentRoots {
+    // `update` runs while the heap-state mutex is held so its rewritten
+    // pointers cannot immediately become stale. It must not access `Heap` or
+    // drop heap-rooting values, either of which would try to lock the heap.
+    pub(crate) fn with_updated_pointers(
+        &mut self,
+        update: impl FnOnce(&[Pointer]) -> Result<(), EngineError>,
+    ) -> Result<bool, EngineError> {
+        let state = Arc::clone(&self.heap.state);
+        let state = state.lock().map_err(|_| EngineError::HeapStatePoisoned)?;
+        let collection_count = state.collection_count();
+        if collection_count == self.collection_count {
+            return Ok(false);
+        }
+        let pointers = self
+            .root_ids
+            .iter()
+            .map(|root_id| state.resolve_root(*root_id))
+            .collect::<Result<Vec<_>, _>>()?;
+        update(&pointers)?;
+        self.collection_count = collection_count;
+        Ok(true)
     }
 }
 
@@ -1218,12 +1294,26 @@ impl Heap {
             .state
             .lock()
             .map_err(|_| EngineError::HeapStatePoisoned)?;
-        let mut root_ids = Vec::with_capacity(pointers.len());
-        for pointer in pointers {
-            root_ids.push(state.register_root(pointer)?);
-        }
+        let root_ids = state.register_roots(pointers)?;
         let collection_count = state.collection_count();
         Ok(TempRoots {
+            heap: self.clone(),
+            root_ids,
+            collection_count,
+        })
+    }
+
+    pub(crate) fn persistent_roots(
+        &self,
+        pointers: Vec<Pointer>,
+    ) -> Result<PersistentRoots, EngineError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::HeapStatePoisoned)?;
+        let root_ids = state.register_roots(pointers)?;
+        let collection_count = state.collection_count();
+        Ok(PersistentRoots {
             heap: self.clone(),
             root_ids,
             collection_count,
@@ -1464,10 +1554,26 @@ impl Heap {
     }
 
     fn handles_from_pointers(&self, values: &[Pointer]) -> Result<Vec<Handle>, EngineError> {
-        values
-            .iter()
-            .map(|pointer| self.handle(*pointer))
-            .collect::<Result<Vec<_>, _>>()
+        let root_ids = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| EngineError::HeapStatePoisoned)?;
+            state.register_roots(values.iter().copied())?
+        };
+        Ok(self.handles_from_root_ids(root_ids))
+    }
+
+    fn handles_from_root_ids(&self, root_ids: Vec<RootId>) -> Vec<Handle> {
+        root_ids
+            .into_iter()
+            .map(|root_id| Handle {
+                root: Arc::new(HandleRoot {
+                    heap: self.clone(),
+                    root_id,
+                }),
+            })
+            .collect()
     }
 
     pub(crate) fn pointer_as_list(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
@@ -2639,6 +2745,47 @@ mod tests {
                 .is_err(),
             "raw pointer from before collection should be stale"
         );
+    }
+
+    #[test]
+    fn persistent_roots_advance_across_multiple_collections() {
+        let heap = Heap::new();
+        let value = heap.alloc_i32(42).expect("alloc_i32 should succeed");
+        let initial = value.pointer().expect("handle should resolve");
+        let mut roots = heap
+            .persistent_roots(vec![initial])
+            .expect("persistent root should register");
+        drop(value);
+        let mut current = initial;
+
+        for _ in 0..3 {
+            heap.with_locked(|heap| heap.collect())
+                .expect("collection should succeed");
+            let mut updated = None;
+            assert!(
+                roots
+                    .with_updated_pointers(|pointers| {
+                        updated = pointers.first().copied();
+                        Ok(())
+                    })
+                    .expect("persistent root refresh should succeed")
+            );
+            let next = updated.expect("persistent root should have one pointer");
+            assert_ne!(next.generation, current.generation);
+            assert_eq!(
+                heap.with_locked(|heap| heap.pointer_as_i32(&next))
+                    .expect("refreshed pointer should resolve"),
+                42
+            );
+            assert!(
+                !roots
+                    .with_updated_pointers(|_| {
+                        panic!("unchanged epoch should not invoke the refresh closure")
+                    })
+                    .expect("unchanged persistent roots should be reported")
+            );
+            current = next;
+        }
     }
 
     #[test]

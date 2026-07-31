@@ -17,8 +17,8 @@ use crate::{
     evaluator::{
         context::Context,
         native_callable::{
-            AsyncNativePointerCallable, NativeCallable, SchedulerNativeCallable,
-            SchedulerNativeResult, SyncNativePointerCallable,
+            NativeCallScheduling, NativeCallable, NativeHandleCallable, SchedulerNativeCallable,
+            SchedulerNativeResult,
         },
     },
     handlers::RexDefault,
@@ -38,7 +38,7 @@ use crate::{
         validate_native_export_scheme,
     },
 };
-use futures::future::BoxFuture;
+use futures::{FutureExt, future::BoxFuture};
 use rex_ast::{DeclareFnDecl, Expr, FnDecl, InstanceDecl, Scope, Symbol};
 use rex_typesystem::{
     inference::infer,
@@ -639,12 +639,10 @@ where
         validate_native_export_scheme(&scheme, arity)?;
         let name = name.into();
         let handler = Arc::new(handler);
-        let func: SyncNativePointerCallable<State> =
-            Arc::new(move |engine, typ: &Type, args: &[Pointer]| {
-                let handles = engine.handles_from_pointers(args)?;
-                let value = handler(engine.clone(), typ, &handles)?;
-                value.pointer_for_heap(engine.heap())
-            });
+        let func: NativeHandleCallable<State> = Arc::new(move |engine, typ, args| {
+            let result = handler(engine, &typ, &args);
+            async move { result }.boxed()
+        });
         let registration = NativeRegistration::sync(scheme, arity, func);
         self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
@@ -684,8 +682,10 @@ where
     ) -> Result<(), EngineError> {
         let typ = V::rex_type();
         let value = value.into_rex(&self.heap)?;
-        let func: SyncNativePointerCallable<State> =
-            Arc::new(move |_engine, _: &Type, _args: &[Pointer]| value.pointer());
+        let func: NativeHandleCallable<State> = Arc::new(move |_engine, _typ, _args| {
+            let result = Ok(value.clone());
+            async move { result }.boxed()
+        });
         let scheme = Scheme::new(vec![], vec![], typ);
         let registration = NativeRegistration::sync(scheme, 0, func);
         self.register_native_registration(ROOT_MODULE_NAME, name, registration)
@@ -919,15 +919,14 @@ pub struct NativeRegistration<State: Clone + Send + Sync + 'static> {
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeRegistration<State> {
-    pub(crate) fn sync(
-        scheme: Scheme,
-        arity: usize,
-        func: SyncNativePointerCallable<State>,
-    ) -> Self {
+    pub(crate) fn sync(scheme: Scheme, arity: usize, func: NativeHandleCallable<State>) -> Self {
         Self {
             scheme,
             arity,
-            callable: NativeCallable::Sync(func),
+            callable: NativeCallable::Host {
+                callable: func,
+                scheduling: NativeCallScheduling::Immediate,
+            },
         }
     }
 
@@ -943,15 +942,14 @@ impl<State: Clone + Send + Sync + 'static> NativeRegistration<State> {
         }
     }
 
-    pub(crate) fn r#async(
-        scheme: Scheme,
-        arity: usize,
-        func: AsyncNativePointerCallable<State>,
-    ) -> Self {
+    pub(crate) fn r#async(scheme: Scheme, arity: usize, func: NativeHandleCallable<State>) -> Self {
         Self {
             scheme,
             arity,
-            callable: NativeCallable::Async(func),
+            callable: NativeCallable::Host {
+                callable: func,
+                scheduling: NativeCallScheduling::Deferred,
+            },
         }
     }
 }
@@ -989,14 +987,10 @@ where
             continue;
         }
         let ctor_name = ctor.clone();
-        let func: SyncNativePointerCallable<State> =
-            Arc::new(move |ctx: Context<State>, _: &Type, args: &[Pointer]| {
-                ctx.heap().with_locked(|heap| {
-                    Ok(heap
-                        .alloc_ptr_adt(runtime_ctor_symbol(&ctor_name), args.to_vec())?
-                        .into_pointer())
-                })
-            });
+        let func: NativeHandleCallable<State> = Arc::new(move |ctx, _typ, args| {
+            let result = ctx.heap().alloc_adt(runtime_ctor_symbol(&ctor_name), args);
+            async move { result }.boxed()
+        });
         let arity = type_arity(&scheme.typ);
         register_native_parts(
             type_system,
@@ -1004,7 +998,10 @@ where
             ctor,
             scheme,
             arity,
-            NativeCallable::Sync(func),
+            NativeCallable::Host {
+                callable: func,
+                scheduling: NativeCallScheduling::Immediate,
+            },
         )?;
     }
     Ok(())

@@ -100,7 +100,7 @@ pub enum Frame {
     Ite(FrIte),
     Match(FrMatch),
     NativeCall(FrNativeCall),
-    NativeAsync(FrNativeAsync),
+    NativeHost(FrNativeHost),
 }
 
 impl Frame {
@@ -127,7 +127,7 @@ impl Frame {
             Frame::Ite(frame) => frame.parent,
             Frame::Match(frame) => frame.parent,
             Frame::NativeCall(frame) => frame.parent,
-            Frame::NativeAsync(frame) => frame.parent,
+            Frame::NativeHost(frame) => frame.parent,
         }
     }
 }
@@ -199,7 +199,7 @@ impl Collection for Frame {
                 Ok(())
             }
             Frame::NativeCall(frame) => frame.task.map_pointers(rewrite),
-            Frame::NativeAsync(_) => Ok(()),
+            Frame::NativeHost(_) => Ok(()),
         }
     }
 }
@@ -488,6 +488,6 @@ pub struct FrNativeCall {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct FrNativeAsync {
+pub struct FrNativeHost {
     pub parent: Option<FrameId>,
 }

@@ -4,13 +4,12 @@ use crate::{
     evaluator::{
         CallSite, application_result_type,
         context::Context,
-        native_callable::NativeCallResult,
         native_functions::{NativeTask, eval_native_enter, eval_native_receive},
         resolve_arg_type,
         runtime_core::RuntimeCore,
         scheduler::{EvalScheduler, EvalWorkItem, poll_pending_native},
     },
-    handlers::NativeAsyncCall,
+    handlers::NativeCallRequest,
     memory::{
         heap::{Cell, Closure, Handle, Heap, HeapState, Pointer, Reference, TempRoots},
         lists::ListItems,
@@ -21,7 +20,7 @@ use crate::{
     stack::{
         FrApp, FrAppArg, FrAppState, FrBool, FrBranchState, FrDateTime, FrDict, FrFloat, FrHole,
         FrInt, FrIte, FrLam, FrLet, FrLetRec, FrLetRecState, FrLetState, FrList, FrMatch,
-        FrMatchArm, FrMatchState, FrNativeAsync, FrNativeCall, FrNativeCallState, FrProject,
+        FrMatchArm, FrMatchState, FrNativeCall, FrNativeCallState, FrNativeHost, FrProject,
         FrRecordUpdate, FrRecordUpdateState, FrSequenceState, FrString, FrTuple, FrUint, FrUuid,
         FrValueState, FrVar, Frame, FrameId, FrameStore,
     },
@@ -45,7 +44,7 @@ pub(crate) enum EvalControl<State: Clone + Send + Sync + 'static> {
     PushFrame(Box<Frame>),
     Schedule(Vec<FrameId>),
     Wait,
-    AwaitNative(NativeAsyncCall<State>),
+    AwaitNative(NativeCallRequest<State>),
     Return(Pointer),
 }
 
@@ -109,6 +108,7 @@ where
                 ));
             }
         };
+        item.refresh_rooted_value(&runtime.heap)?;
         let mut protected = Vec::new();
         frames.trace_pointers(&mut protected);
         item.trace_pointers(&mut protected);
@@ -125,15 +125,14 @@ where
         )?;
 
         let frame = frames.get(item.frame)?.clone();
-        let control = match item.returned {
-            Some(returned) => eval_receive(
-                &runtime,
-                &mut frames,
-                item.frame,
-                frame,
-                returned.child,
-                returned.value,
-            )?,
+        let returned = item
+            .returned
+            .as_ref()
+            .map(|returned| (returned.child, returned.value));
+        let control = match returned {
+            Some((child, value)) => {
+                eval_receive(&runtime, &mut frames, item.frame, frame, child, value)?
+            }
             None => eval_enter(&runtime, &mut frames, item.frame, frame)?,
         };
         refresh_eval_roots(
@@ -161,27 +160,32 @@ where
                 }
             }
             EvalControl::Wait => {}
-            EvalControl::AwaitNative(mut call) => {
-                let mut protected = Vec::new();
-                call.trace_pointers(&mut protected);
-                let call_roots = runtime.heap.temp_roots(protected)?;
-                let frame = Frame::NativeAsync(FrNativeAsync {
+            EvalControl::AwaitNative(call) => {
+                let call = call.root(&runtime.heap)?;
+                let frame = Frame::NativeHost(FrNativeHost {
                     parent: Some(item.frame),
                 });
                 let child = frames.insert(frame);
-                if call_roots.has_collected_since_creation()? {
-                    let mut cursor = 0;
-                    call.refresh_from_roots(&call_roots, &mut cursor)?;
-                }
-                scheduler.schedule_pending_native(child, call);
+                scheduler.schedule_native(child, call);
             }
             EvalControl::Return(value) => {
                 let frame = frames.remove(item.frame)?;
+                let preserve_native_handle = matches!(&frame, Frame::NativeHost(_));
                 let parent = frame.parent();
                 let Some(parent) = parent else {
                     return runtime.heap.handle(value);
                 };
-                scheduler.schedule_next(EvalWorkItem::receive(parent, item.frame, value));
+                let next = if preserve_native_handle {
+                    match item.take_returned_handle() {
+                        Some(handle) => {
+                            EvalWorkItem::receive_rooted(parent, item.frame, value, handle)
+                        }
+                        None => EvalWorkItem::receive(parent, item.frame, value),
+                    }
+                } else {
+                    EvalWorkItem::receive(parent, item.frame, value)
+                };
+                scheduler.schedule_next(next);
             }
         }
     }
@@ -605,7 +609,7 @@ where
             })
         }
         Frame::NativeCall(frame) => eval_native_enter(runtime, frames, frame_id, frame),
-        Frame::NativeAsync(_) => unexpected_child_result("native async"),
+        Frame::NativeHost(_) => unexpected_child_result("host native"),
     }
 }
 
@@ -1200,7 +1204,7 @@ where
         Frame::NativeCall(frame) => {
             eval_native_receive(runtime, frames, frame_id, frame, child, value)
         }
-        Frame::NativeAsync(_) => Ok(EvalControl::Return(value)),
+        Frame::NativeHost(_) => Ok(EvalControl::Return(value)),
         _ => unexpected_child_result("value"),
     }
 }
@@ -1287,13 +1291,9 @@ where
     let call_site = CallSite::child(parent);
     let ctx = Context::new_at_call_site(runtime, call_site)
         .resolve_native_impl(over.name.as_ref(), &full_ty)?;
-    match ctx
-        .func
-        .call_at_site(runtime, full_ty, &over.applied, call_site)?
-    {
-        NativeCallResult::Ready(value) => Ok(EvalApplyResult::Value(value)),
-        NativeCallResult::Pending(future) => Ok(EvalApplyResult::AwaitNative(future)),
-    }
+    ctx.func
+        .call_at_site(full_ty, &over.applied, call_site)
+        .map(EvalApplyResult::AwaitNative)
 }
 
 fn eval_apply_arg<State>(
@@ -1463,10 +1463,9 @@ where
                     _ => Ok(None),
                 })?;
         if let Some(native) = native {
-            match native.call_zero_at_site(runtime, CallSite::child(parent))? {
-                NativeCallResult::Ready(value) => Ok(EvalVarResult::Value(value)),
-                NativeCallResult::Pending(future) => Ok(EvalVarResult::AwaitNative(future)),
-            }
+            native
+                .call_zero_at_site(runtime, CallSite::child(parent))
+                .map(EvalVarResult::AwaitNative)
         } else {
             Ok(EvalVarResult::Value(ptr))
         }
@@ -1494,10 +1493,9 @@ where
                     _ => Ok(None),
                 })?;
         if let Some(native) = native {
-            match native.call_zero_at_site(runtime, CallSite::child(parent))? {
-                NativeCallResult::Ready(ctx) => Ok(EvalVarResult::Value(ctx)),
-                NativeCallResult::Pending(future) => Ok(EvalVarResult::AwaitNative(future)),
-            }
+            native
+                .call_zero_at_site(runtime, CallSite::child(parent))
+                .map(EvalVarResult::AwaitNative)
         } else {
             Ok(EvalVarResult::Value(ctx))
         }
@@ -1973,7 +1971,7 @@ enum EvalApplyResult<State: Clone + Send + Sync + 'static> {
         env: Environment,
     },
     PushNative(NativeTask),
-    AwaitNative(NativeAsyncCall<State>),
+    AwaitNative(NativeCallRequest<State>),
 }
 
 enum EvalVarResult<State: Clone + Send + Sync + 'static> {
@@ -1982,7 +1980,7 @@ enum EvalVarResult<State: Clone + Send + Sync + 'static> {
         expr: Arc<TypedExpr>,
         env: Environment,
     },
-    AwaitNative(NativeAsyncCall<State>),
+    AwaitNative(NativeCallRequest<State>),
 }
 
 fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Pointer, EngineError> {

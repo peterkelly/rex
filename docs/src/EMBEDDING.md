@@ -260,6 +260,11 @@ compiler.
 `export_async` handlers follow the same rule, but return
 `Future<Output = Result<T, EngineError>>`.
 
+Both forms execute outside evaluator-owned heap access and cross the native boundary using rooted
+handles internally. Synchronous handlers resume through an immediately-ready native completion;
+they do not consume async-native permits or pass through `AsyncCallPolicy`. They run on the
+evaluator task, so blocking or long-running work belongs in an asynchronous export.
+
 ```rust,ignore
 use rex::{
     engine::{CompileOptions, Builder, Module},
@@ -409,6 +414,9 @@ These callbacks receive `Context<State>` (not just `&State`), so they can:
 
 Async native callbacks receive owned argument vectors and return `Send + 'static` futures so the
 runtime can suspend them as explicit pending evaluation frames.
+Synchronous native callbacks use the same `Context`/`Handle` boundary and completion machinery,
+but produce an immediately-ready result. They are not subject to async admission or executor
+policy and should remain short and nonblocking.
 
 ```rust,ignore
 use futures::FutureExt;

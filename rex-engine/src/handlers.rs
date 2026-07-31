@@ -7,11 +7,11 @@ use crate::{
     evaluator::{
         CallSite,
         context::Context,
-        native_callable::{AsyncNativePointerCallable, SyncNativePointerCallable},
+        native_callable::{NativeCallScheduling, NativeHandleCallable},
         runtime_core::RuntimeCore,
     },
     memory::{
-        heap::{Handle, Pointer, TempRoots},
+        heap::{Handle, Heap, Pointer},
         traits::{FromRex, IntoRex},
     },
     modules::ROOT_MODULE_NAME,
@@ -119,17 +119,20 @@ macro_rules! define_handler_impl {
                 export_name: &str,
             ) -> Result<(), EngineError> {
                 let name_sym = normalize_name(export_name);
-                let func: SyncNativePointerCallable<State> = Arc::new(
-                    move |engine, _: &Type, args: &[Pointer]| {
-                        if args.len() != $arity {
-                            return Err(EngineError::NativeArity {
-                                name: name_sym.clone(),
-                                expected: $arity,
-                                got: args.len(),
-                            });
-                        }
-                        let value = self(engine.state())?;
-                        value.into_rex(engine.heap())?.pointer()
+                let func: NativeHandleCallable<State> = Arc::new(
+                    move |engine, _: Type, args: Vec<Handle>| {
+                        let result = (|| {
+                            if args.len() != $arity {
+                                return Err(EngineError::NativeArity {
+                                    name: name_sym.clone(),
+                                    expected: $arity,
+                                    got: args.len(),
+                                });
+                            }
+                            let value = self(engine.state())?;
+                            value.into_rex(engine.heap())
+                        })();
+                        async move { result }.boxed()
                     },
                 );
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
@@ -159,22 +162,24 @@ macro_rules! define_handler_impl {
                 export_name: &str,
             ) -> Result<(), EngineError> {
                 let name_sym = normalize_name(export_name);
-                let func: SyncNativePointerCallable<State> = Arc::new(
-                    move |engine, _: &Type, args: &[Pointer]| {
-                        if args.len() != $arity {
-                            return Err(EngineError::NativeArity {
-                                name: name_sym.clone(),
-                                expected: $arity,
-                                got: args.len(),
-                            });
-                        }
-                        let handles = engine.handles_from_pointers(args)?;
-                        $(let $arg_name = {
-                            let handle = &handles[$idx];
-                            $arg_ty::from_rex(&handle)?
-                        };)*
-                        let value = self(engine.state(), $($arg_name),+)?;
-                        value.into_rex(engine.heap())?.pointer()
+                let func: NativeHandleCallable<State> = Arc::new(
+                    move |engine, _: Type, args: Vec<Handle>| {
+                        let result = (|| {
+                            if args.len() != $arity {
+                                return Err(EngineError::NativeArity {
+                                    name: name_sym.clone(),
+                                    expected: $arity,
+                                    got: args.len(),
+                                });
+                            }
+                            $(let $arg_name = {
+                                let handle = &args[$idx];
+                                $arg_ty::from_rex(&handle)?
+                            };)*
+                            let value = self(engine.state(), $($arg_name),+)?;
+                            value.into_rex(engine.heap())
+                        })();
+                        async move { result }.boxed()
                     },
                 );
                 let typ = native_fn_type!($($arg_ty),+ ; R);
@@ -207,13 +212,11 @@ where
     ) -> Result<(), EngineError> {
         let (scheme, arity, func) = self;
         validate_native_export_scheme(&scheme, arity)?;
-        let pointer_func: SyncNativePointerCallable<State> =
-            Arc::new(move |engine, typ: &Type, args: &[Pointer]| {
-                let handles = engine.handles_from_pointers(args)?;
-                let value = func(engine.clone(), typ, &handles)?;
-                value.pointer_for_heap(engine.heap())
-            });
-        let registration = NativeRegistration::sync(scheme, arity, pointer_func);
+        let callable: NativeHandleCallable<State> = Arc::new(move |engine, typ, args| {
+            let result = func(engine, &typ, &args);
+            async move { result }.boxed()
+        });
+        let registration = NativeRegistration::sync(scheme, arity, callable);
         engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
     }
 }
@@ -239,8 +242,8 @@ macro_rules! define_async_handler_impl {
             ) -> Result<(), EngineError> {
                 let f = Arc::new(self);
                 let name_sym = normalize_name(export_name);
-                let func: AsyncNativePointerCallable<State> = Arc::new(
-                    move |engine, _: Type, args: Vec<Pointer>| -> NativeHandleFuture {
+                let func: NativeHandleCallable<State> = Arc::new(
+                    move |engine, _: Type, args: Vec<Handle>| -> NativeHandleFuture {
                         let f = Arc::clone(&f);
                         let name_sym = name_sym.clone();
                         let args = (|| {
@@ -289,8 +292,8 @@ macro_rules! define_async_handler_impl {
             ) -> Result<(), EngineError> {
                 let f = Arc::new(self);
                 let name_sym = normalize_name(export_name);
-                let func: AsyncNativePointerCallable<State> = Arc::new(
-                    move |engine, _: Type, args: Vec<Pointer>| -> NativeHandleFuture {
+                let func: NativeHandleCallable<State> = Arc::new(
+                    move |engine, _: Type, args: Vec<Handle>| -> NativeHandleFuture {
                         let f = Arc::clone(&f);
                         let name_sym = name_sym.clone();
                         let args = (|| {
@@ -301,9 +304,8 @@ macro_rules! define_async_handler_impl {
                                     got: args.len(),
                                 });
                             }
-                            let handles = engine.handles_from_pointers(&args)?;
                             $(let $arg_name = {
-                                let handle = &handles[$idx];
+                                let handle = &args[$idx];
                                 $arg_ty::from_rex(&handle)?
                             };)*
                             Ok(($($arg_name,)+))
@@ -351,88 +353,95 @@ where
     ) -> Result<(), EngineError> {
         let (scheme, arity, func) = self;
         validate_native_export_scheme(&scheme, arity)?;
-        let pointer_func: AsyncNativePointerCallable<State> = Arc::new(move |engine, typ, args| {
-            let func = Arc::clone(&func);
-            let handles = engine.handles_from_pointers(&args);
-            async move {
-                let handles = handles?;
-                let value = func(engine.clone(), typ, handles).await?;
-                value.pointer_for_heap(engine.heap())?;
-                Ok(value)
-            }
-            .boxed()
-        });
-        let registration = NativeRegistration::r#async(scheme, arity, pointer_func);
+        let callable: NativeHandleCallable<State> = func;
+        let registration = NativeRegistration::r#async(scheme, arity, callable);
         engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
     }
 }
 
-pub(crate) struct NativeAsyncCall<State: Clone + Send + Sync + 'static> {
-    pub(crate) callable: AsyncNativePointerCallable<State>,
-    pub(crate) call_site: CallSite,
-    pub(crate) typ: Type,
-    pub(crate) args: Vec<Pointer>,
+// A short-lived request produced inside evaluator code. Its raw arguments may
+// not cross the suspension boundary; `root` is the only conversion into the
+// scheduler-owned form below.
+pub(crate) struct NativeCallRequest<State: Clone + Send + Sync + 'static> {
+    callable: NativeHandleCallable<State>,
+    scheduling: NativeCallScheduling,
+    call_site: CallSite,
+    typ: Type,
+    args: Vec<Pointer>,
 }
 
-impl<State> NativeAsyncCall<State>
+impl<State> NativeCallRequest<State>
 where
     State: Clone + Send + Sync + 'static,
 {
     pub(crate) fn new(
-        callable: AsyncNativePointerCallable<State>,
+        callable: NativeHandleCallable<State>,
+        scheduling: NativeCallScheduling,
         call_site: CallSite,
         typ: Type,
         args: Vec<Pointer>,
     ) -> Self {
         Self {
             callable,
+            scheduling,
             call_site,
             typ,
             args,
         }
     }
 
-    pub(crate) fn invoke(
-        mut self,
-        runtime: &RuntimeCore<State>,
-    ) -> Result<NativeHandleFuture, EngineError> {
-        let mut protected = Vec::new();
-        self.trace_pointers(&mut protected);
-        let roots = runtime.heap.temp_roots(protected)?;
-        if roots.has_collected_since_creation()? {
-            let mut cursor = 0;
-            self.refresh_from_roots(&roots, &mut cursor)?;
-        }
-        let args = self.args;
+    pub(crate) fn root(self, heap: &Heap) -> Result<NativeCall<State>, EngineError> {
+        let Self {
+            callable,
+            scheduling,
+            call_site,
+            typ,
+            args,
+        } = self;
+        let roots = heap.temp_roots(args)?;
+        let args = roots.to_handles(heap)?;
+        Ok(NativeCall {
+            callable,
+            scheduling,
+            call_site,
+            typ,
+            args,
+        })
+    }
+}
+
+// A host call that is safe to queue or suspend because every argument is a
+// persistent heap root.
+pub(crate) struct NativeCall<State: Clone + Send + Sync + 'static> {
+    callable: NativeHandleCallable<State>,
+    scheduling: NativeCallScheduling,
+    call_site: CallSite,
+    typ: Type,
+    args: Vec<Handle>,
+}
+
+impl<State> NativeCall<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    pub(crate) fn scheduling(&self) -> NativeCallScheduling {
+        self.scheduling
+    }
+
+    pub(crate) fn invoke(self, runtime: &RuntimeCore<State>) -> NativeHandleFuture {
         let ctx = Context::new_at_call_site(runtime, self.call_site);
-        let future = (self.callable)(ctx, self.typ, args);
-        Ok(runtime.async_call_policy.prepare(future))
-    }
-
-    pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        out.extend(self.args.iter().copied());
-    }
-
-    pub(crate) fn map_pointers<E>(
-        &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
-    ) -> Result<(), E> {
-        for arg in &mut self.args {
-            *arg = rewrite(*arg)?;
+        let future = (self.callable)(ctx, self.typ, self.args);
+        let result_heap = runtime.heap.clone();
+        let future = async move {
+            let value = future.await?;
+            value.pointer_for_heap(&result_heap)?;
+            Ok(value)
         }
-        Ok(())
-    }
-
-    pub(crate) fn refresh_from_roots(
-        &mut self,
-        roots: &TempRoots,
-        cursor: &mut usize,
-    ) -> Result<(), EngineError> {
-        for arg in &mut self.args {
-            *arg = roots.get(*cursor)?;
-            *cursor += 1;
+        .boxed();
+        match self.scheduling {
+            NativeCallScheduling::Immediate => future,
+            NativeCallScheduling::Deferred => runtime.async_call_policy.prepare(future),
         }
-        Ok(())
     }
 }
 

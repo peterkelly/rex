@@ -4,12 +4,12 @@ use crate::{
     evaluator::{
         CallSite,
         context::Context,
-        native_callable::{NativeCallResult, NativeCallable, SchedulerNativeResult},
+        native_callable::{NativeCallable, SchedulerNativeResult},
         native_functions::NativeTask,
         resolve_arg_type,
         runtime_core::RuntimeCore,
     },
-    handlers::NativeAsyncCall,
+    handlers::NativeCallRequest,
     memory::{heap::Pointer, traits::Collection},
     util::{is_function_type, split_fun},
 };
@@ -22,7 +22,7 @@ use rex_typesystem::{
 pub(crate) enum NativeApplyResult<State: Clone + Send + Sync + 'static> {
     Value(Pointer),
     Task(NativeTask),
-    Pending(NativeAsyncCall<State>),
+    Pending(NativeCallRequest<State>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -84,7 +84,7 @@ impl NativeFn {
         &self,
         runtime: &RuntimeCore<State>,
         call_site: CallSite,
-    ) -> Result<NativeCallResult<State>, EngineError> {
+    ) -> Result<NativeCallRequest<State>, EngineError> {
         if self.arity != 0 {
             return Err(EngineError::NativeArity {
                 name: self.name.clone(),
@@ -92,12 +92,9 @@ impl NativeFn {
                 got: 0,
             });
         }
-        runtime.native_callable(self.native_id)?.call_at_site(
-            runtime,
-            self.typ.clone(),
-            &[],
-            call_site,
-        )
+        runtime
+            .native_callable(self.native_id)?
+            .call_at_site(self.typ.clone(), &[], call_site)
     }
 
     pub(crate) fn apply_at_site<State: Clone + Send + Sync + 'static>(
@@ -158,10 +155,9 @@ impl NativeFn {
                     SchedulerNativeResult::Task(task) => Ok(NativeApplyResult::Task(task)),
                 }
             }
-            callable => match callable.call_at_site(runtime, full_ty, &self.applied, call_site)? {
-                NativeCallResult::Ready(value) => Ok(NativeApplyResult::Value(value)),
-                NativeCallResult::Pending(future) => Ok(NativeApplyResult::Pending(future)),
-            },
+            callable => callable
+                .call_at_site(full_ty, &self.applied, call_site)
+                .map(NativeApplyResult::Pending),
         }
     }
 }

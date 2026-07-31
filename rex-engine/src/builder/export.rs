@@ -1,15 +1,9 @@
 use crate::{
     builder::core::NativeRegistration,
     error::EngineError,
-    evaluator::{
-        context::Context,
-        native_callable::{AsyncNativePointerCallable, SyncNativePointerCallable},
-    },
+    evaluator::{context::Context, native_callable::NativeHandleCallable},
     handlers::declare_fn_decl_from_scheme,
-    memory::{
-        heap::{Handle, Pointer},
-        traits::IntoRex,
-    },
+    memory::{heap::Handle, traits::IntoRex},
     modules::ROOT_MODULE_NAME,
     util::{normalize_name, validate_native_export_scheme},
 };
@@ -103,12 +97,10 @@ where
         let handler = Arc::new(handler);
         let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
             let handler = Arc::clone(&handler);
-            let func: SyncNativePointerCallable<State> =
-                Arc::new(move |engine, typ: &Type, args: &[Pointer]| {
-                    let handles = engine.handles_from_pointers(args)?;
-                    let value = handler(engine.clone(), typ, &handles)?;
-                    value.pointer_for_heap(engine.heap())
-                });
+            let func: NativeHandleCallable<State> = Arc::new(move |engine, typ, args| {
+                let result = handler(engine, &typ, &args);
+                async move { result }.boxed()
+            });
             let registration = NativeRegistration::sync(scheme.clone(), arity, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
@@ -131,17 +123,8 @@ where
         let handler = Arc::new(handler);
         let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
             let handler = Arc::clone(&handler);
-            let func: AsyncNativePointerCallable<State> = Arc::new(move |engine, typ, args| {
-                let handler = Arc::clone(&handler);
-                let handles = engine.handles_from_pointers(&args);
-                async move {
-                    let handles = handles?;
-                    let value = handler(engine.clone(), typ, handles).await?;
-                    value.pointer_for_heap(engine.heap())?;
-                    Ok(value)
-                }
-                .boxed()
-            });
+            let func: NativeHandleCallable<State> =
+                Arc::new(move |engine, typ, args| handler(engine, typ, args));
             let registration = NativeRegistration::r#async(scheme.clone(), arity, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
@@ -161,10 +144,10 @@ where
         let name = interface.name.name.to_string();
         let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
             let stored = value.clone();
-            let func: SyncNativePointerCallable<State> =
-                Arc::new(move |engine, _: &Type, _args: &[Pointer]| {
-                    stored.clone().into_rex(engine.heap())?.pointer()
-                });
+            let func: NativeHandleCallable<State> = Arc::new(move |engine, _typ, _args| {
+                let result = stored.clone().into_rex(engine.heap());
+                async move { result }.boxed()
+            });
             let registration =
                 NativeRegistration::sync(Scheme::new(vec![], vec![], typ.clone()), 0, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)

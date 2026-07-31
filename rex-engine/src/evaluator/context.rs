@@ -125,16 +125,6 @@ where
         eval_typed_expr(self.runtime.clone(), env, Arc::new(expr), Vec::new()).await
     }
 
-    pub(crate) fn handles_from_pointers(
-        &self,
-        pointers: &[Pointer],
-    ) -> Result<Vec<Handle>, EngineError> {
-        pointers
-            .iter()
-            .map(|pointer| self.runtime.heap.handle(*pointer))
-            .collect()
-    }
-
     fn resolve_typeclass_method_impl(
         &self,
         name: &Symbol,
