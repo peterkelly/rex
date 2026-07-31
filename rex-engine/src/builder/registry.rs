@@ -10,6 +10,7 @@ use crate::{
     env::{Environment, RootedEnvironment},
     error::EngineError,
     evaluator::native_callable::NativeCallable,
+    memory::heap::HeapState,
     native_fn::NativeFn,
 };
 
@@ -131,6 +132,7 @@ impl TypeclassRegistry {
         class: &Symbol,
         method: &Symbol,
         param_type: &Type,
+        heap: &HeapState,
     ) -> Result<(Environment, Arc<TypedExpr>, Subst), EngineError> {
         let instances =
             self.entries
@@ -160,7 +162,7 @@ impl TypeclassRegistry {
                             class: class.clone(),
                             typ: param_type.to_string(),
                         })?;
-                Ok((inst.def_env.to_environment()?, typed.clone(), s))
+                Ok((inst.def_env.to_environment(heap)?, typed.clone(), s))
             }
             _ => Err(EngineError::AmbiguousTypeclassImpl {
                 class: class.clone(),

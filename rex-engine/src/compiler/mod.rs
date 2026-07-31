@@ -80,16 +80,18 @@ where
     }
 
     fn into_evaluator(self) -> Evaluator<State> {
-        Evaluator::new(RuntimeCore {
-            state: Arc::clone(&self.state),
-            natives: Arc::new(self.runtime.natives.clone()),
-            typeclasses: Arc::new(self.runtime.typeclasses.clone()),
-            type_system: Arc::new(self.type_system.clone()),
-            typeclass_cache: Arc::clone(&self.runtime.typeclass_cache),
-            async_call_policy: self.policy.async_call_policy.clone(),
-            parallelism_controller: Arc::clone(&self.policy.parallelism_controller),
-            heap: self.heap.clone(),
-        })
+        Evaluator::new(
+            RuntimeCore {
+                state: Arc::clone(&self.state),
+                natives: Arc::new(self.runtime.natives.clone()),
+                typeclasses: Arc::new(self.runtime.typeclasses.clone()),
+                type_system: Arc::new(self.type_system.clone()),
+                typeclass_cache: Arc::clone(&self.runtime.typeclass_cache),
+                async_call_policy: self.policy.async_call_policy.clone(),
+                parallelism_controller: Arc::clone(&self.policy.parallelism_controller),
+            },
+            self.heap,
+        )
     }
 
     /// Borrow the compiler's type system snapshot.

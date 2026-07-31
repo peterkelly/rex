@@ -39,7 +39,7 @@ pub use env::Environment;
 pub use error::{EngineError, ExecutionError, ModuleError};
 pub use evaluator::{
     Evaluator,
-    context::Context,
+    context::{Context, InternalCtx},
     host_action::{HostAction, HostActionEffect, HostActionFuture, run_host_action},
 };
 pub use handlers::RexDefault;

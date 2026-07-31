@@ -218,7 +218,7 @@ async fn subprocess_output(
 #[cfg(test)]
 mod tests {
     use rex::{
-        engine::{Builder, CompileOptions, Value},
+        engine::{Builder, CompileOptions, Context, Value},
         parser::parse as parse_rex,
         typesystem::{BuiltinTypeId, Type},
     };
@@ -242,6 +242,7 @@ mod tests {
         "#;
 
         let mut builder = Builder::with_prelude(()).unwrap();
+        let heap = builder.heap().clone();
 
         inject_cli_prelude_builder(&mut builder).unwrap();
         let compiler = builder.build_compiler();
@@ -254,7 +255,8 @@ mod tests {
             .run_with_context(program, Default::default())
             .await
             .unwrap();
-        run_io_handle(ctx, value).await.unwrap();
+        let wrapped = Context::new(ctx, heap);
+        run_io_handle(wrapped, value).await.unwrap();
     }
 
     #[tokio::test]
@@ -266,6 +268,7 @@ mod tests {
         "#;
 
         let mut builder = Builder::with_prelude(()).unwrap();
+        let heap = builder.heap().clone();
 
         inject_cli_prelude_builder(&mut builder).unwrap();
         let compiler = builder.build_compiler();
@@ -280,7 +283,8 @@ mod tests {
             .await
             .unwrap();
         let inner = io_result_type_arg(&ty).unwrap();
-        let value = run_io_handle(ctx, value).await.unwrap();
+        let wrapped = Context::new(ctx, heap);
+        let value = run_io_handle(wrapped, value).await.unwrap();
         assert_eq!(inner, Type::builtin(BuiltinTypeId::String));
         assert_eq!(value.to_rust::<String>().unwrap(), "hello");
     }
@@ -306,6 +310,7 @@ mod tests {
         );
 
         let mut builder = Builder::with_prelude(()).unwrap();
+        let heap = builder.heap().clone();
 
         inject_cli_prelude_builder(&mut builder).unwrap();
         let compiler = builder.build_compiler();
@@ -320,7 +325,8 @@ mod tests {
             .await
             .unwrap();
         let inner = io_result_type_arg(&ty).unwrap();
-        let value = run_io_handle(ctx, value).await.unwrap();
+        let wrapped = Context::new(ctx, heap);
+        let value = run_io_handle(wrapped, value).await.unwrap();
         assert_eq!(
             inner,
             Type::tuple(vec![
@@ -349,6 +355,7 @@ mod tests {
         "#;
 
         let mut builder = Builder::with_prelude(()).unwrap();
+        let heap = builder.heap().clone();
 
         inject_cli_prelude_builder(&mut builder).unwrap();
         let compiler = builder.build_compiler();
@@ -363,7 +370,8 @@ mod tests {
             .await
             .unwrap();
         let inner = io_result_type_arg(&ty).unwrap();
-        let value = run_io_handle(ctx, value).await.unwrap();
+        let wrapped = Context::new(ctx, heap);
+        let value = run_io_handle(wrapped, value).await.unwrap();
         assert_eq!(inner, Type::builtin(BuiltinTypeId::I32));
         assert_eq!(value.to_rust::<i32>().unwrap(), 0);
     }

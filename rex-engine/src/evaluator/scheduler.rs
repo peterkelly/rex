@@ -133,15 +133,24 @@ where
         }
     }
 
-    fn activate_next_immediate_native(&mut self, runtime: &RuntimeCore<State>) -> bool {
+    fn activate_next_immediate_native(
+        &mut self,
+        runtime: &RuntimeCore<State>,
+        heap: &Heap,
+    ) -> bool {
         let Some(queued) = self.immediate_native.pop_front() else {
             return false;
         };
-        self.pending_native.push(queued.activate_immediate(runtime));
+        self.pending_native
+            .push(queued.activate_immediate(runtime, heap));
         true
     }
 
-    fn activate_next_permitted_deferred_native(&mut self, runtime: &RuntimeCore<State>) -> bool {
+    fn activate_next_permitted_deferred_native(
+        &mut self,
+        runtime: &RuntimeCore<State>,
+        heap: &Heap,
+    ) -> bool {
         let Some(next) = self.deferred_native.front() else {
             return false;
         };
@@ -151,7 +160,8 @@ where
         let Some(queued) = self.deferred_native.pop_front() else {
             return false;
         };
-        self.pending_native.push(queued.activate_deferred(runtime));
+        self.pending_native
+            .push(queued.activate_deferred(runtime, heap));
         true
     }
 
@@ -159,9 +169,12 @@ where
         &mut self,
         cx: &mut TaskContext<'_>,
         runtime: &RuntimeCore<State>,
+        heap: &Heap,
     ) -> Result<bool, EngineError> {
         match self.try_acquire_next_native_permit(cx) {
-            Poll::Ready(Ok(true)) => Ok(self.activate_next_permitted_deferred_native(runtime)),
+            Poll::Ready(Ok(true)) => {
+                Ok(self.activate_next_permitted_deferred_native(runtime, heap))
+            }
             Poll::Ready(Ok(false)) | Poll::Pending => Ok(false),
             Poll::Ready(Err(err)) => Err(err),
         }
@@ -213,6 +226,7 @@ where
 
 pub(crate) async fn poll_pending_native<State>(
     runtime: &mut RuntimeCore<State>,
+    heap: &Heap,
     frames: &mut FrameStore,
     scheduler: &mut EvalScheduler<State>,
     wait: bool,
@@ -227,16 +241,16 @@ where
         return Ok(false);
     }
 
-    scheduler.refresh_rooted_values(&runtime.heap)?;
+    scheduler.refresh_rooted_values(heap)?;
     let mut protected = Vec::new();
     frames.trace_pointers(&mut protected);
     scheduler.trace_pointers(&mut protected);
     runtime.trace_pointers(&mut protected)?;
-    let mut roots = runtime.heap.persistent_roots(protected.clone())?;
+    let mut roots = heap.persistent_roots(protected.clone())?;
 
-    scheduler.activate_next_immediate_native(runtime);
+    scheduler.activate_next_immediate_native(runtime, heap);
     refresh_scheduler_roots(runtime, frames, scheduler, &mut roots, &mut protected)?;
-    poll_fn(|cx| Poll::Ready(scheduler.admit_available_deferred_native(cx, runtime))).await?;
+    poll_fn(|cx| Poll::Ready(scheduler.admit_available_deferred_native(cx, runtime, heap))).await?;
     refresh_scheduler_roots(runtime, frames, scheduler, &mut roots, &mut protected)?;
     if !scheduler.has_pending_native() {
         if !wait || (!scheduler.has_immediate_native() && !scheduler.has_deferred_native()) {
@@ -249,7 +263,7 @@ where
             Poll::Pending => Poll::Pending,
         })
         .await?;
-        let activated = scheduler.activate_next_permitted_deferred_native(runtime);
+        let activated = scheduler.activate_next_permitted_deferred_native(runtime, heap);
         refresh_scheduler_roots(runtime, frames, scheduler, &mut roots, &mut protected)?;
         return Ok(activated);
     }
@@ -302,12 +316,12 @@ where
         return Ok(false);
     };
     let NativeWaitEvent::Completion(index) = event else {
-        let activated = scheduler.activate_next_permitted_deferred_native(runtime);
+        let activated = scheduler.activate_next_permitted_deferred_native(runtime, heap);
         refresh_scheduler_roots(runtime, frames, scheduler, &mut roots, &mut protected)?;
         return Ok(activated);
     };
     let (frame, handle) = scheduler.take_pending_native_completion(index)?;
-    let value = handle.pointer_for_heap(&runtime.heap)?;
+    let value = handle.pointer_for_heap(heap)?;
     scheduler.schedule_next(EvalWorkItem::receive_rooted(frame, frame, value, handle));
     Ok(true)
 }
@@ -412,11 +426,11 @@ where
         }
     }
 
-    fn activate_immediate(self, runtime: &RuntimeCore<State>) -> PendingNative {
-        PendingNative::new(self.frame, self.call.invoke(runtime), None)
+    fn activate_immediate(self, runtime: &RuntimeCore<State>, heap: &Heap) -> PendingNative {
+        PendingNative::new(self.frame, self.call.invoke(runtime, heap), None)
     }
 
-    fn activate_deferred(self, runtime: &RuntimeCore<State>) -> PendingNative {
+    fn activate_deferred(self, runtime: &RuntimeCore<State>, heap: &Heap) -> PendingNative {
         let Some(permit) = self.permit else {
             return PendingNative::ready(
                 self.frame,
@@ -425,7 +439,7 @@ where
                 )),
             );
         };
-        PendingNative::new(self.frame, self.call.invoke(runtime), Some(permit))
+        PendingNative::new(self.frame, self.call.invoke(runtime, heap), Some(permit))
     }
 }
 

@@ -6,7 +6,7 @@ use crate::{
     error::EngineError,
     evaluator::{
         CallSite,
-        context::Context,
+        context::{Context, InternalCtx},
         native_callable::{NativeCallScheduling, NativeHandleCallable},
         runtime_core::RuntimeCore,
     },
@@ -398,14 +398,14 @@ where
             typ,
             args,
         } = self;
-        let roots = heap.temp_roots(args)?;
-        let args = roots.to_handles(heap)?;
-        Ok(NativeCall {
-            callable,
-            scheduling,
-            call_site,
-            typ,
-            args,
+        heap.with_temp_roots(args, |roots| {
+            Ok(NativeCall {
+                callable,
+                scheduling,
+                call_site,
+                typ,
+                args: roots.to_handles(heap)?,
+            })
         })
     }
 }
@@ -428,10 +428,11 @@ where
         self.scheduling
     }
 
-    pub(crate) fn invoke(self, runtime: &RuntimeCore<State>) -> NativeHandleFuture {
-        let ctx = Context::new_at_call_site(runtime, self.call_site);
-        let future = (self.callable)(ctx, self.typ, self.args);
-        let result_heap = runtime.heap.clone();
+    pub(crate) fn invoke(self, runtime: &RuntimeCore<State>, heap: &Heap) -> NativeHandleFuture {
+        let ctx = InternalCtx::new_at_call_site(runtime, self.call_site);
+        let wrapped = Context::new(ctx, heap.clone());
+        let future = (self.callable)(wrapped, self.typ, self.args);
+        let result_heap = heap.clone();
         let future = async move {
             let value = future.await?;
             value.pointer_for_heap(&result_heap)?;

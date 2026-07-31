@@ -5,7 +5,7 @@ use rex_ast::Symbol;
 
 use crate::EngineError;
 use crate::memory::{
-    heap::{Handle, Pointer},
+    heap::{Handle, HeapState, Pointer},
     traits::Collection,
 };
 
@@ -141,13 +141,13 @@ impl RootedEnvironment {
         false
     }
 
-    pub(crate) fn to_environment(&self) -> Result<Environment, EngineError> {
+    pub(crate) fn to_environment(&self, heap: &HeapState) -> Result<Environment, EngineError> {
         let mut entries = Vec::new();
         let mut current = Some(self);
         while let Some(env) = current {
             let mut bindings = BTreeMap::new();
             for (name, handle) in &env.0.bindings {
-                bindings.insert(name.clone(), handle.pointer()?);
+                bindings.insert(name.clone(), handle.pointer(heap)?);
             }
             entries.push(bindings);
             current = env.0.parent.as_ref();
@@ -187,13 +187,38 @@ mod tests {
             .extend(Symbol::intern("b"), b);
 
         heap.set_collect_on_every_alloc(true).unwrap();
-        heap.with_locked(|heap| Ok(heap.alloc_ptr_i32(3)?.into_pointer()))
-            .unwrap();
+        heap.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_i32(3)?;
+                Ok(scope.pointer(root))
+            })
+        })
+        .unwrap();
 
-        let env = rooted.to_environment().unwrap();
+        let env = heap
+            .with_locked(|heap| rooted.to_environment(heap))
+            .unwrap();
         let a = env.get(&Symbol::intern("a")).unwrap();
         let b = env.get(&Symbol::intern("b")).unwrap();
-        assert_eq!(heap.with_locked(|heap| heap.pointer_as_i32(&a)).unwrap(), 1);
-        assert_eq!(heap.with_locked(|heap| heap.pointer_as_i32(&b)).unwrap(), 2);
+        assert_eq!(
+            heap.with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let a = scope.root(a);
+                    scope.root_as_i32(a)
+                })
+            })
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            heap.with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let b = scope.root(b);
+                    scope.root_as_i32(b)
+                })
+            })
+            .unwrap(),
+            2
+        );
     }
 }

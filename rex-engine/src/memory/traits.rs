@@ -11,10 +11,7 @@ use uuid::Uuid;
 
 use crate::EngineError;
 
-use super::{
-    heap::{Handle, Heap, Pointer, wrong_heap_pointer},
-    lists::collect_list_u8,
-};
+use super::heap::{Handle, Heap, Pointer, wrong_heap_pointer};
 
 pub(crate) trait Collection {
     fn map_pointers<E>(
@@ -65,7 +62,7 @@ pub(super) fn handle_from_pointer(heap: &Heap, pointer: Pointer) -> Result<Handl
 
 impl IntoRex for Handle {
     fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
-        let pointer = self.pointer()?;
+        let pointer = self.heap().with_locked(|heap| self.pointer(heap))?;
         if pointer.heap_id != heap.id {
             return Err(wrong_heap_pointer(
                 pointer.heap_id,
@@ -128,27 +125,21 @@ impl<T: IntoRex + 'static> IntoRex for Vec<T> {
             let bytes = boxed
                 .downcast::<Vec<u8>>()
                 .map_err(|_| EngineError::Internal("Vec<u8> TypeId downcast failed".into()))?;
-            return handle_from_pointer(heap, heap.alloc_ptr_binary_list(*bytes)?);
+            return heap.alloc_binary_list(*bytes);
         }
 
         let values = self
             .into_iter()
             .map(|value| value.into_rex(heap))
             .collect::<Result<Vec<_>, _>>()?;
-        let pointers = values
-            .iter()
-            .map(Handle::pointer)
-            .collect::<Result<Vec<_>, _>>()?;
-        handle_from_pointer(heap, heap.alloc_ptr_list(pointers)?)
+        heap.alloc_list(values)
     }
 }
 
 impl<T: FromRex + 'static> FromRex for Vec<T> {
     fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
-        let heap = handle.heap();
-        let pointer = handle.pointer()?;
         if TypeId::of::<T>() == TypeId::of::<u8>() {
-            let bytes = heap.with_locked(|heap| collect_list_u8(heap, &pointer))?;
+            let bytes = handle.as_binary_list()?;
             let boxed: Box<dyn Any> = Box::new(bytes);
             return boxed
                 .downcast::<Vec<T>>()
@@ -156,11 +147,10 @@ impl<T: FromRex + 'static> FromRex for Vec<T> {
                 .map_err(|_| EngineError::Internal("Vec<u8> TypeId downcast failed".into()));
         }
 
-        let pointers = heap.pointer_as_list(&pointer)?;
-        let mut out = Vec::with_capacity(pointers.len());
-        for pointer in pointers {
-            let child = heap.handle(pointer)?;
-            out.push(T::from_rex(&child)?);
+        let items = handle.as_list()?;
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            out.push(T::from_rex(&item)?);
         }
         Ok(out)
     }
@@ -169,36 +159,17 @@ impl<T: FromRex + 'static> FromRex for Vec<T> {
 impl<T: IntoRex> IntoRex for Option<T> {
     fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
         match self {
-            Some(value) => {
-                let value = value.into_rex(heap)?;
-                let value_ptr = value.pointer()?;
-                let ptr = heap.with_locked(|heap| {
-                    Ok(heap
-                        .alloc_ptr_adt(Symbol::intern("Some"), vec![value_ptr])?
-                        .into_pointer())
-                })?;
-                handle_from_pointer(heap, ptr)
-            }
-            None => {
-                let ptr = heap.with_locked(|heap| {
-                    Ok(heap
-                        .alloc_ptr_adt(Symbol::intern("None"), vec![])?
-                        .into_pointer())
-                })?;
-                handle_from_pointer(heap, ptr)
-            }
+            Some(value) => heap.alloc_adt(Symbol::intern("Some"), vec![value.into_rex(heap)?]),
+            None => heap.alloc_adt(Symbol::intern("None"), vec![]),
         }
     }
 }
 
 impl<T: FromRex> FromRex for Option<T> {
     fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
-        let heap = handle.heap();
-        let pointer = handle.pointer()?;
-        let (tag, args) = heap.with_locked(|heap| heap.pointer_as_adt(&pointer))?;
+        let (tag, args) = handle.as_adt()?;
         if tag.as_ref() == "Some" && args.len() == 1 {
-            let value = heap.handle(args[0])?;
-            return Ok(Some(T::from_rex(&value)?));
+            return Ok(Some(T::from_rex(&args[0])?));
         }
         if tag.as_ref() == "None" && args.is_empty() {
             return Ok(None);
@@ -213,42 +184,20 @@ impl<T: FromRex> FromRex for Option<T> {
 impl<T: IntoRex, E: IntoRex> IntoRex for Result<T, E> {
     fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
         match self {
-            Ok(value) => {
-                let value = value.into_rex(heap)?;
-                let value_ptr = value.pointer()?;
-                let ptr = heap.with_locked(|heap| {
-                    Ok(heap
-                        .alloc_ptr_adt(Symbol::intern("Ok"), vec![value_ptr])?
-                        .into_pointer())
-                })?;
-                handle_from_pointer(heap, ptr)
-            }
-            Err(error) => {
-                let error = error.into_rex(heap)?;
-                let error_ptr = error.pointer()?;
-                let ptr = heap.with_locked(|heap| {
-                    Ok(heap
-                        .alloc_ptr_adt(Symbol::intern("Err"), vec![error_ptr])?
-                        .into_pointer())
-                })?;
-                handle_from_pointer(heap, ptr)
-            }
+            Ok(value) => heap.alloc_adt(Symbol::intern("Ok"), vec![value.into_rex(heap)?]),
+            Err(error) => heap.alloc_adt(Symbol::intern("Err"), vec![error.into_rex(heap)?]),
         }
     }
 }
 
 impl<T: FromRex, E: FromRex> FromRex for Result<T, E> {
     fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
-        let heap = handle.heap();
-        let pointer = handle.pointer()?;
-        let (tag, args) = heap.with_locked(|heap| heap.pointer_as_adt(&pointer))?;
+        let (tag, args) = handle.as_adt()?;
         if tag.as_ref() == "Ok" && args.len() == 1 {
-            let value = heap.handle(args[0])?;
-            return Ok(Ok(T::from_rex(&value)?));
+            return Ok(Ok(T::from_rex(&args[0])?));
         }
         if tag.as_ref() == "Err" && args.len() == 1 {
-            let error = heap.handle(args[0])?;
-            return Ok(Err(E::from_rex(&error)?));
+            return Ok(Err(E::from_rex(&args[0])?));
         }
         Err(EngineError::NativeType {
             expected: "result".into(),
@@ -283,21 +232,16 @@ macro_rules! impl_tuple_traits {
             fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
                 let ($($name,)+) = self;
                 $(let $name = $name.into_rex(heap)?;)+
-                let ptrs = vec![$($name.pointer()?),+];
-                let tuple_ptr = heap.with_locked(|heap| Ok(heap.alloc_ptr_tuple(ptrs)?.into_pointer()))?;
-                handle_from_pointer(heap, tuple_ptr)
+                heap.alloc_tuple(vec![$($name),+])
             }
         }
 
         impl<$($name: FromRex),+> FromRex for ($($name,)+) {
             #[allow(non_snake_case)]
             fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
-                let heap = handle.heap();
-                let pointer = handle.pointer()?;
-                let items = heap.with_locked(|heap| heap.pointer_as_tuple(&pointer))?;
+                let items = handle.as_tuple()?;
                 match items.as_slice() {
                     [$($name),+] => {
-                        $(let $name = heap.handle(*$name)?;)+
                         Ok(($(<$name as FromRex>::from_rex(&$name)?),+,))
                     }
                     _ => Err(EngineError::NativeType {

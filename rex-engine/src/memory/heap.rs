@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -14,10 +15,11 @@ use crate::{EngineError, Environment, native_fn::NativeFn, overloaded_fn::Overlo
 
 use super::{
     lists::{
-        ListElement, ListItems, ListItemsSeed, format_list_debug, format_list_display,
-        list_cells_eq_inner, list_elements_from_pointer, list_elements_to_pointer_vec,
-        list_items_from_pointer, list_len_from_pointer, list_slice_backing_len,
-        list_slice_head_element, materialize_list_elements, validate_list_slice_bounds,
+        ListElement, ListItemsSeed, ListRootElement, ListRootedItems, collect_list_u8,
+        format_list_debug, format_list_display, list_cells_eq_inner, list_elements_from_pointer,
+        list_elements_to_rooted_ptr_vec, list_items_from_pointer, list_len_from_pointer,
+        list_slice_backing_len, list_slice_head_element, materialize_list_elements,
+        validate_list_slice_bounds,
     },
     traits::{self, Collection, FromRex},
 };
@@ -35,11 +37,11 @@ pub(crate) struct Closure {
 //
 // - Any alloc_* call may run collection before it creates the requested object.
 //   Callers must not keep raw Pointer values across allocation unless those
-//   pointers are reachable from a Handle, TempRoots, a stack frame, or another
-//   traced runtime structure.
-// - Handle and TempRoots are heap-managed roots. They are the safe way for
-//   public API and ordinary native/prelude code to keep values alive while
-//   allocating.
+//   pointers are reachable from a Handle, RootedPtr, TempRoots, PersistentRoots,
+//   a stack frame, or another traced runtime structure.
+// - Handle, RootedPtr, TempRoots, and PersistentRoots are heap-managed roots.
+//   They are the safe way for public API and ordinary native/prelude code to keep
+//   values alive while allocating.
 // - Scheduler-native code may still store Pointer values directly, but only in
 //   frame/task state that implements Collection.
 // - The collector is copying: every traced Pointer must be rewritten after a
@@ -48,6 +50,7 @@ pub(crate) struct HeapState {
     id: u64,
     slots: Vec<HeapSlot>,
     root_slots: Vec<RootSlot>,
+    temporary_roots: Vec<Pointer>,
     free_root_list: Vec<u64>,
     next_gc_slot_count: usize,
     collect_on_every_alloc: bool,
@@ -67,6 +70,7 @@ impl HeapState {
             id,
             slots: Vec::new(),
             root_slots: Vec::new(),
+            temporary_roots: Vec::new(),
             free_root_list: Vec::new(),
             next_gc_slot_count: DEFAULT_GC_SLOT_THRESHOLD,
             collect_on_every_alloc: false,
@@ -269,15 +273,16 @@ impl HeapState {
             .checked_add(1)
             .ok_or_else(|| EngineError::Internal("heap collection count exhausted".into()))?;
         let mut forwarding = vec![None; self.slots.len()];
-        let roots = self
+        let persistent_roots = self
             .root_slots
             .iter()
             .enumerate()
             .filter_map(|(index, slot)| slot.pointer.map(|pointer| (index, pointer)))
             .collect::<Vec<_>>();
-        let mut work = roots
+        let mut work = persistent_roots
             .iter()
             .map(|(_, pointer)| *pointer)
+            .chain(self.temporary_roots.iter().copied())
             .collect::<VecDeque<_>>();
         let mut seen = vec![false; self.slots.len()];
         let mut live = Vec::new();
@@ -321,9 +326,14 @@ impl HeapState {
             });
         }
 
-        let relocated_roots = roots
+        let relocated_persistent_roots = persistent_roots
             .iter()
             .map(|(index, pointer)| Ok((*index, self.forward_for_gc(*pointer, &forwarding)?)))
+            .collect::<Result<Vec<_>, EngineError>>()?;
+        let relocated_temporary_roots = self
+            .temporary_roots
+            .iter()
+            .map(|pointer| self.forward_for_gc(*pointer, &forwarding))
             .collect::<Result<Vec<_>, EngineError>>()?;
 
         let mut new_slots = vec![None; live.len()];
@@ -348,9 +358,10 @@ impl HeapState {
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| EngineError::Internal("copying GC left a destination empty".into()))?;
 
-        for (index, pointer) in relocated_roots {
+        for (index, pointer) in relocated_persistent_roots {
             self.root_slots[index].pointer = Some(pointer);
         }
+        self.temporary_roots = relocated_temporary_roots;
         self.finish_collection(new_slots, next_epoch);
         #[cfg(debug_assertions)]
         self.verify_after_collection()?;
@@ -382,6 +393,17 @@ impl HeapState {
             self.get_slot_checked(&pointer).map_err(|err| {
                 EngineError::Internal(format!(
                     "GC verification failed for root {root_index}: {err}"
+                ))
+            })?;
+            if seen.insert(pointer_key(&pointer)) {
+                work.push_back(pointer);
+            }
+        }
+
+        for (root_index, pointer) in self.temporary_roots.iter().copied().enumerate() {
+            self.get_slot_checked(&pointer).map_err(|err| {
+                EngineError::Internal(format!(
+                    "GC verification failed for temporary root {root_index}: {err}"
                 ))
             })?;
             if seen.insert(pointer_key(&pointer)) {
@@ -547,218 +569,39 @@ impl HeapState {
         Ok(())
     }
 
-    pub(crate) fn alloc_ptr_bool(&mut self, value: bool) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Bool(value))
-    }
-
-    pub(crate) fn alloc_ptr_u8(&mut self, value: u8) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::U8(value))
-    }
-
-    pub(crate) fn alloc_ptr_u16(&mut self, value: u16) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::U16(value))
-    }
-
-    pub(crate) fn alloc_ptr_u32(&mut self, value: u32) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::U32(value))
-    }
-
-    pub(crate) fn alloc_ptr_u64(&mut self, value: u64) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::U64(value))
-    }
-
-    pub(crate) fn alloc_ptr_i8(&mut self, value: i8) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::I8(value))
-    }
-
-    pub(crate) fn alloc_ptr_i16(&mut self, value: i16) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::I16(value))
-    }
-
-    pub(crate) fn alloc_ptr_i32(&mut self, value: i32) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::I32(value))
-    }
-
-    pub(crate) fn alloc_ptr_i64(&mut self, value: i64) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::I64(value))
-    }
-
-    pub(crate) fn alloc_ptr_f32(&mut self, value: f32) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::F32(value))
-    }
-
-    pub(crate) fn alloc_ptr_f64(&mut self, value: f64) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::F64(value))
-    }
-
-    pub(crate) fn alloc_ptr_string(&mut self, value: String) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::String(value))
-    }
-
-    pub(crate) fn alloc_ptr_uuid(&mut self, value: Uuid) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Uuid(value))
-    }
-
-    pub(crate) fn alloc_ptr_datetime(
+    pub(crate) fn pointer_as_list(
         &mut self,
-        value: DateTime<Utc>,
-    ) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::DateTime(value))
-    }
-
-    pub(crate) fn alloc_ptr_uninitialized(
-        &mut self,
-        name: Symbol,
-    ) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Uninitialized(name))
-    }
-
-    pub(crate) fn alloc_ptr_tuple(
-        &mut self,
-        values: Vec<Pointer>,
-    ) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Tuple(values))
-    }
-
-    pub(crate) fn alloc_ptr_dict(
-        &mut self,
-        values: BTreeMap<Symbol, Pointer>,
-    ) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Dict(values))
-    }
-
-    pub(crate) fn alloc_ptr_adt(
-        &mut self,
-        name: Symbol,
-        args: Vec<Pointer>,
-    ) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Adt(name, args))
-    }
-
-    pub(crate) fn alloc_ptr_empty(&mut self) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Empty)
-    }
-
-    pub(crate) fn alloc_ptr_cons(
-        &mut self,
-        head: Pointer,
-        tail: Pointer,
-    ) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Cons(head, tail))
-    }
-
-    pub(crate) fn alloc_ptr_data(
-        &mut self,
-        values: Vec<Pointer>,
-    ) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Data(values))
-    }
-
-    pub(crate) fn alloc_ptr_binary_data(
-        &mut self,
-        values: Vec<u8>,
-    ) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::BinaryData(values))
-    }
-
-    pub(crate) fn alloc_ptr_closure(
-        &mut self,
-        env: Environment,
-        param: Symbol,
-        param_ty: Type,
-        typ: Type,
-        body: Arc<TypedExpr>,
-    ) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Closure(Closure {
-            env,
-            param,
-            param_ty,
-            typ,
-            body,
-        }))
-    }
-
-    pub(crate) fn alloc_ptr_native(
-        &mut self,
-        native_id: u64,
-        name: Symbol,
-        arity: usize,
-        typ: Type,
-        applied: Vec<Pointer>,
-        applied_types: Vec<Type>,
-    ) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Native(NativeFn::from_parts(
-            native_id,
-            name,
-            arity,
-            typ,
-            applied,
-            applied_types,
-        )))
-    }
-
-    pub(crate) fn alloc_ptr_overloaded(
-        &mut self,
-        name: Symbol,
-        typ: Type,
-        applied: Vec<Pointer>,
-        applied_types: Vec<Type>,
-    ) -> Result<Reference<'_>, EngineError> {
-        self.alloc_reference(Cell::Overloaded(OverloadedFn::from_parts(
-            name,
-            typ,
-            applied,
-            applied_types,
-        )))
-    }
-
-    pub(crate) fn alloc_ptr_list_slice(
-        &mut self,
-        start: usize,
-        end: usize,
-        elements: Pointer,
-    ) -> Result<Reference<'_>, EngineError> {
-        let len = list_slice_backing_len(self.get_cell_from_pointer(&elements)?)?;
-        validate_list_slice_bounds(len, start, end)?;
-        if start == end {
-            return self.alloc_ptr_empty();
-        }
-        self.alloc_reference(Cell::ListSlice {
-            start,
-            end,
-            elements,
+        pointer: &Pointer,
+    ) -> Result<Vec<Pointer>, EngineError> {
+        let elements = list_elements_from_pointer(self, *pointer)?;
+        self.root_scope(|scope| {
+            materialize_list_elements(scope, elements)
+                .map(|roots| roots.into_iter().map(|r| scope.pointer(r)).collect())
         })
     }
 
-    pub(crate) fn pointer_as_bool(&self, pointer: &Pointer) -> Result<bool, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_bool()
+    fn temp_roots(&mut self, pointers: Vec<Pointer>) -> Result<TempRoots, EngineError> {
+        let root_ids = self.register_roots(pointers)?;
+        let collection_count = self.collection_count();
+        Ok(TempRoots {
+            root_ids,
+            collection_count,
+        })
     }
 
-    pub(crate) fn pointer_as_u8(&self, pointer: &Pointer) -> Result<u8, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_u8()
-    }
+    pub(crate) fn root_scope<R>(
+        &mut self,
+        f: impl for<'scope> FnOnce(&mut RootScope<'_, 'scope>) -> R,
+    ) -> R {
+        let base = self.temporary_roots.len();
 
-    #[cfg(test)]
-    pub(crate) fn pointer_as_i32(&self, pointer: &Pointer) -> Result<i32, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_i32()
-    }
+        let mut scope = RootScope {
+            heap: self,
+            base,
+            _brand: PhantomData,
+        };
 
-    pub(crate) fn pointer_as_tuple(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_tuple()
-    }
-
-    pub(crate) fn pointer_as_dict(
-        &self,
-        pointer: &Pointer,
-    ) -> Result<BTreeMap<Symbol, Pointer>, EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_dict()
-    }
-
-    pub(crate) fn pointer_as_adt(
-        &self,
-        pointer: &Pointer,
-    ) -> Result<(Symbol, Vec<Pointer>), EngineError> {
-        self.get_cell_from_pointer(pointer)?.cell_as_adt()
+        f(&mut scope)
     }
 }
 
@@ -781,6 +624,446 @@ struct RootId {
     generation: u64,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct RootedPtr<'scope> {
+    slot: usize,
+    _brand: PhantomData<std::cell::Cell<&'scope ()>>,
+}
+
+pub(crate) struct RootScope<'heap, 'scope> {
+    pub(crate) heap: &'heap mut HeapState,
+    base: usize,
+    _brand: PhantomData<std::cell::Cell<&'scope ()>>,
+}
+
+impl Drop for RootScope<'_, '_> {
+    fn drop(&mut self) {
+        self.heap.temporary_roots.truncate(self.base);
+    }
+}
+
+impl<'h, 'scope> RootScope<'h, 'scope> {
+    pub(crate) fn root(&mut self, ptr: Pointer) -> RootedPtr<'scope> {
+        // This operation itself must not invoke the language GC.
+        let slot = self.heap.temporary_roots.len();
+        self.heap.temporary_roots.push(ptr);
+
+        RootedPtr {
+            slot,
+            _brand: PhantomData,
+        }
+    }
+
+    pub(crate) fn pointer(&self, root: RootedPtr<'scope>) -> Pointer {
+        self.heap.temporary_roots[root.slot]
+    }
+
+    pub(crate) fn type_name(&self, root: RootedPtr<'scope>) -> Result<&'static str, EngineError> {
+        self.get_cell_from_rooted_ptr(root)
+            .map(Cell::cell_type_name)
+    }
+
+    pub(crate) fn get_cell_from_rooted_ptr(
+        &self,
+        root: RootedPtr<'scope>,
+    ) -> Result<&Cell, EngineError> {
+        let pointer = self.pointer(root);
+        self.heap.get_cell_from_pointer(&pointer)
+    }
+
+    pub(crate) fn list_items(
+        &mut self,
+        root: RootedPtr<'scope>,
+    ) -> Result<ListRootedItems<'scope>, EngineError> {
+        let pointer = self.pointer(root);
+        match list_items_from_pointer(self.heap, pointer)? {
+            ListItemsSeed::Ready(items) => Ok(items.into_list_rooted_items(self)),
+            ListItemsSeed::Elements(elements) => {
+                if elements
+                    .iter()
+                    .all(|element| matches!(element, ListElement::Pointer(_)))
+                {
+                    return list_elements_to_rooted_ptr_vec(self, elements)
+                        .map(ListRootedItems::Pointers);
+                }
+                materialize_list_elements(self, elements).map(ListRootedItems::Pointers)
+            }
+        }
+    }
+
+    fn alloc_reference<'a>(&'a mut self, cell: Cell) -> Result<RootedPtr<'scope>, EngineError> {
+        let reference = self.heap.alloc_reference(cell)?;
+        let pointer = reference.into_pointer();
+        Ok(self.root(pointer))
+    }
+
+    pub(crate) fn alloc_root_bool(
+        &mut self,
+        value: bool,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::Bool(value))
+    }
+
+    pub(crate) fn alloc_root_u8(&mut self, value: u8) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::U8(value))
+    }
+
+    pub(crate) fn alloc_root_u16(&mut self, value: u16) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::U16(value))
+    }
+
+    pub(crate) fn alloc_root_u32(&mut self, value: u32) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::U32(value))
+    }
+
+    pub(crate) fn alloc_root_u64(&mut self, value: u64) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::U64(value))
+    }
+
+    pub(crate) fn alloc_root_i8(&mut self, value: i8) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::I8(value))
+    }
+
+    pub(crate) fn alloc_root_i16(&mut self, value: i16) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::I16(value))
+    }
+
+    pub(crate) fn alloc_root_i32(&mut self, value: i32) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::I32(value))
+    }
+
+    pub(crate) fn alloc_root_i64(&mut self, value: i64) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::I64(value))
+    }
+
+    pub(crate) fn alloc_root_f32(&mut self, value: f32) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::F32(value))
+    }
+
+    pub(crate) fn alloc_root_f64(&mut self, value: f64) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::F64(value))
+    }
+
+    pub(crate) fn alloc_root_string(
+        &mut self,
+        value: String,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::String(value))
+    }
+
+    pub(crate) fn alloc_root_uuid(
+        &mut self,
+        value: Uuid,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::Uuid(value))
+    }
+
+    pub(crate) fn alloc_root_datetime(
+        &mut self,
+        value: DateTime<Utc>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::DateTime(value))
+    }
+
+    pub(crate) fn alloc_root_uninitialized(
+        &mut self,
+        name: Symbol,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::Uninitialized(name))
+    }
+
+    pub(crate) fn alloc_root_tuple(
+        &mut self,
+        values: Vec<RootedPtr<'scope>>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        let values = values.into_iter().map(|v| self.pointer(v)).collect();
+        self.alloc_reference(Cell::Tuple(values))
+    }
+
+    pub(crate) fn alloc_root_dict(
+        &mut self,
+        values: BTreeMap<Symbol, RootedPtr<'scope>>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        let values = BTreeMap::from_iter(
+            values
+                .into_iter()
+                .map(|(k, v)| (k, self.pointer(v)))
+                .collect::<BTreeMap<_, _>>(),
+        );
+        self.alloc_reference(Cell::Dict(values))
+    }
+
+    pub(crate) fn alloc_root_adt(
+        &mut self,
+        name: Symbol,
+        args: Vec<RootedPtr<'scope>>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        let args = args.into_iter().map(|arg| self.pointer(arg)).collect();
+        self.alloc_reference(Cell::Adt(name, args))
+    }
+
+    pub(crate) fn alloc_root_empty(&mut self) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::Empty)
+    }
+
+    pub(crate) fn alloc_root_cons(
+        &mut self,
+        head: RootedPtr<'scope>,
+        tail: RootedPtr<'scope>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        let head = self.pointer(head);
+        let tail = self.pointer(tail);
+        self.alloc_reference(Cell::Cons(head, tail))
+    }
+
+    pub(crate) fn alloc_root_data(
+        &mut self,
+        values: Vec<RootedPtr<'scope>>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        let values = values.into_iter().map(|v| self.pointer(v)).collect();
+        self.alloc_reference(Cell::Data(values))
+    }
+
+    pub(crate) fn alloc_root_binary_data(
+        &mut self,
+        values: Vec<u8>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::BinaryData(values))
+    }
+
+    pub(crate) fn alloc_root_closure(
+        &mut self,
+        env: Environment,
+        param: Symbol,
+        param_ty: Type,
+        typ: Type,
+        body: Arc<TypedExpr>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        self.alloc_reference(Cell::Closure(Closure {
+            env,
+            param,
+            param_ty,
+            typ,
+            body,
+        }))
+    }
+
+    pub(crate) fn alloc_root_native(
+        &mut self,
+        native_id: u64,
+        name: Symbol,
+        arity: usize,
+        typ: Type,
+        applied: Vec<RootedPtr<'scope>>,
+        applied_types: Vec<Type>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        let applied = applied.into_iter().map(|x| self.pointer(x)).collect();
+        self.alloc_reference(Cell::Native(NativeFn::from_parts(
+            native_id,
+            name,
+            arity,
+            typ,
+            applied,
+            applied_types,
+        )))
+    }
+
+    pub(crate) fn alloc_root_overloaded(
+        &mut self,
+        name: Symbol,
+        typ: Type,
+        applied: Vec<RootedPtr<'scope>>,
+        applied_types: Vec<Type>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        let applied = applied.into_iter().map(|x| self.pointer(x)).collect();
+        self.alloc_reference(Cell::Overloaded(OverloadedFn::from_parts(
+            name,
+            typ,
+            applied,
+            applied_types,
+        )))
+    }
+
+    pub(crate) fn alloc_root_list_slice(
+        &mut self,
+        start: usize,
+        end: usize,
+        elements: RootedPtr<'scope>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        let elements = self.pointer(elements);
+        let len = list_slice_backing_len(self.heap.get_cell_from_pointer(&elements)?)?;
+        validate_list_slice_bounds(len, start, end)?;
+        if start == end {
+            return self.alloc_root_empty();
+        }
+        self.alloc_reference(Cell::ListSlice {
+            start,
+            end,
+            elements,
+        })
+    }
+
+    pub(crate) fn list_head_tail(
+        &mut self,
+        pointer: RootedPtr<'scope>,
+    ) -> Result<Option<(RootedPtr<'scope>, RootedPtr<'scope>)>, EngineError> {
+        let scope = self;
+
+        let Some((a, b, c)) = (|| {
+            let cell = scope.get_cell_from_rooted_ptr(pointer)?.clone();
+            match cell {
+                Cell::Empty => Ok(None),
+                Cell::Cons(head, tail) => {
+                    let head = scope.root(head);
+                    let tail = scope.root(tail);
+                    Ok(Some((ListRootElement::RootedPtr(head), None, tail)))
+                }
+                Cell::ListSlice {
+                    start,
+                    end,
+                    elements,
+                } => {
+                    let elements = scope.root(elements);
+                    let Some(head) = list_slice_head_element(scope, elements, start, end)? else {
+                        return Ok(None);
+                    };
+                    Ok(Some((head, Some((start + 1, end)), elements)))
+                }
+                _ => Err(EngineError::NativeType {
+                    expected: "list".into(),
+                    got: cell.cell_type_name().into(),
+                }),
+            }
+        })()?
+        else {
+            return Ok(None);
+        };
+
+        let head: ListRootElement = a;
+        let tail_index: Option<(usize, usize)> = b;
+        let elements: RootedPtr<'_> = c;
+
+        let head: RootedPtr<'_> = match head {
+            ListRootElement::RootedPtr(pointer) => pointer,
+            ListRootElement::U8(value) => {
+                return (|| {
+                    let head = scope.alloc_root_u8(value)?;
+                    match tail_index {
+                        Some((start, end)) => {
+                            let tail = scope.alloc_root_list_slice(start, end, elements)?;
+                            Ok(Some((head, tail)))
+                        }
+                        None => Ok(Some((head, elements))),
+                    }
+                })();
+            }
+        };
+        let tail: RootedPtr<'_> = match tail_index {
+            Some((start, end)) => {
+                let tail = scope.alloc_root_list_slice(start, end, elements)?;
+                return Ok(Some((head, tail)));
+            }
+            None => elements,
+        };
+        Ok(Some((head, tail)))
+    }
+
+    pub(crate) fn list_len(&self, root: RootedPtr<'scope>) -> Result<usize, EngineError> {
+        let pointer = self.pointer(root);
+        list_len_from_pointer(self.heap, pointer)
+    }
+
+    pub(crate) fn alloc_root_list(
+        &mut self,
+        values: Vec<RootedPtr<'scope>>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        if values.is_empty() {
+            return self.alloc_root_empty();
+        }
+        let len = values.len();
+        let data = self.alloc_root_data(values)?;
+        self.alloc_root_list_slice(0, len, data)
+    }
+
+    pub(crate) fn alloc_root_binary_list(
+        &mut self,
+        values: Vec<u8>,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        if values.is_empty() {
+            return self.alloc_root_empty();
+        }
+        let len = values.len();
+        let data = self.alloc_root_binary_data(values)?;
+        self.alloc_root_list_slice(0, len, data)
+    }
+
+    pub(crate) fn root_as_bool(&self, root: RootedPtr<'scope>) -> Result<bool, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_bool()
+    }
+
+    pub(crate) fn root_as_u8(&self, root: RootedPtr<'scope>) -> Result<u8, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_u8()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn root_as_i32(&self, root: RootedPtr<'scope>) -> Result<i32, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_i32()
+    }
+
+    #[allow(unused)]
+    pub(crate) fn root_as_tuple(
+        &mut self,
+        root: RootedPtr<'scope>,
+    ) -> Result<Vec<RootedPtr<'scope>>, EngineError> {
+        Ok(self
+            .get_cell_from_rooted_ptr(root)?
+            .cell_as_tuple()?
+            .into_iter()
+            .map(|x| self.root(x))
+            .collect())
+    }
+
+    pub(crate) fn root_as_dict(
+        &mut self,
+        root: RootedPtr<'scope>,
+    ) -> Result<BTreeMap<Symbol, RootedPtr<'scope>>, EngineError> {
+        let dict: BTreeMap<Symbol, Pointer> =
+            self.get_cell_from_rooted_ptr(root)?.cell_as_dict()?;
+        Ok(BTreeMap::from_iter(
+            dict.into_iter().map(|(k, v)| (k, self.root(v))),
+        ))
+    }
+
+    pub(crate) fn root_as_adt(
+        &mut self,
+        root: RootedPtr<'scope>,
+    ) -> Result<(Symbol, Vec<RootedPtr<'scope>>), EngineError> {
+        let (sym, fields) = self.get_cell_from_rooted_ptr(root)?.cell_as_adt()?;
+        let fields = fields.into_iter().map(|x| self.root(x)).collect();
+        Ok((sym, fields))
+    }
+
+    pub(crate) fn root_as_list(
+        &mut self,
+        root: RootedPtr<'scope>,
+    ) -> Result<Vec<RootedPtr<'scope>>, EngineError> {
+        let elements = list_elements_from_pointer(self.heap, self.pointer(root))?;
+        materialize_list_elements(self, elements)
+    }
+
+    pub(crate) fn with_temp_roots<R>(
+        &mut self,
+        pointers: Vec<Pointer>,
+        f: impl FnOnce(&mut RootScope<'h, 'scope>, &TempRoots) -> Result<R, EngineError>,
+    ) -> Result<R, EngineError> {
+        let mut tr = self.heap.temp_roots(pointers)?;
+        let res = f(self, &tr);
+        self.heap
+            .unregister_roots(std::mem::take(&mut tr.root_ids))?;
+        res
+    }
+}
+
 /// Rex heap and allocation API.
 ///
 /// Public allocation methods return [`Handle`] values. A handle is a GC root, so
@@ -800,7 +1083,6 @@ pub struct Heap {
 /// This type is deliberately crate-private. Public API and host callbacks should
 /// use [`Handle`] instead.
 pub(crate) struct TempRoots {
-    heap: Heap,
     root_ids: Vec<RootId>,
     collection_count: u64,
 }
@@ -892,34 +1174,20 @@ struct HandleRoot {
     root_id: RootId,
 }
 
-impl Drop for TempRoots {
-    fn drop(&mut self) {
-        let _ = self
-            .heap
-            .with_locked(|heap| heap.unregister_roots(std::mem::take(&mut self.root_ids)));
-    }
-}
-
 impl TempRoots {
-    pub(crate) fn len(&self) -> usize {
-        self.root_ids.len()
+    pub(crate) fn has_collected_since_creation(
+        &self,
+        heap: &HeapState,
+    ) -> Result<bool, EngineError> {
+        Ok(heap.collection_count() != self.collection_count)
     }
 
-    pub(crate) fn has_collected_since_creation(&self) -> Result<bool, EngineError> {
-        let state = self
-            .heap
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        Ok(state.collection_count() != self.collection_count)
-    }
-
-    pub(crate) fn get(&self, index: usize) -> Result<Pointer, EngineError> {
+    pub(crate) fn get(&self, index: usize, heap: &HeapState) -> Result<Pointer, EngineError> {
         let root_id = *self
             .root_ids
             .get(index)
             .ok_or_else(|| EngineError::Internal("temporary root index out of bounds".into()))?;
-        self.heap.with_locked(|heap| heap.resolve_root(root_id))
+        heap.resolve_root(root_id)
     }
 
     pub(crate) fn to_handles(&self, heap: &Heap) -> Result<Vec<Handle>, EngineError> {
@@ -1147,12 +1415,20 @@ impl Handle {
     }
 
     pub fn as_list(&self) -> Result<Vec<Handle>, EngineError> {
-        let pointer = self.pointer()?;
+        let pointer = self.heap().with_locked(|heap| self.pointer(heap))?;
         self.heap()
-            .pointer_as_list(&pointer)?
+            .with_locked(|heap| heap.pointer_as_list(&pointer))?
             .into_iter()
             .map(|pointer| self.heap().handle(pointer))
             .collect()
+    }
+
+    pub fn as_binary_list(&self) -> Result<Vec<u8>, EngineError> {
+        self.heap().with_locked(|heap| {
+            let pointer = self.pointer(heap)?;
+            let bytes = collect_list_u8(heap, &pointer)?;
+            Ok(bytes)
+        })
     }
 
     pub fn as_dict(&self) -> Result<BTreeMap<Symbol, Handle>, EngineError> {
@@ -1196,7 +1472,7 @@ impl Handle {
     }
 
     pub fn value_eq(&self, other: &Handle) -> Result<bool, EngineError> {
-        let self_pointer = self.pointer()?;
+        let self_pointer = self.heap().with_locked(|heap| self.pointer(heap))?;
         let pointer = other.pointer_for_heap(self.heap())?;
         self.heap()
             .with_locked(|heap| pointer_eq(heap, &self_pointer, &pointer))
@@ -1215,14 +1491,12 @@ impl Handle {
         &self.root.heap
     }
 
-    pub(crate) fn pointer(&self) -> Result<Pointer, EngineError> {
-        self.root
-            .heap
-            .with_locked(|heap| heap.resolve_root(self.root.root_id))
+    pub(crate) fn pointer(&self, heap: &HeapState) -> Result<Pointer, EngineError> {
+        heap.resolve_root(self.root.root_id)
     }
 
     pub(crate) fn pointer_for_heap(&self, heap: &Heap) -> Result<Pointer, EngineError> {
-        let pointer = self.pointer()?;
+        let pointer = self.heap().with_locked(|heap| self.pointer(heap))?;
         if pointer.heap_id != heap.id {
             return Err(wrong_heap_pointer(
                 pointer.heap_id,
@@ -1289,18 +1563,15 @@ impl Heap {
         Ok(f(&mut state))
     }
 
-    pub(crate) fn temp_roots(&self, pointers: Vec<Pointer>) -> Result<TempRoots, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        let root_ids = state.register_roots(pointers)?;
-        let collection_count = state.collection_count();
-        Ok(TempRoots {
-            heap: self.clone(),
-            root_ids,
-            collection_count,
-        })
+    pub(crate) fn with_temp_roots<R>(
+        &self,
+        pointers: Vec<Pointer>,
+        f: impl FnOnce(&TempRoots) -> Result<R, EngineError>,
+    ) -> Result<R, EngineError> {
+        let mut tr = self.with_locked(|heap| heap.temp_roots(pointers))?;
+        let res = f(&tr);
+        self.with_locked(|heap| heap.unregister_roots(std::mem::take(&mut tr.root_ids)))?;
+        res
     }
 
     pub(crate) fn persistent_roots(
@@ -1345,164 +1616,223 @@ impl Heap {
     }
 
     pub fn alloc_bool(&self, value: bool) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_bool(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_bool(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_u8(&self, value: u8) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_u8(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_u8(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_u16(&self, value: u16) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_u16(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_u16(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_u32(&self, value: u32) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_u32(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_u32(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_u64(&self, value: u64) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_u64(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_u64(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_i8(&self, value: i8) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_i8(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_i8(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_i16(&self, value: i16) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_i16(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_i16(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_i32(&self, value: i32) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_i32(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_i32(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_i64(&self, value: i64) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_i64(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_i64(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_f32(&self, value: f32) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_f32(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_f32(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_f64(&self, value: f64) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_f64(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_f64(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_string(&self, value: String) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_string(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_string(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_uuid(&self, value: Uuid) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_uuid(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_uuid(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_datetime(&self, value: DateTime<Utc>) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_datetime(value)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_datetime(value)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_tuple(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
-        let pointers = self.pointers_from_handles(values)?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_tuple(pointers)?.into_handle(self)
+        let values = self.pointers_from_handles(values)?;
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let values = values.into_iter().map(|x| scope.root(x)).collect();
+                let root = scope.alloc_root_tuple(values)?;
+                Ok(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_list(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
         let pointers = self.pointers_from_handles(values)?;
-        traits::handle_from_pointer(self, self.alloc_ptr_list(pointers)?)
+        let list = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let pointers = pointers.into_iter().map(|x| scope.root(x)).collect();
+                let root = scope.alloc_root_list(pointers)?;
+                Ok(scope.pointer(root))
+            })
+        })?;
+        traits::handle_from_pointer(self, list)
+    }
+
+    pub fn alloc_binary_list(&self, values: Vec<u8>) -> Result<Handle, EngineError> {
+        let pointer: Pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_binary_list(values)?;
+                Ok(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_empty(&self) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_empty()?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_empty()?;
+                Ok(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_cons(&self, head: Handle, tail: Handle) -> Result<Handle, EngineError> {
         let head = head.pointer_for_heap(self)?;
         let tail = tail.pointer_for_heap(self)?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_cons(head, tail)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let head = scope.root(head);
+                let tail = scope.root(tail);
+                let root = scope.alloc_root_cons(head, tail)?;
+                Ok(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_data(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
-        let pointers = self.pointers_from_handles(values)?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_data(pointers)?.into_handle(self)
+        let values = self.pointers_from_handles(values)?;
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let values = values.into_iter().map(|x| scope.root(x)).collect();
+                let root = scope.alloc_root_data(values)?;
+                Ok(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_binary_data(&self, values: Vec<u8>) -> Result<Handle, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_binary_data(values)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_binary_data(values)?;
+                Ok(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_list_slice(
@@ -1512,34 +1842,42 @@ impl Heap {
         elements: Handle,
     ) -> Result<Handle, EngineError> {
         let elements = elements.pointer_for_heap(self)?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state
-            .alloc_ptr_list_slice(start, end, elements)?
-            .into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let elements = scope.root(elements);
+                let root = scope.alloc_root_list_slice(start, end, elements)?;
+                Ok(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_dict(&self, values: BTreeMap<Symbol, Handle>) -> Result<Handle, EngineError> {
-        let mut pointers = BTreeMap::new();
+        let mut pointers: BTreeMap<Symbol, Pointer> = BTreeMap::new();
         for (name, handle) in values {
             pointers.insert(name, handle.pointer_for_heap(self)?);
         }
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_dict(pointers)?.into_handle(self)
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let values =
+                    BTreeMap::from_iter(pointers.into_iter().map(|(k, v)| (k, scope.root(v))));
+                let root = scope.alloc_root_dict(values)?;
+                Ok(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     pub fn alloc_adt(&self, name: Symbol, args: Vec<Handle>) -> Result<Handle, EngineError> {
-        let pointers = self.pointers_from_handles(args)?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.alloc_ptr_adt(name, pointers)?.into_handle(self)
+        let args = self.pointers_from_handles(args)?;
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let args = args.into_iter().map(|x| scope.root(x)).collect();
+                let root = scope.alloc_root_adt(name, args)?;
+                Ok(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
     }
 
     fn pointers_from_handles(&self, values: Vec<Handle>) -> Result<Vec<Pointer>, EngineError> {
@@ -1561,6 +1899,7 @@ impl Heap {
                 .map_err(|_| EngineError::HeapStatePoisoned)?;
             state.register_roots(values.iter().copied())?
         };
+
         Ok(self.handles_from_root_ids(root_ids))
     }
 
@@ -1574,128 +1913,6 @@ impl Heap {
                 }),
             })
             .collect()
-    }
-
-    pub(crate) fn pointer_as_list(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
-        let elements = self.with_locked(|heap| list_elements_from_pointer(heap, *pointer))?;
-        materialize_list_elements(self, elements)
-    }
-
-    pub(crate) fn list_len(&self, pointer: &Pointer) -> Result<usize, EngineError> {
-        self.with_locked(|heap| list_len_from_pointer(heap, *pointer))
-    }
-
-    pub(crate) fn list_items(&self, pointer: Pointer) -> Result<ListItems, EngineError> {
-        match self.with_locked(|heap| list_items_from_pointer(heap, pointer))? {
-            ListItemsSeed::Ready(items) => Ok(items),
-            ListItemsSeed::Elements(elements) => {
-                if elements
-                    .iter()
-                    .all(|element| matches!(element, ListElement::Pointer(_)))
-                {
-                    return list_elements_to_pointer_vec(elements).map(ListItems::Pointers);
-                }
-                materialize_list_elements(self, elements).map(ListItems::Pointers)
-            }
-        }
-    }
-
-    pub(crate) fn list_head_tail(
-        &self,
-        pointer: &Pointer,
-    ) -> Result<Option<(Pointer, Pointer)>, EngineError> {
-        let Some((head, tail_index, elements)) = self.with_locked(|heap| {
-            let cell = heap.get_cell_from_pointer(pointer)?;
-            match cell {
-                Cell::Empty => Ok(None),
-                Cell::Cons(head, tail) => Ok(Some((ListElement::Pointer(*head), None, *tail))),
-                Cell::ListSlice {
-                    start,
-                    end,
-                    elements,
-                } => {
-                    let Some(head) = list_slice_head_element(heap, elements, *start, *end)? else {
-                        return Ok(None);
-                    };
-                    Ok(Some((head, Some((start + 1, *end)), *elements)))
-                }
-                _ => Err(EngineError::NativeType {
-                    expected: "list".into(),
-                    got: cell.cell_type_name().into(),
-                }),
-            }
-        })?
-        else {
-            return Ok(None);
-        };
-        let head = match head {
-            ListElement::Pointer(pointer) => pointer,
-            ListElement::U8(value) => {
-                let elements_root = self.temp_roots(vec![elements])?;
-                let head = self.with_locked(|heap| Ok(heap.alloc_ptr_u8(value)?.into_pointer()))?;
-                let elements = elements_root.get(0)?;
-                let tail = match tail_index {
-                    Some((start, end)) => {
-                        let roots = self.temp_roots(vec![head, elements])?;
-                        let elements_ptr = roots.get(1)?; // must call get before with_locked
-                        let tail = self.with_locked(|heap| {
-                            Ok(heap
-                                .alloc_ptr_list_slice(start, end, elements_ptr)?
-                                .into_pointer())
-                        })?;
-                        let head = roots.get(0)?;
-                        return Ok(Some((head, tail)));
-                    }
-                    None => elements,
-                };
-                return Ok(Some((head, tail)));
-            }
-        };
-        let tail = match tail_index {
-            Some((start, end)) => {
-                // Creating the tail slice can trigger copying GC. The head was
-                // read from the backing data cell before that allocation, so
-                // it must be temporarily rooted or the returned pointer may
-                // refer to the pre-collection location.
-                let head_root = self.temp_roots(vec![head])?;
-                let tail = self.with_locked(|heap| {
-                    Ok(heap
-                        .alloc_ptr_list_slice(start, end, elements)?
-                        .into_pointer())
-                })?;
-                let head = head_root.get(0)?;
-                return Ok(Some((head, tail)));
-            }
-            None => elements,
-        };
-        Ok(Some((head, tail)))
-    }
-
-    pub(crate) fn alloc_ptr_list(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
-        if values.is_empty() {
-            return self.with_locked(|heap| Ok(heap.alloc_ptr_empty()?.into_pointer()));
-        }
-        let roots = self.temp_roots(values)?;
-        let len = roots.len();
-        let values = (0..roots.len())
-            .map(|index| roots.get(index))
-            .collect::<Result<Vec<_>, _>>()?;
-        let data = self.with_locked(|heap| Ok(heap.alloc_ptr_data(values)?.into_pointer()))?;
-        let data = self.temp_roots(vec![data])?;
-        let elements = data.get(0)?; // must call get before with_locked
-        self.with_locked(|heap| Ok(heap.alloc_ptr_list_slice(0, len, elements)?.into_pointer()))
-    }
-
-    pub(crate) fn alloc_ptr_binary_list(&self, values: Vec<u8>) -> Result<Pointer, EngineError> {
-        if values.is_empty() {
-            return self.with_locked(|heap| Ok(heap.alloc_ptr_empty()?.into_pointer()));
-        }
-        let len = values.len();
-        let data =
-            self.with_locked(|heap| Ok(heap.alloc_ptr_binary_data(values)?.into_pointer()))?;
-        let data = self.temp_roots(vec![data])?;
-        let elements = data.get(0)?; // must call get before with_locked
-        self.with_locked(|heap| Ok(heap.alloc_ptr_list_slice(0, len, elements)?.into_pointer()))
     }
 }
 
@@ -1719,22 +1936,6 @@ impl<'a> Reference<'a> {
             index: self.index,
             generation: self.generation,
         }
-    }
-
-    pub(crate) fn into_handle(self, heap: &Heap) -> Result<Handle, EngineError> {
-        let pointer = Pointer {
-            heap_id: self.heap.id,
-            index: self.index,
-            generation: self.generation,
-        };
-        self.heap.get_cell_from_pointer(&pointer)?;
-        let root_id = self.heap.register_root(pointer)?;
-        Ok(Handle {
-            root: Arc::new(HandleRoot {
-                heap: heap.clone(),
-                root_id,
-            }),
-        })
     }
 }
 
@@ -2541,7 +2742,12 @@ mod tests {
     fn handle_roots_value_until_last_clone_drops() {
         let heap = Heap::new();
         let pointer = heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_i32(42)?.into_pointer()))
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_i32(42)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("alloc_i32 should succeed");
         assert_eq!(
             heap.with_locked(|heap| Ok(heap.root_count()))
@@ -2583,7 +2789,12 @@ mod tests {
     fn handle_root_ids_are_reused_with_generation_bump() {
         let heap = Heap::new();
         let first_pointer = heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_i32(1)?.into_pointer()))
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_i32(1)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("alloc_i32 should succeed");
         let first = heap
             .handle(first_pointer)
@@ -2592,7 +2803,12 @@ mod tests {
         drop(first);
 
         let second_pointer = heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_i32(2)?.into_pointer()))
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_i32(2)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("alloc_i32 should succeed");
         let second = heap
             .handle(second_pointer)
@@ -2612,10 +2828,20 @@ mod tests {
     fn handle_resolves_pointer_from_root_slot() {
         let heap = Heap::new();
         let first_pointer = heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_i32(1)?.into_pointer()))
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_i32(1)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("alloc_i32 should succeed");
         let second_pointer = heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_i32(2)?.into_pointer()))
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_i32(2)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("alloc_i32 should succeed");
         let handle = heap
             .handle(first_pointer)
@@ -2639,7 +2865,12 @@ mod tests {
         let heap_a = Heap::new();
         let heap_b = Heap::new();
         let pointer = heap_a
-            .with_locked(|heap| Ok(heap.alloc_ptr_i32(42)?.into_pointer()))
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_i32(42)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("alloc_i32 should succeed");
 
         let err = match heap_b.handle(pointer) {
@@ -2666,12 +2897,13 @@ mod tests {
         let epoch_before = heap
             .with_locked_ok(|heap| heap.collection_count())
             .expect("collection epoch");
-        let stale = first.pointer().expect("first pointer should resolve");
+        let stale = heap
+            .with_locked(|heap| first.pointer(heap))
+            .expect("first pointer should resolve");
 
         assert_eq!(stale.generation, epoch_before);
         assert_eq!(
-            second
-                .pointer()
+            heap.with_locked(|heap| second.pointer(heap))
                 .expect("second pointer should resolve")
                 .generation,
             epoch_before
@@ -2691,71 +2923,129 @@ mod tests {
             42
         );
         assert_eq!(
-            first
-                .pointer()
+            heap.with_locked(|heap| first.pointer(heap))
                 .expect("first pointer should resolve after collection")
                 .generation,
             epoch_after
         );
         assert_eq!(
-            second
-                .pointer()
+            heap.with_locked(|heap| second.pointer(heap))
                 .expect("second pointer should resolve after collection")
                 .generation,
             epoch_after
         );
         assert!(
-            heap.with_locked(|heap| heap.pointer_as_i32(&stale))
-                .is_err(),
+            heap.with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let stale = scope.root(stale);
+                    scope.root_as_i32(stale)
+                })
+            })
+            .is_err(),
             "raw pointer from before collection should be stale"
         );
+    }
+
+    #[test]
+    fn copying_gc_updates_temporary_root_stack() {
+        let mut heap = HeapState::new();
+        let _garbage = heap
+            .root_scope(|scope| {
+                let root = scope.alloc_root_i32(7)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+            .expect("garbage should allocate");
+        let stale = heap
+            .root_scope(|scope| {
+                let root = scope.alloc_root_i32(42)?;
+                Ok::<Pointer, EngineError>(scope.pointer(root))
+            })
+            .expect("rooted value should allocate");
+
+        heap.root_scope(|scope| {
+            let rooted = scope.root(stale);
+            scope.heap.collect()?;
+
+            let refreshed = scope.pointer(rooted);
+            assert_eq!(refreshed.index, 0);
+            assert_ne!(refreshed.generation, stale.generation);
+            let refreshed_root = scope.root(refreshed);
+            assert_eq!(scope.root_as_i32(refreshed_root)?, 42);
+            let stale_root = scope.root(stale);
+            assert!(scope.root_as_i32(stale_root).is_err());
+            Ok::<_, EngineError>(())
+        })
+        .expect("collection should update the temporary root");
+
+        assert!(heap.temporary_roots.is_empty());
     }
 
     #[test]
     fn temp_roots_detect_and_follow_copying_collection() {
         let heap = Heap::new();
         let stale = heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_i32(42)?.into_pointer()))
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_i32(42)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("alloc_i32 should succeed");
-        let roots = heap
-            .temp_roots(vec![stale])
-            .expect("temporary root should register");
+        heap.with_temp_roots(vec![stale], |roots| {
+            assert!(
+                !heap
+                    .with_locked(|heap| roots.has_collected_since_creation(heap))
+                    .expect("collection state should be available")
+            );
+            heap.with_locked(|heap| heap.collect())
+                .expect("collection should succeed");
+            assert!(
+                heap.with_locked(|heap| roots.has_collected_since_creation(heap))
+                    .expect("collection state should be available")
+            );
 
-        assert!(
-            !roots
-                .has_collected_since_creation()
-                .expect("collection state should be available")
-        );
-        heap.with_locked(|heap| heap.collect())
-            .expect("collection should succeed");
-        assert!(
-            roots
-                .has_collected_since_creation()
-                .expect("collection state should be available")
-        );
-
-        let refreshed = roots.get(0).expect("temporary root should be rewritten");
-        assert_eq!(
-            heap.with_locked(|heap| heap.pointer_as_i32(&refreshed))
+            let refreshed = heap
+                .with_locked(|heap| roots.get(0, heap))
+                .expect("temporary root should be rewritten");
+            assert_eq!(
+                heap.with_locked(|heap| {
+                    heap.root_scope(|scope| {
+                        let refreshed = scope.root(refreshed);
+                        scope.root_as_i32(refreshed)
+                    })
+                })
                 .expect("rewritten pointer should resolve"),
-            42
-        );
-        assert!(
-            heap.with_locked(|heap| heap.pointer_as_i32(&stale))
+                42
+            );
+            assert!(
+                heap.with_locked(|heap| {
+                    heap.root_scope(|scope| {
+                        let stale = scope.root(stale);
+                        scope.root_as_i32(stale)
+                    })
+                })
                 .is_err(),
-            "raw pointer from before collection should be stale"
-        );
+                "raw pointer from before collection should be stale"
+            );
+            Ok(())
+        })
+        .expect("temporary root should register");
     }
 
     #[test]
     fn persistent_roots_advance_across_multiple_collections() {
         let heap = Heap::new();
-        let value = heap.alloc_i32(42).expect("alloc_i32 should succeed");
-        let initial = value.pointer().expect("handle should resolve");
+        let initial = heap
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_i32(42)?;
+                    Ok(scope.pointer(root))
+                })
+            })
+            .expect("alloc_i32 should succeed");
         let mut roots = heap
             .persistent_roots(vec![initial])
             .expect("persistent root should register");
-        drop(value);
         let mut current = initial;
 
         for _ in 0..3 {
@@ -2773,8 +3063,13 @@ mod tests {
             let next = updated.expect("persistent root should have one pointer");
             assert_ne!(next.generation, current.generation);
             assert_eq!(
-                heap.with_locked(|heap| heap.pointer_as_i32(&next))
-                    .expect("refreshed pointer should resolve"),
+                heap.with_locked(|heap| {
+                    heap.root_scope(|scope| {
+                        let next = scope.root(next);
+                        scope.root_as_i32(next)
+                    })
+                })
+                .expect("refreshed pointer should resolve"),
                 42
             );
             assert!(
@@ -2796,7 +3091,12 @@ mod tests {
             .expect("set threshold");
 
         let _garbage = heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_i32(99)?.into_pointer()))
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_i32(99)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("alloc should trigger GC");
 
         assert!(
@@ -2815,32 +3115,45 @@ mod tests {
             .expect("set threshold");
         let values = (0..2048)
             .map(|value| {
-                heap.with_locked(|heap| Ok(heap.alloc_ptr_i32(value)?.into_pointer()))
-                    .expect("alloc_i32 should succeed")
+                heap.with_locked(|heap| {
+                    heap.root_scope(|scope| {
+                        let root = scope.alloc_root_i32(value)?;
+                        Ok(scope.pointer(root))
+                    })
+                })
+                .expect("alloc_i32 should succeed")
             })
             .collect::<Vec<_>>();
         heap.with_locked_ok(|heap| heap.set_gc_slot_threshold(1))
             .expect("set threshold");
 
         let list = heap
-            .alloc_ptr_list(values)
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let values = values.into_iter().map(|x| scope.root(x)).collect();
+                    let root = scope.alloc_root_list(values)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("list allocation should protect inputs");
         let list = heap.handle(list).expect("list should be rootable");
+        let list_pointer = heap.with_locked(|heap| list.pointer(heap));
         let values = heap
-            .pointer_as_list(&list.pointer().expect("list pointer"))
+            .with_locked(|heap| heap.pointer_as_list(&list_pointer.expect("list pointer")))
             .expect("list should decode");
 
         assert_eq!(values.len(), 2048);
-        assert_eq!(
-            heap.with_locked(|heap| heap.pointer_as_i32(values.first().expect("first value")))
-                .expect("first i32"),
-            0
-        );
-        assert_eq!(
-            heap.with_locked(|heap| heap.pointer_as_i32(values.last().expect("last value")))
-                .expect("last i32"),
-            2047
-        );
+        heap.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let first_value = scope.root(*values.first().expect("first value"));
+                let last_value = scope.root(*values.last().expect("last value"));
+
+                assert_eq!(scope.root_as_i32(first_value).expect("first i32"), 0);
+                assert_eq!(scope.root_as_i32(last_value).expect("last i32"), 2047);
+                Ok(())
+            })
+        })
+        .unwrap();
     }
 
     #[test]
@@ -2849,13 +3162,24 @@ mod tests {
         let values = [1, 2, 3]
             .into_iter()
             .map(|value| {
-                heap.with_locked(|heap| Ok(heap.alloc_ptr_i32(value)?.into_pointer()))
-                    .expect("alloc_i32 should succeed")
+                heap.with_locked(|heap| {
+                    heap.root_scope(|scope| {
+                        let root = scope.alloc_root_i32(value)?;
+                        Ok(scope.pointer(root))
+                    })
+                })
+                .expect("alloc_i32 should succeed")
             })
             .collect::<Vec<_>>();
 
         let list = heap
-            .alloc_ptr_list(values.clone())
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let values = values.iter().map(|x| scope.root(*x)).collect();
+                    let root = scope.alloc_root_list(values)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("list allocation should succeed");
         let Cell::ListSlice {
             start,
@@ -2880,12 +3204,23 @@ mod tests {
         let values = [1, 2, 3]
             .into_iter()
             .map(|value| {
-                heap.with_locked(|heap| Ok(heap.alloc_ptr_i32(value)?.into_pointer()))
-                    .expect("alloc_i32 should succeed")
+                heap.with_locked(|heap| {
+                    heap.root_scope(|scope| {
+                        let root = scope.alloc_root_i32(value)?;
+                        Ok(scope.pointer(root))
+                    })
+                })
+                .expect("alloc_i32 should succeed")
             })
             .collect::<Vec<_>>();
         let list = heap
-            .alloc_ptr_list(values)
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let values = values.into_iter().map(|x| scope.root(x)).collect();
+                    let root = scope.alloc_root_list(values)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("list allocation should succeed");
         let Cell::ListSlice {
             elements: original_data,
@@ -2896,7 +3231,14 @@ mod tests {
         };
 
         let (_head, tail) = heap
-            .list_head_tail(&list)
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let list = scope.root(list);
+                    Ok(scope
+                        .list_head_tail(list)?
+                        .map(|(head, tail)| (scope.pointer(head), scope.pointer(tail))))
+                })
+            })
             .expect("head/tail should decode")
             .expect("list should be non-empty");
         let Cell::ListSlice {
@@ -2953,12 +3295,13 @@ mod tests {
             .into_rex(&heap)
             .expect("Vec<u8> should convert");
 
+        let bytes_pointer = heap.with_locked_ok(|heap| bytes.pointer(heap)).unwrap();
         let Cell::ListSlice {
             start,
             end,
             elements,
         } = heap
-            .clone_cell(&bytes.pointer().expect("bytes pointer"))
+            .clone_cell(&bytes_pointer.expect("bytes pointer"))
             .expect("list cell should exist")
         else {
             panic!("expected binary-backed list slice");
@@ -2992,14 +3335,29 @@ mod tests {
 
         heap.set_collect_on_every_alloc(true)
             .expect("enable gc every alloc");
+        let bytes_pointer = heap
+            .with_locked(|heap| bytes.pointer(heap))
+            .expect("bytes pointer");
         let (head, tail) = heap
-            .list_head_tail(&bytes.pointer().expect("bytes pointer"))
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let bytes_pointer = scope.root(bytes_pointer);
+                    Ok(scope
+                        .list_head_tail(bytes_pointer)?
+                        .map(|(head, tail)| (scope.pointer(head), scope.pointer(tail))))
+                })
+            })
             .expect("head/tail should decode")
             .expect("list should be non-empty");
 
         assert_eq!(
-            heap.with_locked(|heap| heap.pointer_as_u8(&head))
-                .expect("head should be u8"),
+            heap.with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let head = scope.root(head);
+                    scope.root_as_u8(head)
+                })
+            })
+            .expect("head should be u8"),
             7
         );
         let Cell::ListSlice {
@@ -3088,23 +3446,36 @@ mod tests {
             .expect("set threshold");
         let values = (0..10_000)
             .map(|value| {
-                heap.with_locked(|heap| Ok(heap.alloc_ptr_i32(value)?.into_pointer()))
-                    .expect("alloc_i32 should succeed")
+                heap.with_locked(|heap| {
+                    heap.root_scope(|scope| {
+                        let root = scope.alloc_root_i32(value)?;
+                        Ok(scope.pointer(root))
+                    })
+                })
+                .expect("alloc_i32 should succeed")
             })
             .collect::<Vec<_>>();
         let list = heap
             .handle(
-                heap.alloc_ptr_list(values)
-                    .expect("list allocation should succeed"),
+                heap.with_locked(|heap| {
+                    heap.root_scope(|scope| {
+                        let values = values.into_iter().map(|x| scope.root(x)).collect();
+                        let root = scope.alloc_root_list(values)?;
+                        Ok(scope.pointer(root))
+                    })
+                })
+                .expect("list allocation should succeed"),
             )
             .expect("list should be rootable");
 
         heap.with_locked(|heap| heap.collect())
             .expect("deep collection should succeed");
 
-        let pointer = list.pointer().expect("list pointer");
+        let pointer = heap
+            .with_locked(|heap| list.pointer(heap))
+            .expect("list pointer");
         assert_eq!(
-            heap.pointer_as_list(&pointer)
+            heap.with_locked(|heap| heap.pointer_as_list(&pointer))
                 .expect("list should decode after GC")
                 .len(),
             10_000
@@ -3134,15 +3505,30 @@ mod tests {
     fn handle_value_roots_composite_children() {
         let heap = Heap::new();
         let first = heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_i32(1)?.into_pointer()))
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_i32(1)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("alloc_i32 should succeed");
         let second = heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_string("two".into())?.into_pointer()))
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_string("two".into())?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("alloc_string should succeed");
         let tuple = heap
             .handle(
                 heap.with_locked(|heap| {
-                    Ok(heap.alloc_ptr_tuple(vec![first, second])?.into_pointer())
+                    heap.root_scope(|scope| {
+                        let first = scope.root(first);
+                        let second = scope.root(second);
+                        let root = scope.alloc_root_tuple(vec![first, second])?;
+                        Ok(scope.pointer(root))
+                    })
                 })
                 .expect("alloc_tuple should succeed"),
             )
@@ -3190,15 +3576,28 @@ mod tests {
     fn handle_value_reports_named_composites() {
         let heap = Heap::new();
         let payload = heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_bool(true)?.into_pointer()))
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_bool(true)?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("alloc_bool should succeed");
 
         let mut fields = BTreeMap::new();
         fields.insert(Symbol::intern("ready"), payload);
         let dict = heap
             .handle(
-                heap.with_locked(|heap| Ok(heap.alloc_ptr_dict(fields)?.into_pointer()))
-                    .expect("alloc_dict should succeed"),
+                heap.with_locked(|heap| {
+                    heap.root_scope(|scope| {
+                        let fields = BTreeMap::from_iter(
+                            fields.into_iter().map(|(k, v)| (k, scope.root(v))),
+                        );
+                        let root = scope.alloc_root_dict(fields)?;
+                        Ok(scope.pointer(root))
+                    })
+                })
+                .expect("alloc_dict should succeed"),
             )
             .expect("dict should be rootable");
         let Value::Dict(fields) = dict.value().expect("dict value") else {
@@ -3220,9 +3619,11 @@ mod tests {
         let option = heap
             .handle(
                 heap.with_locked(|heap| {
-                    Ok(heap
-                        .alloc_ptr_adt(Symbol::intern("Some"), vec![payload])?
-                        .into_pointer())
+                    heap.root_scope(|scope| {
+                        let payload = scope.root(payload);
+                        let root = scope.alloc_root_adt(Symbol::intern("Some"), vec![payload])?;
+                        Ok(scope.pointer(root))
+                    })
                 })
                 .expect("alloc_adt should succeed"),
             )

@@ -3,7 +3,7 @@ use crate::{
     error::EngineError,
     evaluator::{
         CallSite, application_result_type,
-        context::Context,
+        context::InternalCtx,
         native_functions::{NativeTask, eval_native_enter, eval_native_receive},
         resolve_arg_type,
         runtime_core::RuntimeCore,
@@ -11,8 +11,8 @@ use crate::{
     },
     handlers::NativeCallRequest,
     memory::{
-        heap::{Cell, Closure, Handle, Heap, HeapState, Pointer, Reference, TempRoots},
-        lists::ListItems,
+        heap::{Cell, Closure, Handle, Heap, HeapState, Pointer, RootScope, RootedPtr, TempRoots},
+        lists::ListRootedItems,
         traits::Collection,
     },
     native_fn::NativeApplyResult,
@@ -50,6 +50,7 @@ pub(crate) enum EvalControl<State: Clone + Send + Sync + 'static> {
 
 pub(crate) async fn eval_typed_expr<State>(
     runtime: RuntimeCore<State>,
+    heap: &Heap,
     rooted_env: RootedEnvironment,
     expr: Arc<TypedExpr>,
     input_args: Vec<(Handle, Type)>,
@@ -57,13 +58,13 @@ pub(crate) async fn eval_typed_expr<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let env = rooted_env.to_environment()?;
+    let env = heap.with_locked(|heap| rooted_env.to_environment(heap))?;
     let (env, expr) = if input_args.is_empty() {
         (env, expr)
     } else {
         let args = input_args
             .iter()
-            .map(|(handle, typ)| Ok((handle.pointer_for_heap(&runtime.heap)?, typ.clone())))
+            .map(|(handle, typ)| Ok((handle.pointer_for_heap(heap)?, typ.clone())))
             .collect::<Result<Vec<_>, EngineError>>()?;
         let (env, expr) = synthetic_application_expr_from_head(env, expr.as_ref().clone(), &args)?;
         (env, Arc::new(expr))
@@ -71,11 +72,12 @@ where
     // rooted_env and input_args intentionally remain in scope across this
     // await; their handles root the raw pointers stored in env and the
     // synthetic input application.
-    eval_typed_expr_inner(runtime, env, expr).await
+    eval_typed_expr_inner(runtime, heap, env, expr).await
 }
 
 async fn eval_typed_expr_inner<State>(
     mut runtime: RuntimeCore<State>,
+    heap: &Heap,
     env: Environment,
     expr: Arc<TypedExpr>,
 ) -> Result<Handle, EngineError>
@@ -88,7 +90,7 @@ where
 
     let mut iteration = 0;
     loop {
-        if poll_pending_native(&mut runtime, &mut frames, &mut scheduler, false).await? {
+        if poll_pending_native(&mut runtime, heap, &mut frames, &mut scheduler, false).await? {
             continue;
         }
 
@@ -100,7 +102,9 @@ where
         let mut item = match scheduler.pop_next() {
             Some(item) => item,
             None => {
-                if poll_pending_native(&mut runtime, &mut frames, &mut scheduler, true).await? {
+                if poll_pending_native(&mut runtime, heap, &mut frames, &mut scheduler, true)
+                    .await?
+                {
                     continue;
                 }
                 return Err(EngineError::Internal(
@@ -108,91 +112,117 @@ where
                 ));
             }
         };
-        item.refresh_rooted_value(&runtime.heap)?;
+        item.refresh_rooted_value(heap)?;
         let mut protected = Vec::new();
         frames.trace_pointers(&mut protected);
         item.trace_pointers(&mut protected);
         scheduler.trace_pointers(&mut protected);
         runtime.trace_pointers(&mut protected)?;
-        let roots = runtime.heap.temp_roots(protected.clone())?;
-        refresh_eval_roots(
-            &mut runtime,
-            &mut frames,
-            &mut item,
-            &mut scheduler,
-            &roots,
-            &protected,
-        )?;
+        let result = heap.with_temp_roots(protected.clone(), |roots| {
+            heap.with_locked(|heap| {
+                refresh_eval_roots(
+                    &mut runtime,
+                    heap,
+                    &mut frames,
+                    &mut item,
+                    &mut scheduler,
+                    roots,
+                    &protected,
+                )
+            })?;
 
-        let frame = frames.get(item.frame)?.clone();
-        let returned = item
-            .returned
-            .as_ref()
-            .map(|returned| (returned.child, returned.value));
-        let control = match returned {
-            Some((child, value)) => {
-                eval_receive(&runtime, &mut frames, item.frame, frame, child, value)?
-            }
-            None => eval_enter(&runtime, &mut frames, item.frame, frame)?,
-        };
-        refresh_eval_roots(
-            &mut runtime,
-            &mut frames,
-            &mut item,
-            &mut scheduler,
-            &roots,
-            &protected,
-        )?;
+            let frame = frames.get(item.frame)?.clone();
+            let returned = item
+                .returned
+                .as_ref()
+                .map(|returned| (returned.child, returned.value));
+            let control = match returned {
+                Some((child, value)) => heap.with_locked(|heap| {
+                    heap.root_scope(|scope| {
+                        eval_receive(
+                            &runtime,
+                            scope,
+                            &mut frames,
+                            item.frame,
+                            frame,
+                            child,
+                            value,
+                        )
+                    })
+                })?,
+                None => heap.with_locked(|heap| {
+                    heap.root_scope(|scope| {
+                        eval_enter(&runtime, scope, &mut frames, item.frame, frame)
+                    })
+                })?,
+            };
+            heap.with_locked(|heap| {
+                refresh_eval_roots(
+                    &mut runtime,
+                    heap,
+                    &mut frames,
+                    &mut item,
+                    &mut scheduler,
+                    roots,
+                    &protected,
+                )
+            })?;
 
-        match control {
-            EvalControl::Push { expr, env } => {
-                let frame = frame_for_expr(Some(item.frame), expr, env);
-                let child = frames.insert(frame);
-                scheduler.schedule_next(EvalWorkItem::enter(child));
-            }
-            EvalControl::PushFrame(frame) => {
-                let child = frames.insert(*frame);
-                scheduler.schedule_next(EvalWorkItem::enter(child));
-            }
-            EvalControl::Schedule(children) => {
-                for child in children.into_iter().rev() {
+            match control {
+                EvalControl::Push { expr, env } => {
+                    let frame = frame_for_expr(Some(item.frame), expr, env);
+                    let child = frames.insert(frame);
                     scheduler.schedule_next(EvalWorkItem::enter(child));
                 }
-            }
-            EvalControl::Wait => {}
-            EvalControl::AwaitNative(call) => {
-                let call = call.root(&runtime.heap)?;
-                let frame = Frame::NativeHost(FrNativeHost {
-                    parent: Some(item.frame),
-                });
-                let child = frames.insert(frame);
-                scheduler.schedule_native(child, call);
-            }
-            EvalControl::Return(value) => {
-                let frame = frames.remove(item.frame)?;
-                let preserve_native_handle = matches!(&frame, Frame::NativeHost(_));
-                let parent = frame.parent();
-                let Some(parent) = parent else {
-                    return runtime.heap.handle(value);
-                };
-                let next = if preserve_native_handle {
-                    match item.take_returned_handle() {
-                        Some(handle) => {
-                            EvalWorkItem::receive_rooted(parent, item.frame, value, handle)
-                        }
-                        None => EvalWorkItem::receive(parent, item.frame, value),
+                EvalControl::PushFrame(frame) => {
+                    let child = frames.insert(*frame);
+                    scheduler.schedule_next(EvalWorkItem::enter(child));
+                }
+                EvalControl::Schedule(children) => {
+                    for child in children.into_iter().rev() {
+                        scheduler.schedule_next(EvalWorkItem::enter(child));
                     }
-                } else {
-                    EvalWorkItem::receive(parent, item.frame, value)
-                };
-                scheduler.schedule_next(next);
+                }
+                EvalControl::Wait => {}
+                EvalControl::AwaitNative(call) => {
+                    let call = call.root(heap)?;
+                    let frame = Frame::NativeHost(FrNativeHost {
+                        parent: Some(item.frame),
+                    });
+                    let child = frames.insert(frame);
+                    scheduler.schedule_native(child, call);
+                }
+                EvalControl::Return(value) => {
+                    let frame = frames.remove(item.frame)?;
+                    let preserve_native_handle = matches!(&frame, Frame::NativeHost(_));
+                    let parent = frame.parent();
+                    let Some(parent) = parent else {
+                        return heap.handle(value).map(Some);
+                    };
+                    let next = if preserve_native_handle {
+                        match item.take_returned_handle() {
+                            Some(handle) => {
+                                EvalWorkItem::receive_rooted(parent, item.frame, value, handle)
+                            }
+                            None => EvalWorkItem::receive(parent, item.frame, value),
+                        }
+                    } else {
+                        EvalWorkItem::receive(parent, item.frame, value)
+                    };
+                    scheduler.schedule_next(next);
+                }
             }
+            Ok(None)
+        })?;
+        if let Some(result) = result {
+            return Ok(result);
         }
     }
 }
 
 fn refresh_eval_roots<State>(
     runtime: &mut RuntimeCore<State>,
+    heap: &HeapState,
     frames: &mut FrameStore,
     item: &mut EvalWorkItem,
     scheduler: &mut EvalScheduler<State>,
@@ -202,13 +232,13 @@ fn refresh_eval_roots<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    if !roots.has_collected_since_creation()? {
+    if !roots.has_collected_since_creation(heap)? {
         return Ok(());
     }
 
     let mut rewrites = HashMap::with_capacity(originals.len());
     for (index, original) in originals.iter().enumerate() {
-        rewrites.insert(*original, roots.get(index)?);
+        rewrites.insert(*original, roots.get(index, heap)?);
     }
     let mut rewrite =
         |pointer| Ok::<_, EngineError>(rewrites.get(&pointer).copied().unwrap_or(pointer));
@@ -400,8 +430,9 @@ pub(crate) fn frame_for_expr(
     }
 }
 
-fn eval_enter<State>(
+fn eval_enter<'scope, State>(
     runtime: &RuntimeCore<State>,
+    scope: &mut RootScope<'_, 'scope>,
     frames: &mut FrameStore,
     frame_id: FrameId,
     frame: Frame,
@@ -412,64 +443,57 @@ where
     match frame {
         Frame::Bool(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Bool(value) => {
-                Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
-                    Ok(heap.alloc_ptr_bool(*value)?.into_pointer())
-                })?))
+                let root = scope.alloc_root_bool(*value)?;
+                Ok(EvalControl::Return(scope.pointer(root)))
             }
             _ => frame_kind_error("bool"),
         },
         Frame::Uint(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Uint(value) => {
-                Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
-                    Ok(alloc_uint_literal_as(heap, *value, &frame.expr.typ)?.into_pointer())
-                })?))
+                let root = alloc_uint_literal_as(scope, *value, &frame.expr.typ)?;
+                Ok(EvalControl::Return(scope.pointer(root)))
             }
             _ => frame_kind_error("uint"),
         },
         Frame::Int(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Int(value) => {
-                Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
-                    Ok(alloc_int_literal_as(heap, *value, &frame.expr.typ)?.into_pointer())
-                })?))
+                let root = alloc_int_literal_as(scope, *value, &frame.expr.typ)?;
+                Ok(EvalControl::Return(scope.pointer(root)))
             }
             _ => frame_kind_error("int"),
         },
         Frame::Float(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Float(value) => Ok(EvalControl::Return(alloc_float_literal_as(
-                runtime,
-                *value,
-                &frame.expr.typ,
-            )?)),
+            TypedExprKind::Float(value) => {
+                let root = alloc_float_literal_as(scope, *value, &frame.expr.typ)?;
+                Ok(EvalControl::Return(scope.pointer(root)))
+            }
             _ => frame_kind_error("float"),
         },
         Frame::String(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::String(value) => {
-                Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
-                    Ok(heap.alloc_ptr_string(value.clone())?.into_pointer())
-                })?))
+                let root = scope.alloc_root_string(value.clone())?;
+                Ok(EvalControl::Return(scope.pointer(root)))
             }
             _ => frame_kind_error("string"),
         },
         Frame::Uuid(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Uuid(value) => {
-                Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
-                    Ok(heap.alloc_ptr_uuid(*value)?.into_pointer())
-                })?))
+                let root = scope.alloc_root_uuid(*value)?;
+                Ok(EvalControl::Return(scope.pointer(root)))
             }
             _ => frame_kind_error("uuid"),
         },
         Frame::DateTime(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::DateTime(value) => {
-                Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
-                    Ok(heap.alloc_ptr_datetime(*value)?.into_pointer())
-                })?))
+                let root = scope.alloc_root_datetime(*value)?;
+                Ok(EvalControl::Return(scope.pointer(root)))
             }
             _ => frame_kind_error("datetime"),
         },
         Frame::Hole(_) => Err(EngineError::UnsupportedExpr),
-        Frame::Tuple(frame) => eval_tuple_enter(runtime, frames, frame_id, frame),
-        Frame::List(frame) => eval_list_enter(runtime, frames, frame_id, frame),
-        Frame::Dict(frame) => eval_dict_enter(runtime, frames, frame_id, frame),
+        Frame::Tuple(frame) => eval_tuple_enter(scope, frames, frame_id, frame),
+        Frame::List(frame) => eval_list_enter(scope, frames, frame_id, frame),
+        Frame::Dict(frame) => eval_dict_enter(scope, frames, frame_id, frame),
         Frame::RecordUpdate(mut frame) => {
             let base = match frame.expr.kind.as_ref() {
                 TypedExprKind::RecordUpdate { base, .. } => Arc::clone(base),
@@ -482,7 +506,8 @@ where
         }
         Frame::Var(mut frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Var { name, .. } => {
-                match eval_resolve_var(runtime, frame_id, &frame.env, name, &frame.expr.typ)? {
+                match eval_resolve_var(runtime, scope, frame_id, &frame.env, name, &frame.expr.typ)?
+                {
                     EvalVarResult::Value(value) => Ok(EvalControl::Return(value)),
                     EvalVarResult::Push { expr, env } => {
                         frame.state = FrValueState::Enter;
@@ -498,7 +523,7 @@ where
             }
             _ => frame_kind_error("var"),
         },
-        Frame::App(frame) => eval_app_enter(runtime, frames, frame_id, frame),
+        Frame::App(frame) => eval_app_enter(frames, frame_id, frame),
         Frame::Project(mut frame) => {
             let expr = match frame.expr.kind.as_ref() {
                 TypedExprKind::Project { expr, .. } => Arc::clone(expr),
@@ -514,18 +539,14 @@ where
                 let param_ty = split_fun(&frame.expr.typ)
                     .map(|(arg, _)| arg)
                     .ok_or_else(|| EngineError::NotCallable(frame.expr.typ.to_string()))?;
-                let value = runtime.heap.with_locked(|heap| {
-                    Ok(heap
-                        .alloc_ptr_closure(
-                            frame.env.clone(),
-                            param.clone(),
-                            param_ty,
-                            frame.expr.typ.clone(),
-                            Arc::clone(body),
-                        )?
-                        .into_pointer())
-                })?;
-                Ok(EvalControl::Return(value))
+                let root = scope.alloc_root_closure(
+                    frame.env.clone(),
+                    param.clone(),
+                    param_ty,
+                    frame.expr.typ.clone(),
+                    Arc::clone(body),
+                )?;
+                Ok(EvalControl::Return(scope.pointer(root)))
             }
             _ => frame_kind_error("lambda"),
         },
@@ -547,42 +568,41 @@ where
             let body = Arc::clone(body);
             let mut protected = Vec::new();
             Frame::LetRec(frame.clone()).trace_pointers(&mut protected);
-            let frame_roots = runtime.heap.temp_roots(protected.clone())?;
-            let mut slot_roots = Vec::with_capacity(bindings.len());
-            for (name, _) in &bindings {
-                let placeholder = runtime.heap.with_locked(|heap| {
-                    Ok(heap.alloc_ptr_uninitialized(name.clone())?.into_pointer())
-                })?;
-                slot_roots.push(runtime.heap.temp_roots(vec![placeholder])?);
-            }
-            let mut wrapped = Frame::LetRec(frame);
-            refresh_frame_from_roots(&mut wrapped, &protected, &frame_roots, 0)?;
-            let Frame::LetRec(mut frame) = wrapped else {
-                return frame_kind_error("let rec");
-            };
-            let mut recursive_env = frame.env.clone();
-            let mut slots = Vec::with_capacity(bindings.len());
-            for ((name, _), root) in bindings.iter().zip(slot_roots.iter()) {
-                let placeholder = root.get(0)?;
-                recursive_env = recursive_env.extend(name.clone(), placeholder);
-                slots.push(placeholder);
-            }
-            frame.recursive_env = Some(recursive_env.clone());
-            frame.slots = slots;
-            if bindings.is_empty() {
-                frame.state = FrLetRecState::EvalBody;
+
+            scope.with_temp_roots(protected.clone(), |scope, frame_roots| {
+                let mut slot_roots: Vec<RootedPtr<'_>> = Vec::with_capacity(bindings.len());
+                for (name, _) in &bindings {
+                    let root = scope.alloc_root_uninitialized(name.clone())?;
+                    slot_roots.push(root);
+                }
+                let mut wrapped = Frame::LetRec(frame);
+                refresh_frame_from_roots(scope.heap, &mut wrapped, &protected, frame_roots, 0)?;
+                let Frame::LetRec(mut frame) = wrapped else {
+                    return frame_kind_error("let rec");
+                };
+                let mut recursive_env = frame.env.clone();
+                let mut slots: Vec<Pointer> = Vec::with_capacity(bindings.len());
+                for ((name, _), root) in bindings.iter().zip(slot_roots.iter()) {
+                    recursive_env = recursive_env.extend(name.clone(), scope.pointer(*root));
+                    slots.push(scope.pointer(*root));
+                }
+                frame.recursive_env = Some(recursive_env.clone());
+                frame.slots = slots;
+                if bindings.is_empty() {
+                    frame.state = FrLetRecState::EvalBody;
+                    frames.replace(frame_id, Frame::LetRec(frame))?;
+                    return Ok(EvalControl::Push {
+                        expr: body,
+                        env: recursive_env,
+                    });
+                }
+                frame.state = FrLetRecState::EvalBinding;
+                let def = Arc::clone(&bindings[0].1);
                 frames.replace(frame_id, Frame::LetRec(frame))?;
-                return Ok(EvalControl::Push {
-                    expr: body,
+                Ok(EvalControl::Push {
+                    expr: def,
                     env: recursive_env,
-                });
-            }
-            frame.state = FrLetRecState::EvalBinding;
-            let def = Arc::clone(&bindings[0].1);
-            frames.replace(frame_id, Frame::LetRec(frame))?;
-            Ok(EvalControl::Push {
-                expr: def,
-                env: recursive_env,
+                })
             })
         }
         Frame::Ite(mut frame) => {
@@ -608,13 +628,13 @@ where
                 env,
             })
         }
-        Frame::NativeCall(frame) => eval_native_enter(runtime, frames, frame_id, frame),
+        Frame::NativeCall(frame) => eval_native_enter(scope, frames, frame_id, frame),
         Frame::NativeHost(_) => unexpected_child_result("host native"),
     }
 }
 
-fn eval_tuple_enter<State>(
-    runtime: &RuntimeCore<State>,
+fn eval_tuple_enter<'scope, State>(
+    scope: &mut RootScope<'_, 'scope>,
     frames: &mut FrameStore,
     frame_id: FrameId,
     mut frame: FrTuple,
@@ -627,9 +647,8 @@ where
         _ => return frame_kind_error("tuple"),
     };
     if elems.is_empty() {
-        return Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
-            Ok(heap.alloc_ptr_tuple(vec![])?.into_pointer())
-        })?));
+        let root = scope.alloc_root_tuple(vec![])?;
+        return Ok(EvalControl::Return(scope.pointer(root)));
     }
 
     frame.state = FrSequenceState::EvalItem;
@@ -646,8 +665,8 @@ where
     Ok(EvalControl::Schedule(children))
 }
 
-fn eval_list_enter<State>(
-    runtime: &RuntimeCore<State>,
+fn eval_list_enter<'scope, State>(
+    scope: &mut RootScope<'_, 'scope>,
     frames: &mut FrameStore,
     frame_id: FrameId,
     mut frame: FrList,
@@ -660,10 +679,8 @@ where
         _ => return frame_kind_error("list"),
     };
     if elems.is_empty() {
-        let ptr = runtime
-            .heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_empty()?.into_pointer()))?;
-        return Ok(EvalControl::Return(ptr));
+        let empty = scope.alloc_root_empty()?;
+        return Ok(EvalControl::Return(scope.pointer(empty)));
     }
 
     frame.state = FrSequenceState::EvalItem;
@@ -680,8 +697,8 @@ where
     Ok(EvalControl::Schedule(children))
 }
 
-fn eval_dict_enter<State>(
-    runtime: &RuntimeCore<State>,
+fn eval_dict_enter<'scope, State>(
+    scope: &mut RootScope<'_, 'scope>,
     frames: &mut FrameStore,
     frame_id: FrameId,
     mut frame: FrDict,
@@ -691,9 +708,8 @@ where
 {
     let exprs = dict_exprs_for_keys(&frame, &frame.keys)?;
     if exprs.is_empty() {
-        return Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
-            Ok(heap.alloc_ptr_dict(BTreeMap::new())?.into_pointer())
-        })?));
+        let root = scope.alloc_root_dict(BTreeMap::new())?;
+        return Ok(EvalControl::Return(scope.pointer(root)));
     }
 
     frame.state = FrSequenceState::EvalItem;
@@ -711,7 +727,6 @@ where
 }
 
 fn eval_record_update_updates_enter<State>(
-    _runtime: &RuntimeCore<State>,
     frames: &mut FrameStore,
     frame_id: FrameId,
     mut frame: FrRecordUpdate,
@@ -735,7 +750,6 @@ where
 }
 
 fn eval_app_enter<State>(
-    _runtime: &RuntimeCore<State>,
     frames: &mut FrameStore,
     frame_id: FrameId,
     mut frame: FrApp,
@@ -916,8 +930,9 @@ fn record_update_exprs_for_keys(
     }
 }
 
-fn eval_receive<State>(
+fn eval_receive<'scope, State>(
     runtime: &RuntimeCore<State>,
+    scope: &mut RootScope<'_, 'scope>,
     frames: &mut FrameStore,
     frame_id: FrameId,
     frame: Frame,
@@ -960,9 +975,12 @@ where
                     .ok_or_else(|| {
                         EngineError::Internal("tuple completed with missing result".into())
                     })?;
-                return Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
-                    Ok(heap.alloc_ptr_tuple(values)?.into_pointer())
-                })?));
+                let values = values
+                    .into_iter()
+                    .map(|v| scope.root(v))
+                    .collect::<Vec<_>>();
+                let root = scope.alloc_root_tuple(values)?;
+                return Ok(EvalControl::Return(scope.pointer(root)));
             }
             frames.replace(frame_id, Frame::Tuple(frame))?;
             Ok(EvalControl::Wait)
@@ -980,9 +998,13 @@ where
                 value,
             )?;
             if frame.remaining == 0 {
-                let list = runtime
-                    .heap
-                    .alloc_ptr_list(completed_values("list", &frame.values)?)?;
+                let pointers = completed_values("list", &frame.values)?;
+                let roots = pointers
+                    .into_iter()
+                    .map(|x| scope.root(x))
+                    .collect::<Vec<RootedPtr<'_>>>();
+                let root = scope.alloc_root_list(roots)?;
+                let list = scope.pointer(root);
                 return Ok(EvalControl::Return(list));
             }
             frames.replace(frame_id, Frame::List(frame))?;
@@ -1006,9 +1028,10 @@ where
                     &frame.keys,
                     completed_values("dict", &frame.values)?,
                 )?;
-                return Ok(EvalControl::Return(runtime.heap.with_locked(|heap| {
-                    Ok(heap.alloc_ptr_dict(values)?.into_pointer())
-                })?));
+                let values =
+                    BTreeMap::from_iter(values.into_iter().map(|(k, v)| (k, scope.root(v))));
+                let root = scope.alloc_root_dict(values)?;
+                return Ok(EvalControl::Return(scope.pointer(root)));
             }
             frames.replace(frame_id, Frame::Dict(frame))?;
             Ok(EvalControl::Wait)
@@ -1017,10 +1040,12 @@ where
             FrRecordUpdateState::EvalBase => {
                 frame.base_value = Some(value);
                 if frame.update_keys.is_empty() {
-                    let result = apply_record_update_values(runtime, value, BTreeMap::new())?;
+                    let value = scope.root(value);
+                    let root = apply_record_update_values(scope, value, BTreeMap::new())?;
+                    let result = scope.pointer(root);
                     return Ok(EvalControl::Return(result));
                 }
-                eval_record_update_updates_enter(runtime, frames, frame_id, frame)
+                eval_record_update_updates_enter(frames, frame_id, frame)
             }
             FrRecordUpdateState::EvalUpdate => {
                 receive_sequence_value(
@@ -1040,7 +1065,12 @@ where
                         &frame.update_keys,
                         completed_values("record update", &frame.update_values)?,
                     )?;
-                    let result = apply_record_update_values(runtime, base, update_values)?;
+                    let base = scope.root(base);
+                    let update_values = BTreeMap::from_iter(
+                        update_values.into_iter().map(|(k, v)| (k, scope.root(v))),
+                    );
+                    let root = apply_record_update_values(scope, base, update_values)?;
+                    let result = scope.pointer(root);
                     return Ok(EvalControl::Return(result));
                 }
                 frames.replace(frame_id, Frame::RecordUpdate(frame))?;
@@ -1054,22 +1084,23 @@ where
                 receive_app_child_value(&mut frame, child, value)?;
                 if frame.remaining == 0 {
                     frame.next_arg_index = 0;
-                    return continue_app_after_apply(runtime, frames, frame_id, frame, None);
+                    return continue_app_after_apply(runtime, scope, frames, frame_id, frame, None);
                 }
                 frames.replace(frame_id, Frame::App(frame))?;
                 Ok(EvalControl::Wait)
             }
             FrAppState::ApplyArg => {
-                continue_app_after_apply(runtime, frames, frame_id, frame, Some(value))
+                continue_app_after_apply(runtime, scope, frames, frame_id, frame, Some(value))
             }
             _ => unexpected_child_result("application"),
         },
         Frame::Project(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Project { field, .. } => Ok(EvalControl::Return(project_pointer(
-                &runtime.heap,
-                field,
-                &value,
-            )?)),
+            TypedExprKind::Project { field, .. } => {
+                let value = scope.root(value);
+                let res = project_pointer(scope, field, value)?;
+                let projected = scope.pointer(res);
+                Ok(EvalControl::Return(projected))
+            }
             _ => frame_kind_error("project"),
         },
         Frame::Let(mut frame) => match frame.state {
@@ -1096,10 +1127,9 @@ where
                 let slot = *frame.slots.get(idx).ok_or_else(|| {
                     EngineError::Internal("let rec frame slot index out of bounds".into())
                 })?;
-                let cell = runtime.heap.clone_cell(&value)?;
-                runtime
-                    .heap
-                    .with_locked(|heap| heap.overwrite(&slot, cell))?;
+                let value_root = scope.root(value);
+                let cell = scope.get_cell_from_rooted_ptr(value_root)?.clone();
+                scope.heap.overwrite(&slot, cell)?;
                 frame.binding_value = Some(value);
                 frame.next_binding_index += 1;
                 let recursive_env = frame.recursive_env.clone().ok_or_else(|| {
@@ -1134,10 +1164,8 @@ where
                 else {
                     return frame_kind_error("if");
                 };
-                let selected = match runtime
-                    .heap
-                    .with_locked(|heap| heap.pointer_as_bool(&value))
-                {
+                let value_root = scope.root(value);
+                let selected = match scope.root_as_bool(value_root) {
                     Ok(true) => Arc::clone(then_expr),
                     Ok(false) => Arc::clone(else_expr),
                     Err(EngineError::NativeType { got, .. }) => {
@@ -1163,46 +1191,65 @@ where
                 frame.scrutinee_value = Some(value);
                 let mut protected = Vec::new();
                 Frame::Match(frame.clone()).trace_pointers(&mut protected);
-                let frame_roots = runtime.heap.temp_roots(protected.clone())?;
-                loop {
-                    let mut wrapped = Frame::Match(frame);
-                    refresh_frame_from_roots(&mut wrapped, &protected, &frame_roots, 0)?;
-                    frame = match wrapped {
-                        Frame::Match(frame) => frame,
-                        _ => return frame_kind_error("match"),
-                    };
-                    let value = frame.scrutinee_value.ok_or_else(|| {
-                        EngineError::Internal("match frame missing scrutinee".into())
-                    })?;
-                    if frame.next_arm_index >= frame.arms.len() {
-                        return Err(EngineError::MatchFailure);
+                scope.with_temp_roots(protected.clone(), |scope, frame_roots| {
+                    loop {
+                        let mut wrapped = Frame::Match(frame);
+                        refresh_frame_from_roots(
+                            scope.heap,
+                            &mut wrapped,
+                            &protected,
+                            frame_roots,
+                            0,
+                        )?;
+                        frame = match wrapped {
+                            Frame::Match(frame) => frame,
+                            _ => return frame_kind_error("match"),
+                        };
+                        let value = frame.scrutinee_value.ok_or_else(|| {
+                            EngineError::Internal("match frame missing scrutinee".into())
+                        })?;
+                        if frame.next_arm_index >= frame.arms.len() {
+                            return Err(EngineError::MatchFailure);
+                        }
+                        let idx = frame.next_arm_index;
+                        let arm = &frame.arms[idx];
+                        let value = scope.root(value);
+                        let matched = match_pattern_ptr(scope, &arm.pattern, value)?;
+                        let matched = matched.map(|matched| {
+                            BTreeMap::from_iter(
+                                matched.into_iter().map(|(k, v)| (k, scope.pointer(v))),
+                            )
+                        });
+                        let mut wrapped = Frame::Match(frame);
+                        refresh_frame_from_roots(
+                            scope.heap,
+                            &mut wrapped,
+                            &protected,
+                            frame_roots,
+                            0,
+                        )?;
+                        frame = match wrapped {
+                            Frame::Match(frame) => frame,
+                            _ => return frame_kind_error("match"),
+                        };
+                        if let Some(bindings) = matched {
+                            let env = frame.env.extend_many(bindings);
+                            let expr = Arc::clone(&frame.arms[idx].expr);
+                            frame.next_arm_index = idx;
+                            frame.matched_env = Some(env.clone());
+                            frame.state = FrMatchState::EvalArm;
+                            frames.replace(frame_id, Frame::Match(frame))?;
+                            return Ok(EvalControl::Push { expr, env });
+                        }
+                        frame.next_arm_index += 1;
                     }
-                    let idx = frame.next_arm_index;
-                    let arm = &frame.arms[idx];
-                    let matched = match_pattern_ptr(&runtime.heap, &arm.pattern, &value)?;
-                    let mut wrapped = Frame::Match(frame);
-                    refresh_frame_from_roots(&mut wrapped, &protected, &frame_roots, 0)?;
-                    frame = match wrapped {
-                        Frame::Match(frame) => frame,
-                        _ => return frame_kind_error("match"),
-                    };
-                    if let Some(bindings) = matched {
-                        let env = frame.env.extend_many(bindings);
-                        let expr = Arc::clone(&frame.arms[idx].expr);
-                        frame.next_arm_index = idx;
-                        frame.matched_env = Some(env.clone());
-                        frame.state = FrMatchState::EvalArm;
-                        frames.replace(frame_id, Frame::Match(frame))?;
-                        return Ok(EvalControl::Push { expr, env });
-                    }
-                    frame.next_arm_index += 1;
-                }
+                })
             }
             FrMatchState::EvalArm => Ok(EvalControl::Return(value)),
             _ => unexpected_child_result("match"),
         },
         Frame::NativeCall(frame) => {
-            eval_native_receive(runtime, frames, frame_id, frame, child, value)
+            eval_native_receive(scope, frames, frame_id, frame, child, value)
         }
         Frame::NativeHost(_) => Ok(EvalControl::Return(value)),
         _ => unexpected_child_result("value"),
@@ -1210,30 +1257,32 @@ where
 }
 
 pub(crate) fn refresh_frame_from_roots(
+    heap: &HeapState,
     frame: &mut Frame,
     originals: &[Pointer],
     roots: &TempRoots,
     start: usize,
 ) -> Result<(), EngineError> {
-    if !roots.has_collected_since_creation()? {
+    if !roots.has_collected_since_creation(heap)? {
         return Ok(());
     }
 
     let mut rewrites = HashMap::with_capacity(originals.len().saturating_sub(start));
     for (idx, original) in originals.iter().enumerate().skip(start) {
-        rewrites.insert(*original, roots.get(idx)?);
+        rewrites.insert(*original, roots.get(idx, heap)?);
     }
     frame.map_pointers(&mut |pointer| Ok(rewrites.get(&pointer).copied().unwrap_or(pointer)))
 }
 
-fn eval_apply_overloaded_arg<State>(
+fn eval_apply_overloaded_arg<'scope, State>(
     runtime: &RuntimeCore<State>,
+    scope: &mut RootScope<'_, 'scope>,
     parent: FrameId,
     mut over: OverloadedFn,
     arg: Pointer,
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
-) -> Result<EvalApplyResult<State>, EngineError>
+) -> Result<EvalApplyResult<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -1246,7 +1295,8 @@ where
     }
     let (arg_ty, rest_ty) =
         split_fun(&over.typ).ok_or_else(|| EngineError::NotCallable(over.typ.to_string()))?;
-    let actual_ty = resolve_arg_type(&runtime.heap, arg_type, &arg)?;
+    let arg_root = scope.root(arg);
+    let actual_ty = resolve_arg_type(scope, arg_type, arg_root)?;
     let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
         expected: arg_ty.to_string(),
         got: actual_ty.to_string(),
@@ -1255,13 +1305,9 @@ where
     over.applied.push(arg);
     over.applied_types.push(actual_ty);
     if is_function_type(&rest_ty) {
-        return Ok(EvalApplyResult::Value(runtime.heap.with_locked(
-            |heap| {
-                Ok(heap
-                    .alloc_ptr_overloaded(over.name, rest_ty, over.applied, over.applied_types)?
-                    .into_pointer())
-            },
-        )?));
+        let applied = over.applied.into_iter().map(|x| scope.root(x)).collect();
+        let root = scope.alloc_root_overloaded(over.name, rest_ty, applied, over.applied_types)?;
+        return Ok(EvalApplyResult::Value(root));
     }
 
     let mut full_ty = rest_ty;
@@ -1270,8 +1316,8 @@ where
     }
 
     if runtime.type_system.class_methods.contains_key(&over.name) {
-        let ctx = Context::new_with_parent(runtime, parent);
-        return match ctx.resolve_class_method_plan(&over.name, &full_ty)? {
+        let ctx = InternalCtx::new_with_parent(runtime, parent);
+        return match ctx.resolve_class_method_plan(scope, &over.name, &full_ty)? {
             Ok((env, method)) => {
                 let args = over
                     .applied
@@ -1284,30 +1330,32 @@ where
                     env,
                 })
             }
-            Err(pointer) => Ok(EvalApplyResult::Value(pointer)),
+            Err(pointer) => Ok(EvalApplyResult::Value(scope.root(pointer))),
         };
     }
 
     let call_site = CallSite::child(parent);
-    let ctx = Context::new_at_call_site(runtime, call_site)
+    let ctx = InternalCtx::new_at_call_site(runtime, call_site)
         .resolve_native_impl(over.name.as_ref(), &full_ty)?;
     ctx.func
         .call_at_site(full_ty, &over.applied, call_site)
         .map(EvalApplyResult::AwaitNative)
 }
 
-fn eval_apply_arg<State>(
+fn eval_apply_arg<'scope, State>(
     runtime: &RuntimeCore<State>,
+    scope: &mut RootScope<'_, 'scope>,
     parent: FrameId,
     func: Pointer,
     arg: Pointer,
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
-) -> Result<EvalApplyResult<State>, EngineError>
+) -> Result<EvalApplyResult<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    let func_value = runtime.heap.clone_cell(&func)?;
+    let func_root = scope.root(func);
+    let func_value = scope.get_cell_from_rooted_ptr(func_root)?.clone();
     match func_value {
         Cell::Closure(Closure {
             env,
@@ -1324,7 +1372,8 @@ where
                 })?;
                 subst = compose_subst(s_fun, subst);
             }
-            let actual_ty = resolve_arg_type(&runtime.heap, arg_type, &arg)?;
+            let arg_root = scope.root(arg);
+            let actual_ty = resolve_arg_type(scope, arg_type, arg_root)?;
             let param_ty = param_ty.apply(&subst);
             let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
                 expected: param_ty.to_string(),
@@ -1337,26 +1386,25 @@ where
             })
         }
         Cell::Native(native) => {
-            match native.apply_at_site(runtime, arg, arg_type, CallSite::child(parent))? {
+            match native.apply_at_site(runtime, scope, arg, arg_type, CallSite::child(parent))? {
                 NativeApplyResult::Value(value) => Ok(EvalApplyResult::Value(value)),
                 NativeApplyResult::Task(task) => Ok(EvalApplyResult::PushNative(task)),
                 NativeApplyResult::Pending(future) => Ok(EvalApplyResult::AwaitNative(future)),
             }
         }
         Cell::Overloaded(over) => {
-            eval_apply_overloaded_arg(runtime, parent, over, arg, func_type, arg_type)
+            eval_apply_overloaded_arg(runtime, scope, parent, over, arg, func_type, arg_type)
         }
-        _ => Err(EngineError::NotCallable(
-            runtime
-                .heap
-                .with_locked(|heap| heap.type_name(&func))?
-                .into(),
-        )),
+        _ => {
+            let func_root = scope.root(func);
+            Err(EngineError::NotCallable(scope.type_name(func_root)?.into()))
+        }
     }
 }
 
-fn continue_app_after_apply<State>(
+fn continue_app_after_apply<'scope, State>(
     runtime: &RuntimeCore<State>,
+    scope: &mut RootScope<'_, 'scope>,
     frames: &mut FrameStore,
     frame_id: FrameId,
     mut frame: FrApp,
@@ -1405,45 +1453,50 @@ where
         frames.replace(frame_id, Frame::App(frame.clone()))?;
         let mut protected = vec![func, arg];
         Frame::App(frame.clone()).trace_pointers(&mut protected);
-        let roots = runtime.heap.temp_roots(protected.clone())?;
-        let apply_result = eval_apply_arg(
-            runtime,
-            frame_id,
-            func,
-            arg,
-            Some(&arg_info.func_type),
-            Some(&arg_info.expr.typ),
-        )?;
-        let mut wrapped = Frame::App(frame);
-        refresh_frame_from_roots(&mut wrapped, &protected, &roots, 0)?;
-        frame = match wrapped {
-            Frame::App(frame) => frame,
-            _ => return frame_kind_error("application"),
-        };
-        match apply_result {
-            EvalApplyResult::Value(applied) => {
-                frame.arg = None;
-                frame.func = Some(applied);
-                frame.next_arg_index += 1;
-                frames.replace(frame_id, Frame::App(frame.clone()))?;
-            }
-            EvalApplyResult::Push { expr, env } => return Ok(EvalControl::Push { expr, env }),
-            EvalApplyResult::PushNative(task) => {
-                return Ok(EvalControl::PushFrame(Box::new(Frame::NativeCall(
-                    FrNativeCall {
+        let control = scope.with_temp_roots(protected.clone(), |scope, roots| {
+            let apply_result = eval_apply_arg(
+                runtime,
+                scope,
+                frame_id,
+                func,
+                arg,
+                Some(&arg_info.func_type),
+                Some(&arg_info.expr.typ),
+            )?;
+            let mut wrapped = Frame::App(frame.clone());
+            refresh_frame_from_roots(scope.heap, &mut wrapped, &protected, roots, 0)?;
+            frame = match wrapped {
+                Frame::App(frame) => frame,
+                _ => return frame_kind_error("application"),
+            };
+            match apply_result {
+                EvalApplyResult::Value(applied) => {
+                    frame.arg = None;
+                    frame.func = Some(scope.pointer(applied));
+                    frame.next_arg_index += 1;
+                    frames.replace(frame_id, Frame::App(frame.clone()))?;
+                    Ok(None)
+                }
+                EvalApplyResult::Push { expr, env } => Ok(Some(EvalControl::Push { expr, env })),
+                EvalApplyResult::PushNative(task) => Ok(Some(EvalControl::PushFrame(Box::new(
+                    Frame::NativeCall(FrNativeCall {
                         parent: Some(frame_id),
                         state: FrNativeCallState::Enter,
                         task,
-                    },
-                ))));
+                    }),
+                )))),
+                EvalApplyResult::AwaitNative(future) => Ok(Some(EvalControl::AwaitNative(future))),
             }
-            EvalApplyResult::AwaitNative(future) => return Ok(EvalControl::AwaitNative(future)),
+        })?;
+        if let Some(control) = control {
+            return Ok(control);
         }
     }
 }
 
-fn eval_resolve_var<State>(
+fn eval_resolve_var<'scope, State>(
     runtime: &RuntimeCore<State>,
+    scope: &mut RootScope<'_, 'scope>,
     parent: FrameId,
     env: &Environment,
     name: &Symbol,
@@ -1453,15 +1506,13 @@ where
     State: Clone + Send + Sync + 'static,
 {
     if let Some(ptr) = env.get(name) {
-        let native =
-            runtime
-                .heap
-                .with_locked(|heap| match heap.get_cell_from_pointer(&ptr)? {
-                    Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        Ok(Some(native.clone()))
-                    }
-                    _ => Ok(None),
-                })?;
+        let ptr_root = scope.root(ptr);
+        let native = match scope.get_cell_from_rooted_ptr(ptr_root)? {
+            Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                Some(native.clone())
+            }
+            _ => None,
+        };
         if let Some(native) = native {
             native
                 .call_zero_at_site(runtime, CallSite::child(parent))
@@ -1470,11 +1521,11 @@ where
             Ok(EvalVarResult::Value(ptr))
         }
     } else if runtime.type_system.class_methods.contains_key(name) {
-        let ctx = Context::new_with_parent(runtime, parent);
+        let ctx = InternalCtx::new_with_parent(runtime, parent);
         if let Some(pointer) = ctx.cached_class_method(name, typ) {
             return Ok(EvalVarResult::Value(pointer));
         }
-        match ctx.resolve_class_method_plan(name, typ)? {
+        match ctx.resolve_class_method_plan(scope, name, typ)? {
             Ok((env, specialized)) => Ok(EvalVarResult::Push {
                 expr: Arc::new(specialized),
                 env,
@@ -1482,16 +1533,15 @@ where
             Err(pointer) => Ok(EvalVarResult::Value(pointer)),
         }
     } else {
-        let ctx = Context::new_with_parent(runtime, parent).resolve_native(name.as_ref(), typ)?;
-        let native =
-            runtime
-                .heap
-                .with_locked(|heap| match heap.get_cell_from_pointer(&ctx)? {
-                    Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        Ok(Some(native.clone()))
-                    }
-                    _ => Ok(None),
-                })?;
+        let ctx = InternalCtx::new_with_parent(runtime, parent);
+        let ctx = ctx.resolve_native(scope, name.as_ref(), typ)?;
+        let ctx_root = scope.root(ctx);
+        let native = match scope.get_cell_from_rooted_ptr(ctx_root)? {
+            Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                Some(native.clone())
+            }
+            _ => None,
+        };
         if let Some(native) = native {
             native
                 .call_zero_at_site(runtime, CallSite::child(parent))
@@ -1502,53 +1552,53 @@ where
     }
 }
 
-fn apply_record_update_values<State>(
-    runtime: &RuntimeCore<State>,
-    base_ptr: Pointer,
-    update_vals: BTreeMap<Symbol, Pointer>,
-) -> Result<Pointer, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    enum RecordUpdateTarget {
-        Dict(BTreeMap<Symbol, Pointer>),
-        Adt(Symbol, BTreeMap<Symbol, Pointer>),
+fn apply_record_update_values<'scope>(
+    scope: &mut RootScope<'_, 'scope>,
+    base_ptr: RootedPtr<'scope>,
+    update_vals: BTreeMap<Symbol, RootedPtr<'scope>>,
+) -> Result<RootedPtr<'scope>, EngineError> {
+    enum RecordUpdateTarget<'a> {
+        Dict(BTreeMap<Symbol, RootedPtr<'a>>),
+        Adt(Symbol, BTreeMap<Symbol, RootedPtr<'a>>),
     }
 
-    let target = runtime.heap.with_locked(|heap| {
-        let base_val = heap.get_cell_from_pointer(&base_ptr)?;
-        match base_val {
-            Cell::Dict(map) => Ok(RecordUpdateTarget::Dict(map.clone())),
-            Cell::Adt(tag, args) if args.len() == 1 => {
-                let inner = heap.get_cell_from_pointer(&args[0])?;
-                match inner {
-                    Cell::Dict(map) => Ok(RecordUpdateTarget::Adt(tag.clone(), map.clone())),
-                    _ => Err(EngineError::UnsupportedExpr),
-                }
-            }
-            _ => Err(EngineError::UnsupportedExpr),
+    let base_val = scope.get_cell_from_rooted_ptr(base_ptr)?.clone();
+    let target = match base_val {
+        Cell::Dict(map) => {
+            let map = BTreeMap::from_iter(map.into_iter().map(|(k, v)| (k, scope.root(v))));
+            Ok(RecordUpdateTarget::Dict(map))
         }
-    })?;
+        Cell::Adt(tag, args) if args.len() == 1 => {
+            let arg0 = scope.root(args[0]);
+            let inner = scope.get_cell_from_rooted_ptr(arg0)?.clone();
+            match inner {
+                Cell::Dict(map) => {
+                    let map = BTreeMap::from_iter(map.into_iter().map(|(k, v)| (k, scope.root(v))));
+                    Ok(RecordUpdateTarget::Adt(tag.clone(), map.clone()))
+                }
+                _ => Err(EngineError::UnsupportedExpr),
+            }
+        }
+        _ => Err(EngineError::UnsupportedExpr),
+    }?;
 
     match target {
         RecordUpdateTarget::Dict(mut map) => {
             for (key, value) in update_vals {
                 map.insert(key, value);
             }
-            runtime
-                .heap
-                .with_locked(|heap| Ok(heap.alloc_ptr_dict(map)?.into_pointer()))
+            let root = scope.alloc_root_dict(map)?;
+            Ok(root)
         }
         RecordUpdateTarget::Adt(tag, mut map) => {
             for (key, value) in update_vals {
                 map.insert(key, value);
             }
-            let dict = runtime
-                .heap
-                .with_locked(|heap| Ok(heap.alloc_ptr_dict(map)?.into_pointer()))?;
-            runtime
-                .heap
-                .with_locked(|heap| Ok(heap.alloc_ptr_adt(tag, vec![dict])?.into_pointer()))
+            let root = scope.alloc_root_dict(map)?;
+            let dict = scope.pointer(root);
+            let dict = scope.root(dict);
+            let root = scope.alloc_root_adt(tag, vec![dict])?;
+            Ok(root)
         }
     }
 }
@@ -1565,34 +1615,34 @@ pub(crate) fn unexpected_child_result<T>(frame: &'static str) -> Result<T, Engin
     )))
 }
 
-fn match_pattern_ptr(
-    heap: &Heap,
+fn match_pattern_ptr<'scope>(
+    scope: &mut RootScope<'_, 'scope>,
     pat: &Pattern,
-    value: &Pointer,
-) -> Result<Option<BTreeMap<Symbol, Pointer>>, EngineError> {
+    value: RootedPtr<'scope>,
+) -> Result<Option<BTreeMap<Symbol, RootedPtr<'scope>>>, EngineError> {
     match pat {
         Pattern::Wildcard(..) => Ok(Some(BTreeMap::new())),
         Pattern::Var(var) => {
             let mut bindings = BTreeMap::new();
-            bindings.insert(var.name.clone(), *value);
+            bindings.insert(var.name.clone(), value);
             Ok(Some(bindings))
         }
         Pattern::Named(_, name, ps) => {
             let expected = name.to_dotted_symbol();
-            let (args, is_list) = heap.with_locked(|heap| {
-                let v = heap.get_cell_from_pointer(value)?;
-                match v {
-                    Cell::Adt(vname, args)
-                        if runtime_ctor_matches(vname, &expected) && args.len() == ps.len() =>
-                    {
-                        Ok((Some(args.clone()), false))
-                    }
-                    Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. } => Ok((None, true)),
-                    _ => Ok((None, false)),
+            let v = scope.get_cell_from_rooted_ptr(value)?.clone();
+            let (args, is_list) = match v {
+                Cell::Adt(vname, args)
+                    if runtime_ctor_matches(&vname, &expected) && args.len() == ps.len() =>
+                {
+                    let args: Vec<RootedPtr<'_>> =
+                        args.into_iter().map(|x| scope.root(x)).collect();
+                    (Some(args), false)
                 }
-            })?;
+                Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. } => (None, true),
+                _ => (None, false),
+            };
             if let Some(args) = args {
-                return match_patterns(heap, ps, &args);
+                return match_patterns(scope, ps, &args);
             }
             if !is_list {
                 return Ok(None);
@@ -1604,28 +1654,28 @@ fn match_pattern_ptr(
                 .next()
                 .unwrap_or(expected.as_ref())
             {
-                "Empty" if ps.is_empty() => Ok((heap.list_len(value)? == 0).then(BTreeMap::new)),
+                "Empty" if ps.is_empty() => Ok((scope.list_len(value)? == 0).then(BTreeMap::new)),
                 "Cons" if ps.len() == 2 => {
-                    let Some((head, tail)) = heap.list_head_tail(value)? else {
+                    let Some((head, tail)) = scope.list_head_tail(value)? else {
                         return Ok(None);
                     };
-                    match_patterns(heap, ps, &[head, tail])
+                    match_patterns(scope, ps, &[head, tail])
                 }
                 _ => Ok(None),
             }
         }
-        Pattern::Tuple(_, ps) => {
-            let Some(xs) = heap.with_locked(|heap| match heap.get_cell_from_pointer(value)? {
-                Cell::Tuple(xs) if xs.len() == ps.len() => Ok(Some(xs.clone())),
-                _ => Ok(None),
-            })?
-            else {
-                return Ok(None);
-            };
-            match_patterns(heap, ps, &xs)
-        }
+        Pattern::Tuple(_, ps) => match scope.get_cell_from_rooted_ptr(value)?.clone() {
+            Cell::Tuple(xs) if xs.len() == ps.len() => {
+                let xs = xs
+                    .into_iter()
+                    .map(|x| scope.root(x))
+                    .collect::<Vec<RootedPtr<'_>>>();
+                match_patterns(scope, ps, &xs)
+            }
+            _ => Ok(None),
+        },
         Pattern::List(_, ps) => {
-            if heap.list_len(value)? != ps.len() {
+            if scope.list_len(value)? != ps.len() {
                 return Ok(None);
             }
             if ps
@@ -1634,34 +1684,34 @@ fn match_pattern_ptr(
             {
                 return Ok(Some(BTreeMap::new()));
             }
-            let values = heap.list_items(*value)?;
-            match_list_patterns(heap, ps, values)
+            let values: ListRootedItems = scope.list_items(value)?;
+            match_list_patterns(scope, ps, values)
         }
         Pattern::Cons(_, head, tail) => {
-            let Some((head_value, tail_value)) = heap.list_head_tail(value)? else {
+            let Some((head_value, tail_value)) = scope.list_head_tail(value)? else {
                 return Ok(None);
             };
             match_patterns(
-                heap,
+                scope,
                 &[head.as_ref().clone(), tail.as_ref().clone()],
                 &[head_value, tail_value],
             )
         }
         Pattern::Dict(_, fields) => {
-            let Some(values) = heap.with_locked(|heap| {
-                let v = heap.get_cell_from_pointer(value)?;
+            let Some(values) = (|| {
+                let v = scope.get_cell_from_rooted_ptr(value)?.clone();
                 let Cell::Dict(map) = v else {
-                    return Ok(None);
+                    return Ok::<Option<Vec<RootedPtr<'_>>>, EngineError>(None);
                 };
                 let mut values = Vec::with_capacity(fields.len());
                 for (key, _) in fields {
                     let Some(pointer) = map.get(key) else {
                         return Ok(None);
                     };
-                    values.push(*pointer);
+                    values.push(scope.root(*pointer));
                 }
                 Ok(Some(values))
-            })?
+            })()?
             else {
                 return Ok(None);
             };
@@ -1669,94 +1719,48 @@ fn match_pattern_ptr(
                 .iter()
                 .map(|(_, pattern)| pattern.clone())
                 .collect::<Vec<_>>();
-            match_patterns(heap, &patterns, &values)
+            match_patterns(scope, &patterns, &values)
         }
     }
 }
 
-fn match_list_patterns(
-    heap: &Heap,
+fn match_list_patterns<'scope>(
+    scope: &mut RootScope<'_, 'scope>,
     patterns: &[Pattern],
-    mut values: ListItems,
-) -> Result<Option<BTreeMap<Symbol, Pointer>>, EngineError> {
+    values: ListRootedItems<'scope>,
+) -> Result<Option<BTreeMap<Symbol, RootedPtr<'scope>>>, EngineError> {
     if patterns.len() != values.len() {
         return Ok(None);
     }
 
-    let mut value_pointers = Vec::new();
-    values.trace_pointers(&mut value_pointers);
-    let value_roots = heap.temp_roots(value_pointers)?;
     let mut bindings = BTreeMap::new();
-
     for (index, pattern) in patterns.iter().enumerate() {
         if matches!(pattern, Pattern::Wildcard(..)) {
             continue;
         }
-
-        let binding_roots = heap.temp_roots(bindings.values().copied().collect::<Vec<_>>())?;
-        refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
-        refresh_list_items_from_roots(&mut values, &value_roots)?;
-
-        let value = heap.with_locked(|heap| values.get(heap, index))?;
-        let value_root = heap.temp_roots(vec![value])?;
-        let value = value_root.get(0)?;
-        let Some(sub) = match_pattern_ptr(heap, pattern, &value)? else {
+        let value = values.get(scope, index)?;
+        let Some(sub) = match_pattern_ptr(scope, pattern, value)? else {
             return Ok(None);
         };
-
-        refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
-        refresh_list_items_from_roots(&mut values, &value_roots)?;
         bindings.extend(sub);
     }
     Ok(Some(bindings))
 }
 
-fn match_patterns(
-    heap: &Heap,
+fn match_patterns<'scope>(
+    scope: &mut RootScope<'_, 'scope>,
     patterns: &[Pattern],
-    values: &[Pointer],
-) -> Result<Option<BTreeMap<Symbol, Pointer>>, EngineError> {
-    let value_roots = heap.temp_roots(values.to_vec())?;
+    values: &[RootedPtr<'scope>],
+) -> Result<Option<BTreeMap<Symbol, RootedPtr<'scope>>>, EngineError> {
     let mut bindings = BTreeMap::new();
     for (index, p) in patterns.iter().enumerate() {
-        let binding_roots = heap.temp_roots(bindings.values().copied().collect::<Vec<_>>())?;
-        refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
-        let value = value_roots.get(index)?;
-        let Some(sub) = match_pattern_ptr(heap, p, &value)? else {
+        let value = values[index];
+        let Some(sub) = match_pattern_ptr(scope, p, value)? else {
             return Ok(None);
         };
-        refresh_bindings_from_roots(&mut bindings, &binding_roots)?;
         bindings.extend(sub);
     }
     Ok(Some(bindings))
-}
-
-fn refresh_bindings_from_roots(
-    bindings: &mut BTreeMap<Symbol, Pointer>,
-    roots: &TempRoots,
-) -> Result<(), EngineError> {
-    for (index, pointer) in bindings.values_mut().enumerate() {
-        *pointer = roots.get(index)?;
-    }
-    Ok(())
-}
-
-fn refresh_list_items_from_roots(
-    items: &mut ListItems,
-    roots: &TempRoots,
-) -> Result<(), EngineError> {
-    let mut index = 0;
-    items.map_pointers(&mut |_| {
-        let pointer = roots.get(index);
-        index += 1;
-        pointer
-    })?;
-    if index != roots.len() {
-        return Err(EngineError::Internal(
-            "list item root count does not match pointer count".into(),
-        ));
-    }
-    Ok(())
 }
 
 fn runtime_ctor_matches(actual: &Symbol, expected: &Symbol) -> bool {
@@ -1772,13 +1776,13 @@ fn runtime_ctor_matches(actual: &Symbol, expected: &Symbol) -> bool {
             .unwrap_or(expected.as_ref())
 }
 
-fn alloc_uint_literal_as<'a>(
-    heap: &'a mut HeapState,
+fn alloc_uint_literal_as<'scope>(
+    scope: &mut RootScope<'_, 'scope>,
     value: u64,
     typ: &Type,
-) -> Result<Reference<'a>, EngineError> {
+) -> Result<RootedPtr<'scope>, EngineError> {
     match typ.as_ref() {
-        TypeKind::Var(_) => Ok(heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
+        TypeKind::Var(_) => Ok(scope.alloc_root_i32(i32::try_from(value).map_err(|_| {
             EngineError::NativeType {
                 expected: "i32".into(),
                 got: value.to_string(),
@@ -1786,7 +1790,7 @@ fn alloc_uint_literal_as<'a>(
         })?)?),
         TypeKind::Con(tc) => match tc.builtin_id() {
             Some(BuiltinTypeId::U8) => {
-                Ok(heap.alloc_ptr_u8(u8::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_u8(u8::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u8".into(),
                         got: value.to_string(),
@@ -1794,7 +1798,7 @@ fn alloc_uint_literal_as<'a>(
                 })?)?)
             }
             Some(BuiltinTypeId::U16) => {
-                Ok(heap.alloc_ptr_u16(u16::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_u16(u16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u16".into(),
                         got: value.to_string(),
@@ -1802,16 +1806,16 @@ fn alloc_uint_literal_as<'a>(
                 })?)?)
             }
             Some(BuiltinTypeId::U32) => {
-                Ok(heap.alloc_ptr_u32(u32::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_u32(u32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u32".into(),
                         got: value.to_string(),
                     }
                 })?)?)
             }
-            Some(BuiltinTypeId::U64) => Ok(heap.alloc_ptr_u64(value)?),
+            Some(BuiltinTypeId::U64) => Ok(scope.alloc_root_u64(value)?),
             Some(BuiltinTypeId::I8) => {
-                Ok(heap.alloc_ptr_i8(i8::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_i8(i8::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i8".into(),
                         got: value.to_string(),
@@ -1819,7 +1823,7 @@ fn alloc_uint_literal_as<'a>(
                 })?)?)
             }
             Some(BuiltinTypeId::I16) => {
-                Ok(heap.alloc_ptr_i16(i16::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_i16(i16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i16".into(),
                         got: value.to_string(),
@@ -1827,7 +1831,7 @@ fn alloc_uint_literal_as<'a>(
                 })?)?)
             }
             Some(BuiltinTypeId::I32) => {
-                Ok(heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_i32(i32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i32".into(),
                         got: value.to_string(),
@@ -1835,7 +1839,7 @@ fn alloc_uint_literal_as<'a>(
                 })?)?)
             }
             Some(BuiltinTypeId::I64) => {
-                Ok(heap.alloc_ptr_i64(i64::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_i64(i64::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i64".into(),
                         got: value.to_string(),
@@ -1854,13 +1858,13 @@ fn alloc_uint_literal_as<'a>(
     }
 }
 
-fn alloc_int_literal_as<'a>(
-    heap: &'a mut HeapState,
+fn alloc_int_literal_as<'scope>(
+    scope: &mut RootScope<'_, 'scope>,
     value: i64,
     typ: &Type,
-) -> Result<Reference<'a>, EngineError> {
+) -> Result<RootedPtr<'scope>, EngineError> {
     match typ.as_ref() {
-        TypeKind::Var(_) => Ok(heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
+        TypeKind::Var(_) => Ok(scope.alloc_root_i32(i32::try_from(value).map_err(|_| {
             EngineError::NativeType {
                 expected: "i32".into(),
                 got: value.to_string(),
@@ -1868,7 +1872,7 @@ fn alloc_int_literal_as<'a>(
         })?)?),
         TypeKind::Con(tc) => match tc.builtin_id() {
             Some(BuiltinTypeId::I8) => {
-                Ok(heap.alloc_ptr_i8(i8::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_i8(i8::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i8".into(),
                         got: value.to_string(),
@@ -1876,7 +1880,7 @@ fn alloc_int_literal_as<'a>(
                 })?)?)
             }
             Some(BuiltinTypeId::I16) => {
-                Ok(heap.alloc_ptr_i16(i16::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_i16(i16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i16".into(),
                         got: value.to_string(),
@@ -1884,16 +1888,16 @@ fn alloc_int_literal_as<'a>(
                 })?)?)
             }
             Some(BuiltinTypeId::I32) => {
-                Ok(heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_i32(i32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i32".into(),
                         got: value.to_string(),
                     }
                 })?)?)
             }
-            Some(BuiltinTypeId::I64) => Ok(heap.alloc_ptr_i64(value)?),
+            Some(BuiltinTypeId::I64) => Ok(scope.alloc_root_i64(value)?),
             Some(BuiltinTypeId::U8) => {
-                Ok(heap.alloc_ptr_u8(u8::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_u8(u8::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u8".into(),
                         got: value.to_string(),
@@ -1901,7 +1905,7 @@ fn alloc_int_literal_as<'a>(
                 })?)?)
             }
             Some(BuiltinTypeId::U16) => {
-                Ok(heap.alloc_ptr_u16(u16::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_u16(u16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u16".into(),
                         got: value.to_string(),
@@ -1909,7 +1913,7 @@ fn alloc_int_literal_as<'a>(
                 })?)?)
             }
             Some(BuiltinTypeId::U32) => {
-                Ok(heap.alloc_ptr_u32(u32::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_u32(u32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u32".into(),
                         got: value.to_string(),
@@ -1917,7 +1921,7 @@ fn alloc_int_literal_as<'a>(
                 })?)?)
             }
             Some(BuiltinTypeId::U64) => {
-                Ok(heap.alloc_ptr_u64(u64::try_from(value).map_err(|_| {
+                Ok(scope.alloc_root_u64(u64::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u64".into(),
                         got: value.to_string(),
@@ -1936,22 +1940,16 @@ fn alloc_int_literal_as<'a>(
     }
 }
 
-fn alloc_float_literal_as<State: Clone + Send + Sync + 'static>(
-    engine: &RuntimeCore<State>,
+fn alloc_float_literal_as<'scope>(
+    scope: &mut RootScope<'_, 'scope>,
     value: f64,
     typ: &Type,
-) -> Result<Pointer, EngineError> {
+) -> Result<RootedPtr<'scope>, EngineError> {
     match typ.as_ref() {
-        TypeKind::Var(_) => engine
-            .heap
-            .with_locked(|heap| Ok(heap.alloc_ptr_f32(value as f32)?.into_pointer())),
+        TypeKind::Var(_) => scope.alloc_root_f32(value as f32),
         TypeKind::Con(tc) => match tc.builtin_id() {
-            Some(BuiltinTypeId::F32) => engine
-                .heap
-                .with_locked(|heap| Ok(heap.alloc_ptr_f32(value as f32)?.into_pointer())),
-            Some(BuiltinTypeId::F64) => engine
-                .heap
-                .with_locked(|heap| Ok(heap.alloc_ptr_f64(value)?.into_pointer())),
+            Some(BuiltinTypeId::F32) => scope.alloc_root_f32(value as f32),
+            Some(BuiltinTypeId::F64) => scope.alloc_root_f64(value),
             _ => Err(EngineError::NativeType {
                 expected: "f32 or f64".into(),
                 got: typ.to_string(),
@@ -1964,8 +1962,8 @@ fn alloc_float_literal_as<State: Clone + Send + Sync + 'static>(
     }
 }
 
-enum EvalApplyResult<State: Clone + Send + Sync + 'static> {
-    Value(Pointer),
+enum EvalApplyResult<'scope, State: Clone + Send + Sync + 'static> {
+    Value(RootedPtr<'scope>),
     Push {
         expr: Arc<TypedExpr>,
         env: Environment,
@@ -1983,22 +1981,19 @@ enum EvalVarResult<State: Clone + Send + Sync + 'static> {
     AwaitNative(NativeCallRequest<State>),
 }
 
-fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Pointer, EngineError> {
-    heap.with_locked(|heap| project_pointer_with_access(heap, field, pointer))
-}
-
-fn project_pointer_with_access(
-    heap: &HeapState,
+fn project_pointer<'scope>(
+    scope: &mut RootScope<'_, 'scope>,
     field: &Symbol,
-    pointer: &Pointer,
-) -> Result<Pointer, EngineError> {
-    let value = heap.get_cell_from_pointer(pointer)?;
+    pointer: RootedPtr<'scope>,
+) -> Result<RootedPtr<'scope>, EngineError> {
+    let value = scope.get_cell_from_rooted_ptr(pointer)?.clone();
     if let Ok(index) = field.as_ref().parse::<usize>() {
         return match value {
             Cell::Tuple(items) => {
                 items
                     .get(index)
                     .cloned()
+                    .map(|x| scope.root(x))
                     .ok_or_else(|| EngineError::UnknownField {
                         field: field.clone(),
                         value: "tuple".into(),
@@ -2006,17 +2001,19 @@ fn project_pointer_with_access(
             }
             _ => Err(EngineError::UnknownField {
                 field: field.clone(),
-                value: heap.type_name(pointer)?.into(),
+                value: scope.type_name(pointer)?.into(),
             }),
         };
     }
     match value {
         Cell::Adt(_, args) if args.len() == 1 => {
-            let inner = heap.get_cell_from_pointer(&args[0])?;
+            let arg0 = scope.root(args[0]);
+            let inner = scope.get_cell_from_rooted_ptr(arg0)?.clone();
             match inner {
                 Cell::Dict(map) => {
                     map.get(field)
                         .cloned()
+                        .map(|x| scope.root(x))
                         .ok_or_else(|| EngineError::UnknownField {
                             field: field.clone(),
                             value: "record".into(),
@@ -2024,17 +2021,16 @@ fn project_pointer_with_access(
                 }
                 _ => Err(EngineError::UnknownField {
                     field: field.clone(),
-                    value: heap.type_name(&args[0])?.into(),
+                    value: scope.type_name(arg0)?.into(),
                 }),
             }
         }
         _ => Err(EngineError::UnknownField {
             field: field.clone(),
-            value: heap.type_name(pointer)?.into(),
+            value: scope.type_name(pointer)?.into(),
         }),
     }
 }
-
 pub(crate) fn synthetic_application_expr_from_head(
     mut env: Environment,
     head: TypedExpr,
@@ -2077,10 +2073,17 @@ mod tests {
     fn binary_list_length_and_wildcard_patterns_do_not_allocate_elements() {
         let heap = Heap::new();
         let list = heap
-            .alloc_ptr_binary_list(vec![10, 20, 30, 40])
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_binary_list(vec![10, 20, 30, 40])?;
+                    Ok(scope.pointer(root))
+                })
+            })
             .expect("binary list should allocate");
         let list = heap.handle(list).expect("binary list should be rooted");
-        let pointer = list.pointer().expect("binary list pointer should resolve");
+        let pointer = heap
+            .with_locked(|heap| list.pointer(heap))
+            .expect("binary list pointer should resolve");
         heap.with_locked_ok(|heap| heap.set_collect_on_every_alloc(true))
             .expect("collection setting should succeed");
         let collections_before = heap
@@ -2088,28 +2091,51 @@ mod tests {
             .expect("collection count should be available");
 
         let empty = Pattern::List(Span::default(), Vec::new());
-        assert!(
-            match_pattern_ptr(&heap, &empty, &pointer)
-                .expect("pattern matching should not error")
-                .is_none()
-        );
+        heap.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let pointer = scope.root(pointer);
+                assert!(
+                    match_pattern_ptr(scope, &empty, pointer)
+                        .expect("pattern matching should not error")
+                        .is_none()
+                );
+                Ok(())
+            })
+        })
+        .unwrap();
 
         let wrong_len = Pattern::List(Span::default(), vec![wildcard()]);
-        assert!(
-            match_pattern_ptr(&heap, &wrong_len, &pointer)
-                .expect("pattern matching should not error")
-                .is_none()
-        );
+        heap.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let pointer = scope.root(pointer);
+                assert!(
+                    match_pattern_ptr(scope, &wrong_len, pointer)
+                        .expect("pattern matching should not error")
+                        .is_none()
+                );
+                Ok(())
+            })
+        })
+        .unwrap();
 
         let exact_wildcards = Pattern::List(
             Span::default(),
             vec![wildcard(), wildcard(), wildcard(), wildcard()],
         );
-        assert_eq!(
-            match_pattern_ptr(&heap, &exact_wildcards, &pointer)
-                .expect("pattern matching should not error"),
-            Some(BTreeMap::new())
-        );
+        heap.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let pointer = scope.root(pointer);
+                assert_eq!(
+                    match_pattern_ptr(scope, &exact_wildcards, pointer)
+                        .expect("pattern matching should not error")
+                        .unwrap()
+                        .len(),
+                    0
+                );
+                Ok(())
+            })
+        })
+        .unwrap();
         assert_eq!(
             heap.with_locked(|heap| Ok(heap.collection_count()))
                 .expect("collection count should be available"),
@@ -2121,17 +2147,30 @@ mod tests {
     #[test]
     fn nested_binary_list_bindings_survive_collection() {
         let heap = Heap::new();
-        let first = heap
-            .alloc_ptr_binary_list(vec![10])
-            .expect("first binary list should allocate");
-        let second = heap
-            .alloc_ptr_binary_list(vec![20])
-            .expect("second binary list should allocate");
-        let outer = heap
-            .alloc_ptr_list(vec![first, second])
-            .expect("outer list should allocate");
+        let (_first, _second, outer) = heap
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let first = scope
+                        .alloc_root_binary_list(vec![10])
+                        .expect("first binary list should allocate");
+                    let second = scope
+                        .alloc_root_binary_list(vec![20])
+                        .expect("second binary list should allocate");
+                    let outer = scope
+                        .alloc_root_list(vec![first, second])
+                        .expect("outer list should allocate");
+
+                    let first = scope.pointer(first);
+                    let second = scope.pointer(second);
+                    let outer = scope.pointer(outer);
+                    Ok((first, second, outer))
+                })
+            })
+            .unwrap();
         let outer = heap.handle(outer).expect("outer list should be rooted");
-        let pointer = outer.pointer().expect("outer list pointer should resolve");
+        let pointer = heap
+            .with_locked(|heap| outer.pointer(heap))
+            .expect("outer list pointer should resolve");
         let x = Symbol::intern("x");
         let y = Symbol::intern("y");
         let pattern = Pattern::List(
@@ -2147,24 +2186,32 @@ mod tests {
         let collections_before = heap
             .with_locked_ok(|heap| heap.collection_count())
             .expect("collection count should be available");
-        let bindings = match_pattern_ptr(&heap, &pattern, &pointer)
-            .expect("pattern matching should not error")
-            .expect("nested list pattern should match");
+        let bindings = heap
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let pointer = scope.root(pointer);
+                    let res = match_pattern_ptr(scope, &pattern, pointer)
+                        .expect("pattern matching should not error")
+                        .expect("nested list pattern should match");
+                    Ok(BTreeMap::from_iter(
+                        res.into_iter().map(|(k, v)| (k, scope.pointer(v))),
+                    ))
+                })
+            })
+            .unwrap();
 
-        assert_eq!(
-            heap.with_locked(
-                |heap| heap.pointer_as_u8(bindings.get(&x).expect("x should be bound"))
-            )
-            .expect("x should be a u8"),
-            10
-        );
-        assert_eq!(
-            heap.with_locked(
-                |heap| heap.pointer_as_u8(bindings.get(&y).expect("y should be bound"))
-            )
-            .expect("y should be a u8"),
-            20
-        );
+        heap.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let x = bindings.get(&x).expect("x should be bound");
+                let x = scope.root(*x);
+                assert_eq!(scope.root_as_u8(x).expect("x should be a u8"), 10);
+                let y = bindings.get(&y).expect("y should be bound");
+                let y = scope.root(*y);
+                assert_eq!(scope.root_as_u8(y).expect("y should be a u8"), 20);
+                Ok(())
+            })
+        })
+        .unwrap();
         assert_eq!(
             heap.with_locked(|heap| Ok(heap.collection_count()))
                 .expect("collection count should be available")

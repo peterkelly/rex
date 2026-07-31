@@ -3,14 +3,17 @@ use crate::{
     error::EngineError,
     evaluator::{
         CallSite,
-        context::Context,
+        context::InternalCtx,
         native_callable::{NativeCallable, SchedulerNativeResult},
         native_functions::NativeTask,
         resolve_arg_type,
         runtime_core::RuntimeCore,
     },
     handlers::NativeCallRequest,
-    memory::{heap::Pointer, traits::Collection},
+    memory::{
+        heap::{Pointer, RootScope, RootedPtr},
+        traits::Collection,
+    },
     util::{is_function_type, split_fun},
 };
 use rex_ast::Symbol;
@@ -19,8 +22,8 @@ use rex_typesystem::{
     unification::unify,
 };
 
-pub(crate) enum NativeApplyResult<State: Clone + Send + Sync + 'static> {
-    Value(Pointer),
+pub(crate) enum NativeApplyResult<'scope, State: Clone + Send + Sync + 'static> {
+    Value(RootedPtr<'scope>),
     Task(NativeTask),
     Pending(NativeCallRequest<State>),
 }
@@ -97,13 +100,14 @@ impl NativeFn {
             .call_at_site(self.typ.clone(), &[], call_site)
     }
 
-    pub(crate) fn apply_at_site<State: Clone + Send + Sync + 'static>(
+    pub(crate) fn apply_at_site<'scope, State: Clone + Send + Sync + 'static>(
         mut self,
         runtime: &RuntimeCore<State>,
+        scope: &mut RootScope<'_, 'scope>,
         arg: Pointer,
         arg_type: Option<&Type>,
         call_site: CallSite,
-    ) -> Result<NativeApplyResult<State>, EngineError> {
+    ) -> Result<NativeApplyResult<'scope, State>, EngineError> {
         // `self` is an owned copy cloned from heap storage; we mutate it to
         // accumulate partial-application state and never mutate shared values.
         if self.arity == 0 {
@@ -115,13 +119,14 @@ impl NativeFn {
         }
         let (arg_ty, rest_ty) =
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
-        let actual_ty = resolve_arg_type(&runtime.heap, arg_type, &arg)?;
+        let arg = scope.root(arg);
+        let actual_ty = resolve_arg_type(scope, arg_type, arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
             expected: arg_ty.to_string(),
             got: actual_ty.to_string(),
         })?;
         self.typ = rest_ty.apply(&subst);
-        self.applied.push(arg);
+        self.applied.push(scope.pointer(arg));
         self.applied_types.push(actual_ty);
         if is_function_type(&self.typ) {
             let NativeFn {
@@ -132,14 +137,10 @@ impl NativeFn {
                 applied,
                 applied_types,
             } = self;
-            return runtime
-                .heap
-                .with_locked(|heap| {
-                    Ok(heap
-                        .alloc_ptr_native(native_id, name, arity, typ, applied, applied_types)?
-                        .into_pointer())
-                })
-                .map(NativeApplyResult::Value);
+            let applied = applied.into_iter().map(|x| scope.root(x)).collect();
+            let root =
+                scope.alloc_root_native(native_id, name, arity, typ, applied, applied_types)?;
+            return Ok(NativeApplyResult::Value(root));
         }
 
         let mut full_ty = self.typ.clone();
@@ -149,8 +150,13 @@ impl NativeFn {
 
         match runtime.native_callable(self.native_id)? {
             NativeCallable::Scheduler(f) => {
-                let ctx = Context::new_at_call_site(runtime, call_site);
-                match f(ctx, full_ty, &self.applied)? {
+                let ctx = InternalCtx::new_at_call_site(runtime, call_site);
+                let applied = self
+                    .applied
+                    .iter()
+                    .map(|x| scope.root(*x))
+                    .collect::<Vec<_>>();
+                match f(ctx, scope, full_ty, &applied)? {
                     SchedulerNativeResult::Ready(value) => Ok(NativeApplyResult::Value(value)),
                     SchedulerNativeResult::Task(task) => Ok(NativeApplyResult::Task(task)),
                 }

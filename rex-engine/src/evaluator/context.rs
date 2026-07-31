@@ -15,7 +15,7 @@ use crate::{
     evaluator::{
         CallSite, application_result_type, eval::eval_typed_expr, runtime_core::RuntimeCore,
     },
-    memory::heap::{Handle, Heap, Pointer},
+    memory::heap::{Handle, Heap, HeapState, Pointer, RootScope},
     overloaded_fn::OverloadedFn,
     stack::FrameId,
     util::{impl_matches_type, is_function_type},
@@ -26,13 +26,43 @@ pub struct Context<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
+    pub(crate) inner: InternalCtx<State>,
+    heap: Heap,
+}
+
+impl<State> Context<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    pub fn new(inner: InternalCtx<State>, heap: Heap) -> Self {
+        Self { inner, heap }
+    }
+
+    pub fn heap(&self) -> &Heap {
+        &self.heap
+    }
+
+    pub fn state(&self) -> &State {
+        self.inner.runtime.state.as_ref()
+    }
+
+    pub fn type_system(&self) -> &TypeSystem {
+        self.inner.runtime.type_system.as_ref()
+    }
+}
+
+#[derive(Clone)]
+pub struct InternalCtx<State = ()>
+where
+    State: Clone + Send + Sync + 'static,
+{
     runtime: RuntimeCore<State>,
     #[allow(dead_code)]
     #[doc(hidden)]
     pub(crate) call_site: CallSite,
 }
 
-impl<State> Context<State>
+impl<State> InternalCtx<State>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -49,10 +79,6 @@ where
 
     pub fn state(&self) -> &State {
         self.runtime.state.as_ref()
-    }
-
-    pub fn heap(&self) -> &Heap {
-        &self.runtime.heap
     }
 
     pub fn type_system(&self) -> &TypeSystem {
@@ -90,8 +116,9 @@ where
         func: Handle,
         func_type: Type,
         args: Vec<(Handle, Type)>,
+        heap: &Heap,
     ) -> Result<Handle, EngineError> {
-        func.pointer_for_heap(&self.runtime.heap)?;
+        func.pointer_for_heap(heap)?;
         let func_name = Symbol::intern("__rex_apply_func");
         let mut env = RootedEnvironment::new().extend(func_name.clone(), func);
         let mut expr = TypedExpr::new(
@@ -104,7 +131,7 @@ where
         let mut cur_type = func_type;
 
         for (idx, (arg, arg_type)) in args.into_iter().enumerate() {
-            arg.pointer_for_heap(&self.runtime.heap)?;
+            arg.pointer_for_heap(heap)?;
             let arg_name = Symbol::intern(&format!("__rex_apply_arg_{idx}"));
             env = env.extend(arg_name.clone(), arg);
             let arg_expr = TypedExpr::new(
@@ -122,13 +149,14 @@ where
             cur_type = result_type;
         }
 
-        eval_typed_expr(self.runtime.clone(), env, Arc::new(expr), Vec::new()).await
+        eval_typed_expr(self.runtime.clone(), heap, env, Arc::new(expr), Vec::new()).await
     }
 
     fn resolve_typeclass_method_impl(
         &self,
         name: &Symbol,
         call_type: &Type,
+        heap: &HeapState,
     ) -> Result<(Environment, Arc<TypedExpr>, Subst), EngineError> {
         let info = self
             .runtime
@@ -153,7 +181,7 @@ where
 
         self.runtime
             .typeclasses
-            .resolve(&info.class, name, &param_type)
+            .resolve(&info.class, name, &param_type, heap)
     }
 
     pub(crate) fn cached_class_method(&self, name: &Symbol, typ: &Type) -> Option<Pointer> {
@@ -164,21 +192,20 @@ where
         cache.get(&(name.clone(), typ.clone())).cloned()
     }
 
-    pub(crate) fn resolve_class_method_plan(
+    pub(crate) fn resolve_class_method_plan<'scope>(
         &self,
+        scope: &mut RootScope<'_, 'scope>,
         name: &Symbol,
         typ: &Type,
     ) -> Result<Result<(Environment, TypedExpr), Pointer>, EngineError> {
-        let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
+        let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ, scope.heap) {
             Ok(res) => res,
             Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
                 let (name, typ, applied, applied_types) =
                     OverloadedFn::new(name.clone(), typ.clone()).into_parts();
-                let pointer = self.runtime.heap.with_locked(|heap| {
-                    Ok(heap
-                        .alloc_ptr_overloaded(name, typ, applied, applied_types)?
-                        .into_pointer())
-                })?;
+                let applied = applied.into_iter().map(|x| scope.root(x)).collect();
+                let root = scope.alloc_root_overloaded(name, typ, applied, applied_types)?;
+                let pointer = scope.pointer(root);
                 return Ok(Err(pointer));
             }
             Err(err) => return Err(err),
@@ -216,7 +243,12 @@ where
         }
     }
 
-    pub(crate) fn resolve_native(&self, name: &str, typ: &Type) -> Result<Pointer, EngineError> {
+    pub(crate) fn resolve_native<'scope>(
+        &self,
+        scope: &mut RootScope<'_, 'scope>,
+        name: &str,
+        typ: &Type,
+    ) -> Result<Pointer, EngineError> {
         let sym_name = Symbol::intern(name);
         let impls = self
             .runtime
@@ -237,11 +269,10 @@ where
                 let imp = matches[0].clone();
                 let (native_id, name, arity, typ, applied, applied_types) =
                     imp.to_native_fn(typ.clone()).into_parts();
-                self.runtime.heap.with_locked(|heap| {
-                    Ok(heap
-                        .alloc_ptr_native(native_id, name, arity, typ, applied, applied_types)?
-                        .into_pointer())
-                })
+                let applied = applied.into_iter().map(|x| scope.root(x)).collect();
+                let root =
+                    scope.alloc_root_native(native_id, name, arity, typ, applied, applied_types)?;
+                Ok(scope.pointer(root))
             }
             _ => {
                 if typ.ftv().is_empty() {
@@ -252,11 +283,9 @@ where
                 } else if is_function_type(typ) {
                     let (name, typ, applied, applied_types) =
                         OverloadedFn::new(sym_name.clone(), typ.clone()).into_parts();
-                    self.runtime.heap.with_locked(|heap| {
-                        Ok(heap
-                            .alloc_ptr_overloaded(name, typ, applied, applied_types)?
-                            .into_pointer())
-                    })
+                    let applied = applied.into_iter().map(|x| scope.root(x)).collect();
+                    let root = scope.alloc_root_overloaded(name, typ, applied, applied_types)?;
+                    Ok(scope.pointer(root))
                 } else {
                     Err(EngineError::AmbiguousOverload { name: sym_name })
                 }

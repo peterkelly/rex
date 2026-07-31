@@ -3,7 +3,7 @@ use crate::{
     config::{AsyncCallPolicy, ParallelismController},
     error::EngineError,
     evaluator::native_callable::NativeCallable,
-    memory::heap::{Heap, Pointer},
+    memory::heap::Pointer,
 };
 use rex_ast::Symbol;
 use rex_typesystem::{types::Type, typesystem::TypeSystem};
@@ -24,7 +24,6 @@ where
     pub(crate) typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
     pub(crate) async_call_policy: AsyncCallPolicy,
     pub(crate) parallelism_controller: Arc<dyn ParallelismController>,
-    pub(crate) heap: Heap,
 }
 
 impl<State> RuntimeCore<State>

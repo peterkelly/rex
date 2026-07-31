@@ -1,8 +1,12 @@
 use crate::{
     error::EngineError,
-    evaluator::{CallSite, context::Context, native_functions::NativeTask},
+    evaluator::{
+        CallSite,
+        context::{Context, InternalCtx},
+        native_functions::NativeTask,
+    },
     handlers::{NativeCallRequest, NativeHandleFuture},
-    memory::heap::{Handle, Pointer},
+    memory::heap::{Handle, Pointer, RootScope, RootedPtr},
 };
 use rex_typesystem::types::Type;
 use std::sync::Arc;
@@ -17,18 +21,19 @@ pub(crate) enum NativeCallScheduling {
 }
 
 pub(crate) type SchedulerNativeCallable<State> = Arc<
-    dyn for<'a> Fn(
-            Context<State>,
+    dyn for<'a, 'heap, 'scope> Fn(
+            InternalCtx<State>,
+            &'a mut RootScope<'heap, 'scope>,
             Type,
-            &'a [Pointer],
-        ) -> Result<SchedulerNativeResult, EngineError>
+            &'a [RootedPtr<'scope>],
+        ) -> Result<SchedulerNativeResult<'scope>, EngineError>
         + Send
         + Sync
         + 'static,
 >;
 
-pub(crate) enum SchedulerNativeResult {
-    Ready(Pointer),
+pub(crate) enum SchedulerNativeResult<'scope> {
+    Ready(RootedPtr<'scope>),
     Task(NativeTask),
 }
 

@@ -176,7 +176,8 @@ where
                 input_type,
             }) => {
                 value = ctx
-                    .resume_callback_once(f, f_type, vec![(value, input_type)])
+                    .inner
+                    .resume_callback_once(f, f_type, vec![(value, input_type)], ctx.heap())
                     .await?;
             }
             Some(HostContinuation::Bind {
@@ -185,7 +186,8 @@ where
                 input_type,
             }) => {
                 return ctx
-                    .resume_callback_once(f, f_type, vec![(value, input_type)])
+                    .inner
+                    .resume_callback_once(f, f_type, vec![(value, input_type)], ctx.heap())
                     .await
                     .map(HostRunnerStep::Next);
             }

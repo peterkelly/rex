@@ -13,8 +13,8 @@ use rex_typesystem::{
 use crate::{
     compiler::program::CompiledProgram,
     error::EngineError,
-    evaluator::{context::Context, eval::eval_typed_expr, runtime_core::RuntimeCore},
-    memory::heap::{Cell, Handle, Heap, HeapState, Pointer},
+    evaluator::{context::InternalCtx, eval::eval_typed_expr, runtime_core::RuntimeCore},
+    memory::heap::{Cell, Handle, Heap, HeapState, Pointer, RootScope, RootedPtr},
     stack::FrameId,
     util::split_fun,
 };
@@ -36,6 +36,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     pub(crate) runtime: RuntimeCore<State>,
+    pub(crate) heap: Heap,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,8 +57,8 @@ impl<State> Evaluator<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(runtime: RuntimeCore<State>) -> Self {
-        Self { runtime }
+    pub(crate) fn new(runtime: RuntimeCore<State>, heap: Heap) -> Self {
+        Self { runtime, heap }
     }
 
     /// Type system captured by the evaluator runtime.
@@ -67,7 +68,7 @@ where
 
     /// Heap used by this evaluator runtime.
     pub fn heap(&self) -> &Heap {
-        &self.runtime.heap
+        &self.heap
     }
 
     /// Run one prepared program with runtime main inputs.
@@ -94,18 +95,19 @@ where
         self,
         program: CompiledProgram,
         inputs: BTreeMap<String, Handle>,
-    ) -> Result<(Handle, Context<State>), EngineError> {
+    ) -> Result<(Handle, InternalCtx<State>), EngineError> {
         let runtime = self.runtime;
         let main_signature = program.main_signature().clone();
-        let args = main_input_args(&runtime.heap, &main_signature, &inputs)?;
+        let args = main_input_args(&self.heap, &main_signature, &inputs)?;
         let value = eval_typed_expr(
             runtime.clone(),
+            &self.heap,
             program.env,
             Arc::clone(&program.expr),
             args,
         )
         .await?;
-        let ctx = Context::new_at_call_site(&runtime, CallSite { parent: None });
+        let ctx = InternalCtx::new_at_call_site(&runtime, CallSite { parent: None });
         Ok((value, ctx))
     }
 }
@@ -264,22 +266,20 @@ fn cell_type(heap: &HeapState, cell: &Cell) -> Result<Type, EngineError> {
     }
 }
 
-pub(crate) fn resolve_arg_type(
-    heap: &Heap,
+pub(crate) fn resolve_arg_type<'scope>(
+    scope: &mut RootScope<'_, 'scope>,
     arg_type: Option<&Type>,
-    arg: &Pointer,
+    arg: RootedPtr<'scope>,
 ) -> Result<Type, EngineError> {
     let infer_from_cell = |ty_hint: Option<&Type>| -> Result<Type, EngineError> {
-        heap.with_locked(|heap| {
-            let cell = heap.get_cell_from_pointer(arg)?;
-            match ty_hint {
-                Some(ty) => match cell_type(heap, cell) {
-                    Ok(val_ty) if val_ty.ftv().is_empty() => Ok(val_ty),
-                    _ => Ok(ty.clone()),
-                },
-                None => cell_type(heap, cell),
-            }
-        })
+        let cell = scope.get_cell_from_rooted_ptr(arg)?;
+        match ty_hint {
+            Some(ty) => match cell_type(scope.heap, cell) {
+                Ok(val_ty) if val_ty.ftv().is_empty() => Ok(val_ty),
+                _ => Ok(ty.clone()),
+            },
+            None => cell_type(scope.heap, cell),
+        }
     };
     match arg_type {
         Some(ty) if ty.ftv().is_empty() => Ok(ty.clone()),

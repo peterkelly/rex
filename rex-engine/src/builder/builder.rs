@@ -15,7 +15,7 @@ use crate::{
     env::RootedEnvironment,
     error::EngineError,
     evaluator::{
-        context::Context,
+        context::{Context, InternalCtx},
         native_callable::{
             NativeCallScheduling, NativeCallable, NativeHandleCallable, SchedulerNativeCallable,
             SchedulerNativeResult,
@@ -23,7 +23,7 @@ use crate::{
     },
     handlers::RexDefault,
     memory::{
-        heap::{Handle, Heap, Pointer},
+        heap::{Handle, Heap, Pointer, RootScope, RootedPtr},
         traits::IntoRex,
     },
     modules::{
@@ -655,11 +655,13 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(
-                Context<State>,
+        F: for<'a, 'heap, 'scope> Fn(
+                InternalCtx<State>,
+                &'a mut RootScope<'heap, 'scope>,
                 Type,
-                Vec<Pointer>,
-            ) -> Result<SchedulerNativeResult, EngineError>
+                Vec<RootedPtr<'scope>>,
+            )
+                -> Result<SchedulerNativeResult<'scope>, EngineError>
             + Send
             + Sync
             + 'static,
@@ -667,9 +669,9 @@ where
         validate_native_export_scheme(&scheme, arity)?;
         let name = name.into();
         let handler = Arc::new(handler);
-        let func: SchedulerNativeCallable<State> = Arc::new(move |engine, typ, args| {
+        let func: SchedulerNativeCallable<State> = Arc::new(move |engine, scope, typ, args| {
             let handler = Arc::clone(&handler);
-            handler(engine, typ, args.to_vec())
+            handler(engine, scope, typ, args.to_vec())
         });
         let registration = NativeRegistration::scheduler(scheme, arity, func);
         self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
@@ -1028,9 +1030,10 @@ where
             slots.push(existing);
         } else {
             let placeholder = heap.with_locked(|heap| {
-                Ok(heap
-                    .alloc_ptr_uninitialized(decl.name.name.clone())?
-                    .into_pointer())
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_uninitialized(decl.name.name.clone())?;
+                    Ok(scope.pointer(root))
+                })
             })?;
             let placeholder = heap.handle(placeholder)?;
             env_rec = env_rec.extend(decl.name.name.clone(), placeholder.clone());
@@ -1080,20 +1083,21 @@ where
                     "fn declaration did not lower to lambda".into(),
                 ));
             };
-            let closure_env = env.to_environment()?;
             let ptr = heap.with_locked(|heap| {
-                Ok(heap
-                    .alloc_ptr_closure(
+                let closure_env = env.to_environment(heap)?;
+                heap.root_scope(|scope| {
+                    let root = scope.alloc_root_closure(
                         closure_env,
                         param.clone(),
                         param_ty,
                         typed.typ.clone(),
                         Arc::new(body.as_ref().clone()),
-                    )?
-                    .into_pointer())
+                    )?;
+                    Ok(scope.pointer(root))
+                })
             })?;
             let value = heap.clone_cell(&ptr)?;
-            let slot = slot.pointer()?;
+            let slot = heap.with_locked(|heap| slot.pointer(heap))?;
             heap.with_locked(|heap| heap.overwrite(&slot, value))?;
         }
         Ok(())
@@ -1169,9 +1173,10 @@ fn publish_runtime_decl_interfaces_parts(
             continue;
         }
         let placeholder = heap.with_locked(|heap| {
-            Ok(heap
-                .alloc_ptr_uninitialized(df.name.name.clone())?
-                .into_pointer())
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_uninitialized(df.name.name.clone())?;
+                Ok(scope.pointer(root))
+            })
         })?;
         let placeholder = heap.handle(placeholder)?;
         *env = env.extend(df.name.name.clone(), placeholder);
