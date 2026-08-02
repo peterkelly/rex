@@ -199,15 +199,13 @@ impl HeapState {
             free_root_list: Vec::new(),
             next_persistent_store_id: 0,
             next_gc_slot_count: DEFAULT_GC_SLOT_THRESHOLD,
-            collect_on_every_alloc: false,
+            collect_on_every_alloc: GC_EXTREME_STRESS,
             collection_epoch: 0,
         }
     }
 
     fn collect_needed(&self) -> bool {
-        GC_EXTREME_STRESS
-            || self.collect_on_every_alloc
-            || self.slots.len() >= self.next_gc_slot_count
+        self.collect_on_every_alloc || self.slots.len() >= self.next_gc_slot_count
     }
 
     fn push_cell<'a>(&'a mut self, cell: Cell) -> Result<Reference<'a>, EngineError> {
@@ -3641,35 +3639,21 @@ mod tests {
     #[test]
     fn handle_resolves_pointer_from_root_slot() {
         let heap = Heap::new();
-        let first_pointer = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let root = scope.alloc_root_i32(1)?;
-                    Ok(scope.pointer(root))
-                })
-            })
-            .expect("alloc_i32 should succeed");
-        let second_pointer = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let root = scope.alloc_root_i32(2)?;
-                    Ok(scope.pointer(root))
-                })
-            })
-            .expect("alloc_i32 should succeed");
-        let handle = heap
-            .handle(first_pointer)
-            .expect("handle should root pointer");
+        let handle = heap.alloc_i32(1).expect("first i32 should allocate");
+        let replacement = heap.alloc_i32(2).expect("second i32 should allocate");
 
-        {
-            let mut state = heap.state.lock().expect("heap state lock");
+        heap.with_locked(|state| {
+            let first_pointer = handle.pointer(state)?;
+            let second_pointer = replacement.pointer(state)?;
             let slot = state
                 .root_slots
                 .get_mut(handle.root.root_id.index as usize)
                 .expect("root slot should exist");
             assert_eq!(slot.pointer, Some(first_pointer));
             slot.pointer = Some(second_pointer);
-        }
+            Ok(())
+        })
+        .expect("root slot should be replaceable");
 
         assert_eq!(handle.as_i32().expect("handle should follow root slot"), 2);
     }
@@ -3822,49 +3806,24 @@ mod tests {
     #[test]
     fn alloc_list_protects_inputs_across_collection() {
         let heap = Heap::new();
+        heap.set_collect_on_every_alloc(false)
+            .expect("disable automatic collection");
         heap.with_locked_ok(|heap| heap.set_gc_slot_threshold(usize::MAX))
             .expect("set threshold");
         let values = (0..2048)
-            .map(|value| {
-                heap.with_locked(|heap| {
-                    heap.root_scope(|scope| {
-                        let root = scope.alloc_root_i32(value)?;
-                        Ok(scope.pointer(root))
-                    })
-                })
-                .expect("alloc_i32 should succeed")
-            })
+            .map(|value| heap.alloc_i32(value).expect("alloc_i32 should succeed"))
             .collect::<Vec<_>>();
         heap.with_locked_ok(|heap| heap.set_gc_slot_threshold(1))
             .expect("set threshold");
 
         let list = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let values = values.into_iter().map(|x| scope.root(x)).collect();
-                    let root = scope.alloc_root_list(values)?;
-                    Ok(scope.pointer(root))
-                })
-            })
+            .alloc_list(values)
             .expect("list allocation should protect inputs");
-        let list = heap.handle(list).expect("list should be rootable");
-        let list_pointer = heap.with_locked(|heap| list.pointer(heap));
-        let values = heap
-            .with_locked(|heap| heap.pointer_as_list(&list_pointer.expect("list pointer")))
-            .expect("list should decode");
+        let values = list.as_list().expect("list should decode");
 
         assert_eq!(values.len(), 2048);
-        heap.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let first_value = scope.root(*values.first().expect("first value"));
-                let last_value = scope.root(*values.last().expect("last value"));
-
-                assert_eq!(scope.root_as_i32(first_value).expect("first i32"), 0);
-                assert_eq!(scope.root_as_i32(last_value).expect("last i32"), 2047);
-                Ok(())
-            })
-        })
-        .unwrap();
+        assert_eq!(values.first().expect("first value").as_i32().unwrap(), 0);
+        assert_eq!(values.last().expect("last value").as_i32().unwrap(), 2047);
     }
 
     #[test]
@@ -3872,41 +3831,33 @@ mod tests {
         let heap = Heap::new();
         let values = [1, 2, 3]
             .into_iter()
-            .map(|value| {
-                heap.with_locked(|heap| {
-                    heap.root_scope(|scope| {
-                        let root = scope.alloc_root_i32(value)?;
-                        Ok(scope.pointer(root))
-                    })
-                })
-                .expect("alloc_i32 should succeed")
-            })
+            .map(|value| heap.alloc_i32(value).expect("alloc_i32 should succeed"))
             .collect::<Vec<_>>();
 
-        let list = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let values = values.iter().map(|x| scope.root(*x)).collect();
-                    let root = scope.alloc_root_list(values)?;
-                    Ok(scope.pointer(root))
-                })
-            })
-            .expect("list allocation should succeed");
-        let Cell::ListSlice {
-            start,
-            end,
-            elements,
-        } = heap.clone_cell(&list).expect("list cell should exist")
-        else {
-            panic!("expected vector-backed list slice");
-        };
-        assert_eq!(start, 0);
-        assert_eq!(end, values.len());
-        let Cell::Data(backing) = heap.clone_cell(&elements).expect("data cell should exist")
-        else {
-            panic!("expected list data backing");
-        };
-        assert_eq!(backing, values);
+        let list = heap.alloc_list(values.clone()).expect("list allocation");
+        heap.with_locked(|state| {
+            let list = list.pointer(state)?;
+            let Cell::ListSlice {
+                start,
+                end,
+                elements,
+            } = state.get_cell_from_pointer(&list)?.clone()
+            else {
+                panic!("expected vector-backed list slice");
+            };
+            assert_eq!(start, 0);
+            assert_eq!(end, values.len());
+            let Cell::Data(backing) = state.get_cell_from_pointer(&elements)? else {
+                panic!("expected list data backing");
+            };
+            let expected = values
+                .iter()
+                .map(|value| value.pointer(state))
+                .collect::<Result<Vec<_>, _>>()?;
+            assert_eq!(backing, &expected);
+            Ok(())
+        })
+        .expect("list representation should be valid");
     }
 
     #[test]
@@ -3914,55 +3865,39 @@ mod tests {
         let heap = Heap::new();
         let values = [1, 2, 3]
             .into_iter()
-            .map(|value| {
-                heap.with_locked(|heap| {
-                    heap.root_scope(|scope| {
-                        let root = scope.alloc_root_i32(value)?;
-                        Ok(scope.pointer(root))
-                    })
-                })
-                .expect("alloc_i32 should succeed")
-            })
+            .map(|value| heap.alloc_i32(value).expect("alloc_i32 should succeed"))
             .collect::<Vec<_>>();
-        let list = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let values = values.into_iter().map(|x| scope.root(x)).collect();
-                    let root = scope.alloc_root_list(values)?;
-                    Ok(scope.pointer(root))
-                })
-            })
-            .expect("list allocation should succeed");
-        let Cell::ListSlice {
-            elements: original_data,
-            ..
-        } = heap.clone_cell(&list).expect("list cell should exist")
-        else {
-            panic!("expected vector-backed list slice");
-        };
+        let list = heap.alloc_list(values).expect("list allocation");
 
-        let (_head, tail) = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let list = scope.root(list);
-                    Ok(scope
-                        .list_head_tail(list)?
-                        .map(|(head, tail)| (scope.pointer(head), scope.pointer(tail))))
-                })
+        heap.with_locked(|state| {
+            state.root_scope(|scope| {
+                let list = scope.root_handle(&list)?;
+                let Cell::ListSlice {
+                    elements: original_data,
+                    ..
+                } = scope.get_cell_from_rooted_ptr(list)?.clone()
+                else {
+                    panic!("expected vector-backed list slice");
+                };
+                let original_data = scope.root(original_data);
+                let (_head, tail) = scope
+                    .list_head_tail(list)?
+                    .expect("list should be non-empty");
+                let Cell::ListSlice {
+                    start,
+                    end,
+                    elements,
+                } = scope.get_cell_from_rooted_ptr(tail)?
+                else {
+                    panic!("expected tail list slice");
+                };
+                assert_eq!(*start, 1);
+                assert_eq!(*end, 3);
+                assert_eq!(*elements, scope.pointer(original_data));
+                Ok(())
             })
-            .expect("head/tail should decode")
-            .expect("list should be non-empty");
-        let Cell::ListSlice {
-            start,
-            end,
-            elements,
-        } = heap.clone_cell(&tail).expect("tail cell should exist")
-        else {
-            panic!("expected tail list slice");
-        };
-        assert_eq!(start, 1);
-        assert_eq!(end, 3);
-        assert_eq!(elements, original_data);
+        })
+        .expect("head/tail should decode");
     }
 
     fn binary_slice(heap: &Heap, values: &[u8], start: usize, end: usize) -> Handle {
@@ -4153,6 +4088,8 @@ mod tests {
     #[test]
     fn copying_gc_traces_deep_lists_iteratively() {
         let heap = Heap::new();
+        heap.set_collect_on_every_alloc(false)
+            .expect("disable automatic collection during graph construction");
         heap.with_locked_ok(|heap| heap.set_gc_slot_threshold(usize::MAX))
             .expect("set threshold");
         let values = (0..10_000)
@@ -4215,35 +4152,13 @@ mod tests {
     #[test]
     fn handle_value_roots_composite_children() {
         let heap = Heap::new();
-        let first = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let root = scope.alloc_root_i32(1)?;
-                    Ok(scope.pointer(root))
-                })
-            })
-            .expect("alloc_i32 should succeed");
+        let first = heap.alloc_i32(1).expect("alloc_i32 should succeed");
         let second = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let root = scope.alloc_root_string("two".into())?;
-                    Ok(scope.pointer(root))
-                })
-            })
+            .alloc_string("two".into())
             .expect("alloc_string should succeed");
         let tuple = heap
-            .handle(
-                heap.with_locked(|heap| {
-                    heap.root_scope(|scope| {
-                        let first = scope.root(first);
-                        let second = scope.root(second);
-                        let root = scope.alloc_root_tuple(vec![first, second])?;
-                        Ok(scope.pointer(root))
-                    })
-                })
-                .expect("alloc_tuple should succeed"),
-            )
-            .expect("tuple should be rootable");
+            .alloc_tuple(vec![first, second])
+            .expect("alloc_tuple should succeed");
 
         assert_eq!(
             heap.with_locked(|heap| Ok(heap.root_count()))
@@ -4286,31 +4201,11 @@ mod tests {
     #[test]
     fn handle_value_reports_named_composites() {
         let heap = Heap::new();
-        let payload = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let root = scope.alloc_root_bool(true)?;
-                    Ok(scope.pointer(root))
-                })
-            })
-            .expect("alloc_bool should succeed");
+        let payload = heap.alloc_bool(true).expect("alloc_bool should succeed");
 
         let mut fields = BTreeMap::new();
-        fields.insert(Symbol::intern("ready"), payload);
-        let dict = heap
-            .handle(
-                heap.with_locked(|heap| {
-                    heap.root_scope(|scope| {
-                        let fields = BTreeMap::from_iter(
-                            fields.into_iter().map(|(k, v)| (k, scope.root(v))),
-                        );
-                        let root = scope.alloc_root_dict(fields)?;
-                        Ok(scope.pointer(root))
-                    })
-                })
-                .expect("alloc_dict should succeed"),
-            )
-            .expect("dict should be rootable");
+        fields.insert(Symbol::intern("ready"), payload.clone());
+        let dict = heap.alloc_dict(fields).expect("alloc_dict should succeed");
         let Value::Dict(fields) = dict.value().expect("dict value") else {
             panic!("expected dict value");
         };
@@ -4328,17 +4223,8 @@ mod tests {
         );
 
         let option = heap
-            .handle(
-                heap.with_locked(|heap| {
-                    heap.root_scope(|scope| {
-                        let payload = scope.root(payload);
-                        let root = scope.alloc_root_adt(Symbol::intern("Some"), vec![payload])?;
-                        Ok(scope.pointer(root))
-                    })
-                })
-                .expect("alloc_adt should succeed"),
-            )
-            .expect("adt should be rootable");
+            .alloc_adt(Symbol::intern("Some"), vec![payload])
+            .expect("alloc_adt should succeed");
         let Value::Adt(tag, args) = option.value().expect("adt value") else {
             panic!("expected adt value");
         };

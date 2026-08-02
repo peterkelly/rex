@@ -113,8 +113,25 @@ children are converted to stable root identifiers before public `Handle`
 owners are constructed outside the lock. The old internal conversions that
 carried raw pointers between separate lock acquisitions have been removed.
 
-The remaining transition starts at Step 9: stress and validate the completed
-boundary. Final invariant documentation follows in Step 10.
+Step 9 validation is complete. The extreme-stress switch made every new heap
+collect before each allocation and randomized every copy destination. The
+heap tests were hardened so ordinary allocation tests retain values through
+roots rather than carrying `InternalPtr` values across allocations. A repeated
+Tokio multithread regression now gates four real host tasks, lets them allocate
+and collect concurrently for eight rounds, and verifies their retained and
+returned composite values deterministically.
+
+The GC/evaluator suite and every GC-relevant workspace test passed in
+extreme-stress mode, including all of the specifically named binary-list,
+closure, recursion, typeclass, host-callback, foreign-heap, and ADT CLI paths.
+The independent 10,000-bind CLI stack-depth regression was the sole exclusion
+from the extreme workspace pass after randomized relocation made it
+impractically slow; it passed under the restored production policy.
+`GC_EXTREME_STRESS` is again `false`, while targeted tests can still request
+collection on every allocation per heap.
+
+The remaining transition starts at Step 10: document and enforce the final
+invariants.
 
 ## Step 1: Add deterministic concurrency regressions
 

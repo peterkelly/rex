@@ -71,6 +71,9 @@ struct CountingCallExecutor {
     spawned: Arc<AtomicUsize>,
 }
 
+#[derive(Clone, Copy)]
+struct TokioCallExecutor;
+
 impl DynamicPermitController {
     fn new(capacity: usize) -> Arc<Self> {
         Arc::new(Self {
@@ -126,6 +129,17 @@ impl AsyncCallExecutor for CountingCallExecutor {
     fn spawn(&self, future: NativeFuture) -> NativeFuture {
         self.spawned.fetch_add(1, Ordering::SeqCst);
         future
+    }
+}
+
+impl AsyncCallExecutor for TokioCallExecutor {
+    fn spawn(&self, future: NativeFuture) -> NativeFuture {
+        async move {
+            tokio::spawn(future).await.map_err(|error| {
+                EngineError::Internal(format!("Tokio host task failed: {error}"))
+            })?
+        }
+        .boxed()
     }
 }
 
@@ -1053,6 +1067,124 @@ async fn pending_async_bound_delays_invoking_host_callbacks() {
     started_values.sort();
     assert_eq!(started_values, vec![1, 2]);
     assert_eq!(result, 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_host_allocations_survive_repeated_collections() {
+    const HOST_CALLS: usize = 4;
+    const STRESS_ROUNDS: usize = 8;
+    const ALLOC_PASSES: i32 = 16;
+
+    for round in 0..STRESS_ROUNDS {
+        let GateParts {
+            started,
+            started_tx,
+            releases,
+            control,
+        } = gate_parts(HOST_CALLS);
+        let invoked = Arc::new(AtomicUsize::new(0));
+        let mut builder = Builder::with_prelude(()).unwrap();
+        builder.set_async_call_policy(AsyncCallPolicy::executor(TokioCallExecutor));
+
+        let mut module = Module::global();
+        let list_i32 = Type::list(Type::builtin(BuiltinTypeId::I32));
+        let scheme = Scheme::new(vec![], vec![], Type::fun(list_i32.clone(), list_i32));
+        module
+            .export_native_async("stress_copy", scheme, 1, {
+                let invoked = Arc::clone(&invoked);
+                let started = Arc::clone(&started);
+                let releases = Arc::clone(&releases);
+                move |engine, _, args: Vec<Handle>| {
+                    let call_id = invoked.fetch_add(1, Ordering::SeqCst);
+                    let retained = args.first().cloned();
+                    let started = Arc::clone(&started);
+                    let started_tx = started_tx.clone();
+                    let release = releases
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .expect("missing stress release channel");
+                    async move {
+                        started_tx.send(call_id as i32).unwrap();
+                        started.fetch_add(1, Ordering::SeqCst);
+                        release.await.unwrap();
+
+                        let retained = retained.ok_or_else(|| {
+                            EngineError::Internal("missing stress_copy argument".into())
+                        })?;
+                        for pass in 0..ALLOC_PASSES {
+                            let noise = (round as i32 * 10_000) + (call_id as i32 * 100) + pass;
+                            let number = engine.heap().alloc_i32(noise)?;
+                            let label = engine.heap().alloc_string(format!(
+                                "round {round}, call {call_id}, pass {pass}"
+                            ))?;
+                            let pair = engine.heap().alloc_tuple(vec![number, label])?;
+                            let _garbage = engine.heap().alloc_list(vec![pair])?;
+                            tokio::task::yield_now().await;
+                        }
+
+                        let copied = retained
+                            .as_list()?
+                            .into_iter()
+                            .map(|value| {
+                                let value = value.as_i32()?;
+                                engine.heap().alloc_i32(value)
+                            })
+                            .collect::<Result<Vec<_>, EngineError>>()?;
+                        engine.heap().alloc_list(copied)
+                    }
+                    .boxed()
+                }
+            })
+            .unwrap();
+        builder.inject_module(module).unwrap();
+        builder.heap().set_collect_on_every_alloc(true).unwrap();
+
+        let eval_task = tokio::spawn(async move {
+            eval_i32(
+                r#"
+                sum (map sum [
+                    stress_copy [1, 2, 3, 4, 5, 6, 7, 8],
+                    stress_copy [1, 2, 3, 4, 5, 6, 7, 8],
+                    stress_copy [1, 2, 3, 4, 5, 6, 7, 8],
+                    stress_copy [1, 2, 3, 4, 5, 6, 7, 8],
+                    map (\x -> x * 2) [
+                        1, 2, 3, 4, 5, 6, 7, 8,
+                        9, 10, 11, 12, 13, 14, 15, 16
+                    ]
+                ])
+                "#,
+                builder,
+            )
+            .await
+        });
+
+        let mut call_ids = (0..HOST_CALLS)
+            .map(|_| {
+                control
+                    .started_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("missing stress task start notification")
+            })
+            .collect::<Vec<_>>();
+        call_ids.sort();
+        assert_eq!(call_ids, vec![0, 1, 2, 3]);
+        assert_eq!(control.started.load(Ordering::SeqCst), HOST_CALLS);
+        assert!(
+            !eval_task.is_finished(),
+            "evaluation completed while host allocation tasks were gated"
+        );
+
+        for release in control.releases {
+            release.send(()).unwrap();
+        }
+        let result = tokio::time::timeout(Duration::from_secs(30), eval_task)
+            .await
+            .unwrap_or_else(|_| panic!("round {round} timed out"))
+            .expect("stress evaluation task panicked");
+        assert_eq!(result, 416);
+        assert_eq!(invoked.load(Ordering::SeqCst), HOST_CALLS);
+    }
 }
 
 #[tokio::test]
