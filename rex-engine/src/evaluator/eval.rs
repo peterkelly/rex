@@ -2,7 +2,7 @@ use crate::{
     env::{PersistentEnvironment, RootedEnvironment, ScopedEnvironment},
     error::EngineError,
     evaluator::{
-        CallSite, application_result_type,
+        application_result_type,
         context::ClassMethodPlan,
         native_functions::{NativeTask, eval_native_enter, eval_native_receive},
         resolve_arg_type,
@@ -671,8 +671,7 @@ where
         }
         Frame::Var(mut frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Var { name, .. } => {
-                match eval_resolve_var(runtime, scope, frame_id, &frame.env, name, &frame.expr.typ)?
-                {
+                match eval_resolve_var(runtime, scope, &frame.env, name, &frame.expr.typ)? {
                     EvalVarResult::Value(value) => Ok(EvalControl::Return(value)),
                     EvalVarResult::Push { expr, env } => {
                         frame.state = FrValueState::Enter;
@@ -1336,7 +1335,6 @@ where
 fn eval_apply_overloaded_arg<'scope, State>(
     runtime: &RuntimeCore<State>,
     scope: &mut RootScope<'_, 'scope>,
-    parent: FrameId,
     mut over: OverloadedFn<RootedPtr<'scope>>,
     arg: RootedPtr<'scope>,
     func_type: Option<&Type>,
@@ -1391,18 +1389,16 @@ where
         };
     }
 
-    let call_site = CallSite::child(parent);
     let (native_id, _, _) = runtime.resolve_native_parts(over.name.as_ref(), &full_ty)?;
     runtime
         .native_callable(native_id)?
-        .call_at_site(native_id, full_ty, &over.applied, call_site)
+        .call(native_id, full_ty, &over.applied)
         .map(EvalApplyResult::AwaitNative)
 }
 
 fn eval_apply_arg<'scope, State>(
     runtime: &RuntimeCore<State>,
     scope: &mut RootScope<'_, 'scope>,
-    parent: FrameId,
     func: RootedPtr<'scope>,
     arg: RootedPtr<'scope>,
     func_type: Option<&Type>,
@@ -1440,14 +1436,14 @@ where
             })
         }
         Some(RootedCallable::Native(native)) => {
-            match native.apply_at_site(runtime, scope, arg, arg_type, CallSite::child(parent))? {
+            match native.apply(runtime, scope, arg, arg_type)? {
                 NativeApplyResult::Value(value) => Ok(EvalApplyResult::Value(value)),
                 NativeApplyResult::Task(task) => Ok(EvalApplyResult::PushNative(task)),
                 NativeApplyResult::Pending(future) => Ok(EvalApplyResult::AwaitNative(future)),
             }
         }
         Some(RootedCallable::Overloaded(over)) => {
-            eval_apply_overloaded_arg(runtime, scope, parent, over, arg, func_type, arg_type)
+            eval_apply_overloaded_arg(runtime, scope, over, arg, func_type, arg_type)
         }
         None => Err(EngineError::NotCallable(scope.type_name(func)?.into())),
     }
@@ -1505,7 +1501,6 @@ where
         let apply_result = eval_apply_arg(
             runtime,
             scope,
-            frame_id,
             func,
             arg,
             Some(&arg_info.func_type),
@@ -1540,7 +1535,6 @@ where
 fn eval_resolve_var<'scope, State>(
     runtime: &RuntimeCore<State>,
     scope: &mut RootScope<'_, 'scope>,
-    parent: FrameId,
     env: &ScopedEnvironment<'scope>,
     name: &Symbol,
     typ: &Type,
@@ -1553,9 +1547,7 @@ where
             .root_as_native(ptr)?
             .filter(|native| native.arity == 0 && native.applied.is_empty());
         if let Some(native) = native {
-            native
-                .call_zero_at_site(runtime, CallSite::child(parent))
-                .map(EvalVarResult::AwaitNative)
+            native.call_zero(runtime).map(EvalVarResult::AwaitNative)
         } else {
             Ok(EvalVarResult::Value(ptr))
         }
@@ -1573,9 +1565,7 @@ where
             .root_as_native(ctx_root)?
             .filter(|native| native.arity == 0 && native.applied.is_empty());
         if let Some(native) = native {
-            native
-                .call_zero_at_site(runtime, CallSite::child(parent))
-                .map(EvalVarResult::AwaitNative)
+            native.call_zero(runtime).map(EvalVarResult::AwaitNative)
         } else {
             Ok(EvalVarResult::Value(ctx_root))
         }

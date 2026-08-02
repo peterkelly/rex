@@ -2,7 +2,6 @@ use crate::{
     builder::registry::NativeId,
     error::EngineError,
     evaluator::{
-        CallSite,
         native_callable::{NativeCallable, SchedulerNativeResult},
         native_functions::NativeTask,
         resolve_arg_type,
@@ -59,10 +58,9 @@ impl<P> NativeFn<P> {
 }
 
 impl<'scope> NativeFn<RootedPtr<'scope>> {
-    pub(crate) fn call_zero_at_site<State: Clone + Send + Sync + 'static>(
+    pub(crate) fn call_zero<State: Clone + Send + Sync + 'static>(
         &self,
         runtime: &RuntimeCore<State>,
-        call_site: CallSite,
     ) -> Result<NativeCallRequest<'scope>, EngineError> {
         if self.arity != 0 {
             return Err(EngineError::NativeArity {
@@ -71,21 +69,17 @@ impl<'scope> NativeFn<RootedPtr<'scope>> {
                 got: 0,
             });
         }
-        runtime.native_callable(self.native_id)?.call_at_site(
-            self.native_id,
-            self.typ.clone(),
-            &[],
-            call_site,
-        )
+        runtime
+            .native_callable(self.native_id)?
+            .call(self.native_id, self.typ.clone(), &[])
     }
 
-    pub(crate) fn apply_at_site<State: Clone + Send + Sync + 'static>(
+    pub(crate) fn apply<State: Clone + Send + Sync + 'static>(
         mut self,
         runtime: &RuntimeCore<State>,
         scope: &mut RootScope<'_, 'scope>,
         arg: RootedPtr<'scope>,
         arg_type: Option<&Type>,
-        call_site: CallSite,
     ) -> Result<NativeApplyResult<'scope>, EngineError> {
         // `self` is an owned copy cloned from heap storage; we mutate it to
         // accumulate partial-application state and never mutate shared values.
@@ -131,7 +125,7 @@ impl<'scope> NativeFn<RootedPtr<'scope>> {
                 SchedulerNativeResult::Task(task) => Ok(NativeApplyResult::Task(task)),
             },
             callable => callable
-                .call_at_site(self.native_id, full_ty, &self.applied, call_site)
+                .call(self.native_id, full_ty, &self.applied)
                 .map(NativeApplyResult::Pending),
         }
     }

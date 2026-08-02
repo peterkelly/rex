@@ -12,9 +12,7 @@ use crate::{
     builder::registry::{NativeId, NativeImpl},
     env::{RootedEnvironment, ScopedEnvironment},
     error::EngineError,
-    evaluator::{
-        CallSite, application_result_type, eval::eval_typed_expr, runtime_core::RuntimeCore,
-    },
+    evaluator::{application_result_type, eval::eval_typed_expr, runtime_core::RuntimeCore},
     memory::heap::{Handle, Heap, RootScope, RootedPtr},
     util::{impl_matches_type, is_function_type},
 };
@@ -65,9 +63,6 @@ where
     State: Clone + Send + Sync + 'static,
 {
     runtime: RuntimeCore<State>,
-    #[allow(dead_code)]
-    #[doc(hidden)]
-    pub(crate) call_site: CallSite,
 }
 
 pub(crate) enum ClassMethodPlan<'scope> {
@@ -82,10 +77,9 @@ impl<State> InternalCtx<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new_at_call_site(runtime: &RuntimeCore<State>, call_site: CallSite) -> Self {
+    pub(crate) fn new(runtime: &RuntimeCore<State>) -> Self {
         Self {
             runtime: runtime.clone(),
-            call_site,
         }
     }
 

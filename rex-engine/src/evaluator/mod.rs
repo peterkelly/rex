@@ -18,7 +18,6 @@ use crate::{
         runtime_core::RuntimeCore,
     },
     memory::heap::{Handle, Heap, RootScope, RootedPtr},
-    stack::FrameId,
     util::split_fun,
 };
 
@@ -40,20 +39,6 @@ where
 {
     pub(crate) runtime: RuntimeCore<State>,
     pub(crate) heap: Heap,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[doc(hidden)]
-pub(crate) struct CallSite {
-    pub parent: Option<FrameId>,
-}
-
-impl CallSite {
-    pub(crate) fn child(parent: FrameId) -> Self {
-        Self {
-            parent: Some(parent),
-        }
-    }
 }
 
 impl<State> Evaluator<State>
@@ -118,7 +103,7 @@ where
             args,
         )
         .await?;
-        let inner = InternalCtx::new_at_call_site(&runtime, CallSite { parent: None });
+        let inner = InternalCtx::new(&runtime);
         let ctx = Context::new(inner, heap);
         Ok((value, ctx))
     }

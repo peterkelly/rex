@@ -1,7 +1,7 @@
 use crate::{
     builder::registry::NativeId,
     error::EngineError,
-    evaluator::{CallSite, context::Context, native_functions::NativeTask},
+    evaluator::{context::Context, native_functions::NativeTask},
     handlers::{NativeCallRequest, NativeHandleFuture},
     memory::heap::{Handle, RootScope, RootedPtr},
 };
@@ -60,18 +60,16 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
-    pub(crate) fn call_at_site<'scope>(
+    pub(crate) fn call<'scope>(
         &self,
         native_id: NativeId,
         typ: Type,
         args: &[RootedPtr<'scope>],
-        call_site: CallSite,
     ) -> Result<NativeCallRequest<'scope>, EngineError> {
         match self {
             NativeCallable::Host { scheduling, .. } => Ok(NativeCallRequest::new(
                 native_id,
                 *scheduling,
-                call_site,
                 typ,
                 args.to_vec(),
             )),

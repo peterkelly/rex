@@ -6,7 +6,6 @@ use crate::{
     },
     error::EngineError,
     evaluator::{
-        CallSite,
         context::{Context, InternalCtx},
         native_callable::{NativeCallScheduling, NativeHandleCallable},
         runtime_core::RuntimeCore,
@@ -367,7 +366,6 @@ where
 pub(crate) struct NativeCallRequest<'scope> {
     native_id: NativeId,
     scheduling: NativeCallScheduling,
-    call_site: CallSite,
     typ: Type,
     args: Vec<RootedPtr<'scope>>,
 }
@@ -376,14 +374,12 @@ impl<'scope> NativeCallRequest<'scope> {
     pub(crate) fn new(
         native_id: NativeId,
         scheduling: NativeCallScheduling,
-        call_site: CallSite,
         typ: Type,
         args: Vec<RootedPtr<'scope>>,
     ) -> Self {
         Self {
             native_id,
             scheduling,
-            call_site,
             typ,
             args,
         }
@@ -397,7 +393,6 @@ impl<'scope> NativeCallRequest<'scope> {
         let Self {
             native_id,
             scheduling,
-            call_site,
             typ,
             args,
         } = self;
@@ -405,7 +400,6 @@ impl<'scope> NativeCallRequest<'scope> {
         Ok(NativeCall {
             native_id,
             scheduling,
-            call_site,
             typ,
             args,
         })
@@ -418,7 +412,6 @@ impl<'scope> NativeCallRequest<'scope> {
 pub(crate) struct NativeCall {
     native_id: NativeId,
     scheduling: NativeCallScheduling,
-    call_site: CallSite,
     typ: Type,
     args: Vec<Handle>,
 }
@@ -444,7 +437,7 @@ impl NativeCall {
                 ));
             }
         };
-        let ctx = InternalCtx::new_at_call_site(runtime, self.call_site);
+        let ctx = InternalCtx::new(runtime);
         let wrapped = Context::new(ctx, heap.clone());
         let future = (callable)(wrapped, self.typ, self.args);
         let result_heap = heap.clone();
