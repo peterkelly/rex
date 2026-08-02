@@ -10,13 +10,12 @@ use rex_typesystem::{
 
 use crate::{
     builder::registry::NativeImpl,
-    env::{Environment, RootedEnvironment, ScopedEnvironment},
+    env::{RootedEnvironment, ScopedEnvironment},
     error::EngineError,
     evaluator::{
         CallSite, application_result_type, eval::eval_typed_expr, runtime_core::RuntimeCore,
     },
-    memory::heap::{Handle, Heap, HeapState, RootScope, RootedPtr},
-    overloaded_fn::OverloadedFn,
+    memory::heap::{Handle, Heap, RootScope, RootedPtr},
     stack::FrameId,
     util::{impl_matches_type, is_function_type},
 };
@@ -126,7 +125,7 @@ where
         args: Vec<(Handle, Type)>,
         heap: &Heap,
     ) -> Result<Handle, EngineError> {
-        func.pointer_for_heap(heap)?;
+        func.ensure_heap(heap)?;
         let func_name = Symbol::intern("__rex_apply_func");
         let mut env = RootedEnvironment::new().extend(func_name.clone(), func);
         let mut expr = TypedExpr::new(
@@ -139,7 +138,7 @@ where
         let mut cur_type = func_type;
 
         for (idx, (arg, arg_type)) in args.into_iter().enumerate() {
-            arg.pointer_for_heap(heap)?;
+            arg.ensure_heap(heap)?;
             let arg_name = Symbol::intern(&format!("__rex_apply_arg_{idx}"));
             env = env.extend(arg_name.clone(), arg);
             let arg_expr = TypedExpr::new(
@@ -164,8 +163,7 @@ where
         &self,
         name: &Symbol,
         call_type: &Type,
-        heap: &HeapState,
-    ) -> Result<(Environment, Arc<TypedExpr>, Subst), EngineError> {
+    ) -> Result<(RootedEnvironment, Arc<TypedExpr>, Subst), EngineError> {
         let info = self
             .runtime
             .type_system
@@ -189,7 +187,7 @@ where
 
         self.runtime
             .typeclasses
-            .resolve(&info.class, name, &param_type, heap)
+            .resolve(&info.class, name, &param_type)
     }
 
     pub(crate) fn resolve_class_method_plan<'scope>(
@@ -198,19 +196,22 @@ where
         name: &Symbol,
         typ: &Type,
     ) -> Result<ClassMethodPlan<'scope>, EngineError> {
-        let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ, scope.heap) {
+        let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
             Ok(res) => res,
             Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
-                let (name, typ, _applied, applied_types) =
-                    OverloadedFn::new(name.clone(), typ.clone()).into_parts();
-                let root = scope.alloc_root_overloaded(name, typ, Vec::new(), applied_types)?;
+                let root = scope.alloc_root_overloaded(
+                    name.clone(),
+                    typ.clone(),
+                    Vec::new(),
+                    Vec::new(),
+                )?;
                 return Ok(ClassMethodPlan::Deferred(root));
             }
             Err(err) => return Err(err),
         };
         let specialized = typed.as_ref().apply(&s);
         Ok(ClassMethodPlan::Evaluate {
-            env: ScopedEnvironment::from_environment(&def_env, scope),
+            env: def_env.to_scoped_environment(scope)?,
             expr: specialized,
         })
     }
@@ -268,15 +269,14 @@ where
             }),
             1 => {
                 let imp = matches[0].clone();
-                let (native_id, name, arity, typ, _applied, applied_types) =
-                    imp.to_native_fn(typ.clone()).into_parts();
+                let (native_id, name, arity) = imp.runtime_parts();
                 let root = scope.alloc_root_native(
                     native_id,
                     name,
                     arity,
-                    typ,
+                    typ.clone(),
                     Vec::new(),
-                    applied_types,
+                    Vec::new(),
                 )?;
                 Ok(root)
             }
@@ -287,9 +287,12 @@ where
                         typ: typ.to_string(),
                     })
                 } else if is_function_type(typ) {
-                    let (name, typ, _applied, applied_types) =
-                        OverloadedFn::new(sym_name.clone(), typ.clone()).into_parts();
-                    let root = scope.alloc_root_overloaded(name, typ, Vec::new(), applied_types)?;
+                    let root = scope.alloc_root_overloaded(
+                        sym_name.clone(),
+                        typ.clone(),
+                        Vec::new(),
+                        Vec::new(),
+                    )?;
                     Ok(root)
                 } else {
                     Err(EngineError::AmbiguousOverload { name: sym_name })

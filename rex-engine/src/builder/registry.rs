@@ -7,11 +7,7 @@ use rex_typesystem::{
 };
 
 use crate::{
-    env::{Environment, RootedEnvironment},
-    error::EngineError,
-    evaluator::native_callable::NativeCallable,
-    memory::heap::{HeapState, Pointer},
-    native_fn::NativeFn,
+    env::RootedEnvironment, error::EngineError, evaluator::native_callable::NativeCallable,
 };
 
 pub(crate) type NativeId = u64;
@@ -26,8 +22,8 @@ pub(crate) struct NativeImpl<State: Clone + Send + Sync + 'static> {
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeImpl<State> {
-    pub(crate) fn to_native_fn(&self, typ: Type) -> NativeFn<Pointer> {
-        NativeFn::new(self.id, self.name.clone(), self.arity, typ)
+    pub(crate) fn runtime_parts(&self) -> (NativeId, Symbol, usize) {
+        (self.id, self.name.clone(), self.arity)
     }
 }
 
@@ -132,8 +128,7 @@ impl TypeclassRegistry {
         class: &Symbol,
         method: &Symbol,
         param_type: &Type,
-        heap: &HeapState,
-    ) -> Result<(Environment, Arc<TypedExpr>, Subst), EngineError> {
+    ) -> Result<(RootedEnvironment, Arc<TypedExpr>, Subst), EngineError> {
         let instances =
             self.entries
                 .get(class)
@@ -162,7 +157,7 @@ impl TypeclassRegistry {
                             class: class.clone(),
                             typ: param_type.to_string(),
                         })?;
-                Ok((inst.def_env.to_environment(heap)?, typed.clone(), s))
+                Ok((inst.def_env.clone(), typed.clone(), s))
             }
             _ => Err(EngineError::AmbiguousTypeclassImpl {
                 class: class.clone(),

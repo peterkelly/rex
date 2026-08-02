@@ -3,9 +3,8 @@ use std::{
     sync::Arc,
 };
 
-use rex_ast::Symbol;
 use rex_typesystem::{
-    types::{BuiltinTypeId, Type, Types},
+    types::{Type, Types},
     typesystem::TypeSystem,
     unification::unify,
 };
@@ -14,7 +13,7 @@ use crate::{
     compiler::program::CompiledProgram,
     error::EngineError,
     evaluator::{context::InternalCtx, eval::eval_typed_expr, runtime_core::RuntimeCore},
-    memory::heap::{Cell, Handle, Heap, HeapState, Pointer, RootScope, RootedPtr},
+    memory::heap::{Handle, Heap, RootScope, RootedPtr},
     stack::FrameId,
     util::split_fun,
 };
@@ -136,134 +135,10 @@ fn main_input_args(
             let handle = inputs.get(&input.name).ok_or_else(|| {
                 EngineError::Internal("validated input map was incomplete".into())
             })?;
-            handle.pointer_for_heap(heap)?;
+            handle.ensure_heap(heap)?;
             Ok((handle.clone(), input.typ.clone()))
         })
         .collect()
-}
-
-fn cell_type(heap: &HeapState, cell: &Cell) -> Result<Type, EngineError> {
-    let pointer_type = |pointer: &Pointer| -> Result<Type, EngineError> {
-        let cell = heap.get_cell_from_pointer(pointer)?;
-        cell_type(heap, cell)
-    };
-
-    match cell {
-        Cell::Bool(..) => Ok(Type::builtin(BuiltinTypeId::Bool)),
-        Cell::U8(..) => Ok(Type::builtin(BuiltinTypeId::U8)),
-        Cell::U16(..) => Ok(Type::builtin(BuiltinTypeId::U16)),
-        Cell::U32(..) => Ok(Type::builtin(BuiltinTypeId::U32)),
-        Cell::U64(..) => Ok(Type::builtin(BuiltinTypeId::U64)),
-        Cell::I8(..) => Ok(Type::builtin(BuiltinTypeId::I8)),
-        Cell::I16(..) => Ok(Type::builtin(BuiltinTypeId::I16)),
-        Cell::I32(..) => Ok(Type::builtin(BuiltinTypeId::I32)),
-        Cell::I64(..) => Ok(Type::builtin(BuiltinTypeId::I64)),
-        Cell::F32(..) => Ok(Type::builtin(BuiltinTypeId::F32)),
-        Cell::F64(..) => Ok(Type::builtin(BuiltinTypeId::F64)),
-        Cell::String(..) => Ok(Type::builtin(BuiltinTypeId::String)),
-        Cell::Uuid(..) => Ok(Type::builtin(BuiltinTypeId::Uuid)),
-        Cell::DateTime(..) => Ok(Type::builtin(BuiltinTypeId::DateTime)),
-        Cell::Tuple(elems) => {
-            let mut tys = Vec::with_capacity(elems.len());
-            for elem in elems {
-                tys.push(pointer_type(elem)?);
-            }
-            Ok(Type::tuple(tys))
-        }
-        Cell::Empty => Err(EngineError::UnknownType(Symbol::intern("list"))),
-        Cell::Cons(head, _tail) => {
-            let elem_ty = pointer_type(head)?;
-            Ok(Type::app(Type::builtin(BuiltinTypeId::List), elem_ty))
-        }
-        Cell::ListSlice {
-            start,
-            end,
-            elements,
-        } => {
-            let elements_cell = heap.get_cell_from_pointer(elements)?;
-            match elements_cell {
-                Cell::Data(elems) => {
-                    if *start > *end || *end > elems.len() {
-                        return Err(EngineError::NativeType {
-                            expected: format!("valid list slice within len {}", elems.len()),
-                            got: format!("start {start}, end {end}"),
-                        });
-                    }
-                    let first = elems
-                        .get(*start)
-                        .ok_or_else(|| EngineError::UnknownType(Symbol::intern("list")))?;
-                    let elem_ty = pointer_type(first)?;
-                    for elem in elems.iter().take(*end).skip(*start + 1) {
-                        let ty = pointer_type(elem)?;
-                        if ty != elem_ty {
-                            return Err(EngineError::NativeType {
-                                expected: elem_ty.to_string(),
-                                got: ty.to_string(),
-                            });
-                        }
-                    }
-                    Ok(Type::app(Type::builtin(BuiltinTypeId::List), elem_ty))
-                }
-                Cell::BinaryData(bytes) => {
-                    if *start > *end || *end > bytes.len() {
-                        return Err(EngineError::NativeType {
-                            expected: format!("valid binary list slice within len {}", bytes.len()),
-                            got: format!("start {start}, end {end}"),
-                        });
-                    }
-                    if start == end {
-                        return Err(EngineError::UnknownType(Symbol::intern("list")));
-                    }
-                    Ok(Type::list(Type::builtin(BuiltinTypeId::U8)))
-                }
-                _ => Err(EngineError::NativeType {
-                    expected: "list slice backing data".into(),
-                    got: elements_cell.cell_type_name().into(),
-                }),
-            }
-        }
-        Cell::Data(..) | Cell::BinaryData(..) => {
-            Err(EngineError::UnknownType(Symbol::intern(match cell {
-                Cell::Data(..) => "data",
-                Cell::BinaryData(..) => "binary_data",
-                _ => unreachable!(),
-            })))
-        }
-        Cell::Dict(map) => {
-            let first = map
-                .values()
-                .next()
-                .ok_or_else(|| EngineError::UnknownType(Symbol::intern("dict")))?;
-            let elem_ty = pointer_type(first)?;
-            for val in map.values().skip(1) {
-                let ty = pointer_type(val)?;
-                if ty != elem_ty {
-                    return Err(EngineError::NativeType {
-                        expected: elem_ty.to_string(),
-                        got: ty.to_string(),
-                    });
-                }
-            }
-            Ok(Type::app(Type::builtin(BuiltinTypeId::Dict), elem_ty))
-        }
-        Cell::Adt(tag, args) if tag.as_ref() == "Some" && args.len() == 1 => {
-            let inner = pointer_type(&args[0])?;
-            Ok(Type::app(Type::builtin(BuiltinTypeId::Option), inner))
-        }
-        Cell::Adt(tag, args) if tag.as_ref() == "None" && args.is_empty() => {
-            Err(EngineError::UnknownType(Symbol::intern("option")))
-        }
-        Cell::Adt(tag, args)
-            if (tag.as_ref() == "Ok" || tag.as_ref() == "Err") && args.len() == 1 =>
-        {
-            Err(EngineError::UnknownType(Symbol::intern("result")))
-        }
-        Cell::Adt(tag, _args) => Err(EngineError::UnknownType(tag.clone())),
-        Cell::Uninitialized(..) => Err(EngineError::UnknownType(Symbol::intern("uninitialized"))),
-        Cell::Closure(..) => Err(EngineError::UnknownType(Symbol::intern("closure"))),
-        Cell::Native(..) => Err(EngineError::UnknownType(Symbol::intern("native"))),
-        Cell::Overloaded(..) => Err(EngineError::UnknownType(Symbol::intern("overloaded"))),
-    }
 }
 
 pub(crate) fn resolve_arg_type<'scope>(
@@ -271,20 +146,19 @@ pub(crate) fn resolve_arg_type<'scope>(
     arg_type: Option<&Type>,
     arg: RootedPtr<'scope>,
 ) -> Result<Type, EngineError> {
-    let infer_from_cell = |ty_hint: Option<&Type>| -> Result<Type, EngineError> {
-        let cell = scope.get_cell_from_rooted_ptr(arg)?;
+    let infer_from_value = |ty_hint: Option<&Type>| -> Result<Type, EngineError> {
         match ty_hint {
-            Some(ty) => match cell_type(scope.heap, cell) {
+            Some(ty) => match scope.infer_type(arg) {
                 Ok(val_ty) if val_ty.ftv().is_empty() => Ok(val_ty),
                 _ => Ok(ty.clone()),
             },
-            None => cell_type(scope.heap, cell),
+            None => scope.infer_type(arg),
         }
     };
     match arg_type {
         Some(ty) if ty.ftv().is_empty() => Ok(ty.clone()),
-        Some(ty) => infer_from_cell(Some(ty)),
-        None => infer_from_cell(None),
+        Some(ty) => infer_from_value(Some(ty)),
+        None => infer_from_value(None),
     }
 }
 

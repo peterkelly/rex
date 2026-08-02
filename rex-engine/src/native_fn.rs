@@ -10,10 +10,7 @@ use crate::{
         runtime_core::RuntimeCore,
     },
     handlers::NativeCallRequest,
-    memory::{
-        heap::{Pointer, RootScope, RootedPtr},
-        traits::Collection,
-    },
+    memory::heap::{RootScope, RootedPtr},
     util::{is_function_type, split_fun},
 };
 use rex_ast::Symbol;
@@ -38,24 +35,13 @@ pub(crate) struct NativeFn<P> {
     pub(crate) applied_types: Vec<Type>,
 }
 
-impl NativeFn<Pointer> {
-    pub(crate) fn new(native_id: NativeId, name: Symbol, arity: usize, typ: Type) -> Self {
-        Self {
-            native_id,
-            name,
-            arity,
-            typ,
-            applied: Vec::new(),
-            applied_types: Vec::new(),
-        }
-    }
-
+impl<P> NativeFn<P> {
     pub(crate) fn from_parts(
         native_id: NativeId,
         name: Symbol,
         arity: usize,
         typ: Type,
-        applied: Vec<Pointer>,
+        applied: Vec<P>,
         applied_types: Vec<Type>,
     ) -> Self {
         Self {
@@ -68,37 +54,6 @@ impl NativeFn<Pointer> {
         }
     }
 
-    pub(crate) fn into_parts(self) -> (NativeId, Symbol, usize, Type, Vec<Pointer>, Vec<Type>) {
-        (
-            self.native_id,
-            self.name,
-            self.arity,
-            self.typ,
-            self.applied,
-            self.applied_types,
-        )
-    }
-
-    pub(crate) fn rooted<'scope>(
-        &self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> NativeFn<RootedPtr<'scope>> {
-        NativeFn {
-            native_id: self.native_id,
-            name: self.name.clone(),
-            arity: self.arity,
-            typ: self.typ.clone(),
-            applied: self
-                .applied
-                .iter()
-                .map(|value| scope.root(*value))
-                .collect(),
-            applied_types: self.applied_types.clone(),
-        }
-    }
-}
-
-impl<P> NativeFn<P> {
     pub(crate) fn name(&self) -> &Symbol {
         &self.name
     }
@@ -180,17 +135,5 @@ impl<'scope> NativeFn<RootedPtr<'scope>> {
                 .call_at_site(full_ty, &self.applied, call_site)
                 .map(NativeApplyResult::Pending),
         }
-    }
-}
-
-impl Collection for NativeFn<Pointer> {
-    fn map_pointers<E>(
-        &mut self,
-        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
-    ) -> Result<(), E> {
-        for pointer in &mut self.applied {
-            *pointer = map(*pointer)?;
-        }
-        Ok(())
     }
 }

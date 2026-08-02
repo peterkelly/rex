@@ -35,7 +35,6 @@ pub use config::{
     AsyncCallExecutor, AsyncCallPolicy, EngineOptions, ExecutionBounds, NativeAsyncPermit,
     ParallelismController, PreludeMode,
 };
-pub use env::Environment;
 pub use error::{EngineError, ExecutionError, ModuleError};
 pub use evaluator::{
     Evaluator,

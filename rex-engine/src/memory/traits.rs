@@ -1,9 +1,6 @@
 //! Conversion traits between Rust values and Rex heap values.
 
-use std::{
-    any::{Any, TypeId},
-    convert::Infallible,
-};
+use std::any::{Any, TypeId};
 
 use chrono::{DateTime, Utc};
 use rex_ast::Symbol;
@@ -11,25 +8,7 @@ use uuid::Uuid;
 
 use crate::EngineError;
 
-use super::heap::{Handle, Heap, Pointer, wrong_heap_pointer};
-
-pub(crate) trait Collection {
-    fn map_pointers<E>(
-        &mut self,
-        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
-    ) -> Result<(), E>;
-
-    fn trace_pointers(&mut self, out: &mut Vec<Pointer>) {
-        let result: Result<(), Infallible> = self.map_pointers(&mut |pointer| {
-            out.push(pointer);
-            Ok(pointer)
-        });
-        match result {
-            Ok(()) => {}
-            Err(never) => match never {},
-        }
-    }
-}
+use super::heap::{Handle, Heap};
 
 /// Convert a Rust value into a heap-allocated Rex runtime value.
 ///
@@ -56,21 +35,9 @@ pub trait FromRex: Sized {
     fn from_rex(handle: &Handle) -> Result<Self, EngineError>;
 }
 
-pub(super) fn handle_from_pointer(heap: &Heap, pointer: Pointer) -> Result<Handle, EngineError> {
-    heap.handle(pointer)
-}
-
 impl IntoRex for Handle {
     fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
-        let pointer = self.heap().with_locked(|heap| self.pointer(heap))?;
-        if pointer.heap_id != heap.id {
-            return Err(wrong_heap_pointer(
-                pointer.heap_id,
-                heap.id,
-                pointer.index,
-                pointer.generation,
-            ));
-        }
+        self.ensure_heap(heap)?;
         Ok(self)
     }
 }

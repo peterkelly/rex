@@ -78,10 +78,19 @@ post-allocation frame rewrites, transient evaluator `Collection`
 implementations, and bulk `PersistentRoots` scheduler snapshot have been
 removed.
 
-The remaining transition starts at Step 7: raw internal cell edges still use
-the crate-visible `Pointer` name and have not yet been confined to the heap
-implementation. Handle cleanup and final invariant documentation remain in
-Step 8.
+Raw cell edges are now named `InternalPtr` and are confined to the heap
+implementation and its private list-traversal module. `Cell` and `Collection`
+are private to that boundary as well. Evaluator, scheduler, builder, prelude,
+conversion, and environment code now use rooted views, `Handle`, or
+`PersistentPtr`; none imports or constructs raw collector locations. Closure
+environments have been split into heap-internal, scoped-rooted, persistent,
+and handle-rooted representations, so the collector is solely responsible for
+rewriting raw edges.
+
+The remaining transition starts at Step 8: audit the synchronous cycle for
+hidden heap re-entry through `Heap`, locking `Handle` operations, destructors,
+or host calls. Stress validation and final invariant documentation follow in
+Steps 9 and 10.
 
 ## Step 1: Add deterministic concurrency regressions
 

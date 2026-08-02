@@ -7,13 +7,13 @@ use rex_ast::Symbol;
 use crate::EngineError;
 
 use super::heap::{
-    Cell, HeapState, Pointer, PointerKey, PointerPairKey, RootScope, RootedPtr,
+    Cell, HeapState, InternalPtr, InternalPtrKey, InternalPtrPairKey, RootScope, RootedPtr,
     ValueDisplayOptions, pointer_debug_inner, pointer_display_inner, pointer_eq_inner,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum ListElement {
-    Pointer(Pointer),
+    InternalPtr(InternalPtr),
     U8(u8),
 }
 
@@ -84,7 +84,7 @@ impl<P> ListItems<P> {
     }
 }
 
-impl ListItems<Pointer> {
+impl ListItems<InternalPtr> {
     pub(crate) fn into_list_rooted_items<'scope>(
         self,
         scope: &mut RootScope<'_, 'scope>,
@@ -168,7 +168,7 @@ impl<'scope> ListItems<RootedPtr<'scope>> {
 }
 
 pub(super) enum ListItemsSeed {
-    Ready(ListItems<Pointer>),
+    Ready(ListItems<InternalPtr>),
     Elements(Vec<ListElement>),
 }
 
@@ -209,7 +209,7 @@ pub(super) fn list_slice_backing_len(cell: &Cell) -> Result<usize, EngineError> 
 
 fn append_list_slice_elements(
     heap: &HeapState,
-    elements: &Pointer,
+    elements: &InternalPtr,
     start: usize,
     end: usize,
     out: &mut Vec<ListElement>,
@@ -217,7 +217,12 @@ fn append_list_slice_elements(
     match heap.get_cell_from_pointer(elements)? {
         Cell::Data(values) => {
             validate_list_slice_bounds(values.len(), start, end)?;
-            out.extend(values[start..end].iter().copied().map(ListElement::Pointer));
+            out.extend(
+                values[start..end]
+                    .iter()
+                    .copied()
+                    .map(ListElement::InternalPtr),
+            );
             Ok(())
         }
         Cell::BinaryData(values) => {
@@ -267,7 +272,7 @@ fn list_elements_from_cell(heap: &HeapState, cell: &Cell) -> Result<Vec<ListElem
         match cursor {
             Cell::Empty => return Ok(out),
             Cell::Cons(head, tail) => {
-                out.push(ListElement::Pointer(*head));
+                out.push(ListElement::InternalPtr(*head));
                 cursor = heap.get_cell_from_pointer(tail)?;
             }
             Cell::ListSlice {
@@ -290,7 +295,7 @@ fn list_elements_from_cell(heap: &HeapState, cell: &Cell) -> Result<Vec<ListElem
 
 pub(super) fn list_elements_from_pointer(
     heap: &HeapState,
-    pointer: Pointer,
+    pointer: InternalPtr,
 ) -> Result<Vec<ListElement>, EngineError> {
     let cell = heap.get_cell_from_pointer(&pointer)?;
     list_elements_from_cell(heap, cell)
@@ -298,7 +303,7 @@ pub(super) fn list_elements_from_pointer(
 
 pub(super) fn list_len_from_pointer(
     heap: &HeapState,
-    pointer: Pointer,
+    pointer: InternalPtr,
 ) -> Result<usize, EngineError> {
     let mut len = 0usize;
     let mut cursor = heap.get_cell_from_pointer(&pointer)?;
@@ -339,7 +344,7 @@ pub(super) fn materialize_list_elements<'scope>(
     let mut pointer_roots = elements
         .iter()
         .filter_map(|element| match element {
-            ListElement::Pointer(pointer) => Some(scope.root(*pointer)),
+            ListElement::InternalPtr(pointer) => Some(scope.root(*pointer)),
             ListElement::U8(_) => None,
         })
         .collect::<Vec<_>>()
@@ -348,7 +353,7 @@ pub(super) fn materialize_list_elements<'scope>(
     let mut result = Vec::with_capacity(elements.len());
     for element in elements {
         match element {
-            ListElement::Pointer(_) => {
+            ListElement::InternalPtr(_) => {
                 let rooted = pointer_roots.next().ok_or_else(|| {
                     EngineError::Internal("missing pre-rooted list pointer".into())
                 })?;
@@ -363,21 +368,6 @@ pub(super) fn materialize_list_elements<'scope>(
     Ok(result)
 }
 
-pub(super) fn list_elements_to_pointer_vec(
-    elements: Vec<ListElement>,
-) -> Result<Vec<Pointer>, EngineError> {
-    elements
-        .into_iter()
-        .map(|element| match element {
-            ListElement::Pointer(pointer) => Ok(pointer),
-            ListElement::U8(_) => Err(EngineError::NativeType {
-                expected: "pointer-backed list".into(),
-                got: "binary-backed list".into(),
-            }),
-        })
-        .collect()
-}
-
 pub(super) fn list_elements_to_rooted_ptr_vec<'scope>(
     scope: &mut RootScope<'_, 'scope>,
     elements: Vec<ListElement>,
@@ -385,7 +375,7 @@ pub(super) fn list_elements_to_rooted_ptr_vec<'scope>(
     elements
         .into_iter()
         .map(|element| match element {
-            ListElement::Pointer(pointer) => Ok(scope.root(pointer)),
+            ListElement::InternalPtr(pointer) => Ok(scope.root(pointer)),
             ListElement::U8(_) => Err(EngineError::NativeType {
                 expected: "pointer-backed list".into(),
                 got: "binary-backed list".into(),
@@ -394,19 +384,15 @@ pub(super) fn list_elements_to_rooted_ptr_vec<'scope>(
         .collect()
 }
 
-pub(crate) fn list_to_vec(heap: &HeapState, cell: &Cell) -> Result<Vec<Pointer>, EngineError> {
-    list_elements_to_pointer_vec(list_elements_from_cell(heap, cell)?)
-}
-
 pub(super) fn collect_list_u8(
     heap: &mut HeapState,
-    pointer: &Pointer,
+    pointer: &InternalPtr,
 ) -> Result<Vec<u8>, EngineError> {
     let elements = list_elements_from_pointer(heap, *pointer)?;
     let mut out = Vec::with_capacity(elements.len());
     for element in elements {
         match element {
-            ListElement::Pointer(pointer) => {
+            ListElement::InternalPtr(pointer) => {
                 let value = heap.root_scope(|scope| {
                     let pointer = scope.root(pointer);
                     scope.root_as_u8(pointer)
@@ -422,12 +408,12 @@ pub(super) fn collect_list_u8(
 pub(super) fn format_list_debug(
     heap: &HeapState,
     cell: &Cell,
-    active: &mut HashSet<PointerKey>,
+    active: &mut HashSet<InternalPtrKey>,
 ) -> Result<String, EngineError> {
     let items = list_elements_from_cell(heap, cell)?
         .into_iter()
         .map(|element| match element {
-            ListElement::Pointer(pointer) => pointer_debug_inner(heap, &pointer, active),
+            ListElement::InternalPtr(pointer) => pointer_debug_inner(heap, &pointer, active),
             ListElement::U8(value) => Ok(format!("{value}u8")),
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -437,13 +423,15 @@ pub(super) fn format_list_debug(
 pub(super) fn format_list_display(
     heap: &HeapState,
     cell: &Cell,
-    active: &mut HashSet<PointerKey>,
+    active: &mut HashSet<InternalPtrKey>,
     opts: ValueDisplayOptions,
 ) -> Result<String, EngineError> {
     let items = list_elements_from_cell(heap, cell)?
         .into_iter()
         .map(|element| match element {
-            ListElement::Pointer(pointer) => pointer_display_inner(heap, &pointer, active, opts),
+            ListElement::InternalPtr(pointer) => {
+                pointer_display_inner(heap, &pointer, active, opts)
+            }
             ListElement::U8(value) => {
                 if opts.include_numeric_suffixes {
                     Ok(format!("{value}u8"))
@@ -460,15 +448,15 @@ fn list_element_eq_inner(
     heap: &HeapState,
     lhs: ListElement,
     rhs: ListElement,
-    seen: &mut HashSet<PointerPairKey>,
+    seen: &mut HashSet<InternalPtrPairKey>,
 ) -> Result<bool, EngineError> {
     match (lhs, rhs) {
-        (ListElement::Pointer(lhs), ListElement::Pointer(rhs)) => {
+        (ListElement::InternalPtr(lhs), ListElement::InternalPtr(rhs)) => {
             pointer_eq_inner(heap, &lhs, &rhs, seen)
         }
         (ListElement::U8(lhs), ListElement::U8(rhs)) => Ok(lhs == rhs),
-        (ListElement::U8(lhs), ListElement::Pointer(rhs))
-        | (ListElement::Pointer(rhs), ListElement::U8(lhs)) => {
+        (ListElement::U8(lhs), ListElement::InternalPtr(rhs))
+        | (ListElement::InternalPtr(rhs), ListElement::U8(lhs)) => {
             match heap.get_cell_from_pointer(&rhs)? {
                 Cell::U8(rhs) => Ok(lhs == *rhs),
                 _ => Ok(false),
@@ -481,7 +469,7 @@ pub(super) fn list_cells_eq_inner(
     heap: &HeapState,
     lhs: &Cell,
     rhs: &Cell,
-    seen: &mut HashSet<PointerPairKey>,
+    seen: &mut HashSet<InternalPtrPairKey>,
 ) -> Result<bool, EngineError> {
     let lhs = list_elements_from_cell(heap, lhs)?;
     let rhs = list_elements_from_cell(heap, rhs)?;
@@ -498,7 +486,7 @@ pub(super) fn list_cells_eq_inner(
 
 pub(super) fn list_items_from_pointer(
     heap: &HeapState,
-    pointer: Pointer,
+    pointer: InternalPtr,
 ) -> Result<ListItemsSeed, EngineError> {
     let cell = heap.get_cell_from_pointer(&pointer)?;
     match cell {
@@ -620,7 +608,7 @@ impl<'scope> ListRootedItems<'scope> {
                         "list slice backing index out of bounds".into(),
                     ));
                 }
-                let values: Vec<Pointer> =
+                let values: Vec<InternalPtr> =
                     scope.get_cell_from_rooted_ptr(*elements)?.cell_as_data()?;
                 let res_ptr = values.get(backing_index).copied().ok_or_else(|| {
                     EngineError::Internal("list slice backing index out of bounds".into())

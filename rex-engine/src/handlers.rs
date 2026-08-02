@@ -439,7 +439,7 @@ where
         let result_heap = heap.clone();
         let future = async move {
             let value = future.await?;
-            value.pointer_for_heap(&result_heap)?;
+            value.ensure_heap(&result_heap)?;
             Ok(value)
         }
         .boxed();

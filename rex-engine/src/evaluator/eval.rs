@@ -140,7 +140,7 @@ fn persist_eval_state<'heap, 'scope, State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let mut roots = scope.heap.persistent_root_store()?;
+    let mut roots = scope.persistent_root_store()?;
 
     let converted = (|| {
         let frames = {
@@ -234,10 +234,7 @@ where
         } else {
             let args = input_args
                 .iter()
-                .map(|(handle, typ)| {
-                    let pointer = handle.pointer(scope.heap)?;
-                    Ok((scope.root(pointer), typ.clone()))
-                })
+                .map(|(handle, typ)| Ok((scope.root_handle(handle)?, typ.clone())))
                 .collect::<Result<Vec<_>, EngineError>>()?;
             let (env, expr) =
                 synthetic_rooted_application_expr_from_head(env, expr.as_ref().clone(), &args)?;
@@ -333,7 +330,7 @@ where
         mut scheduler,
     } = resolve_eval_state(scope, state)?;
     let released_host_handle = if let Some((frame, handle)) = completed_native {
-        let value = scope.root(handle.pointer(scope.heap)?);
+        let value = scope.root_handle(&handle)?;
         scheduler.schedule_next(EvalWorkItem::receive(frame, frame, value));
         Some(handle)
     } else {
@@ -693,7 +690,7 @@ where
                     .map(|(arg, _)| arg)
                     .ok_or_else(|| EngineError::NotCallable(frame.expr.typ.to_string()))?;
                 let root = scope.alloc_root_closure(
-                    frame.env.to_environment(scope),
+                    frame.env.clone(),
                     param.clone(),
                     param_ty,
                     frame.expr.typ.clone(),
@@ -2087,48 +2084,35 @@ mod tests {
     fn binary_list_length_and_wildcard_patterns_do_not_allocate_elements() {
         let heap = Heap::new();
         let list = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let root = scope.alloc_root_binary_list(vec![10, 20, 30, 40])?;
-                    Ok(scope.pointer(root))
-                })
-            })
+            .alloc_binary_list(vec![10, 20, 30, 40])
             .expect("binary list should allocate");
-        let list = heap.handle(list).expect("binary list should be rooted");
-        let pointer = heap
-            .with_locked(|heap| list.pointer(heap))
-            .expect("binary list pointer should resolve");
-        heap.with_locked_ok(|heap| heap.set_collect_on_every_alloc(true))
+        heap.set_collect_on_every_alloc(true)
             .expect("collection setting should succeed");
         let collections_before = heap
-            .with_locked_ok(|heap| heap.collection_count())
+            .collection_count()
             .expect("collection count should be available");
 
         let empty = Pattern::List(Span::default(), Vec::new());
-        heap.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let pointer = scope.root(pointer);
-                assert!(
-                    match_pattern_ptr(scope, &empty, pointer)
-                        .expect("pattern matching should not error")
-                        .is_none()
-                );
-                Ok(())
-            })
+        heap.with_root_scope(|scope| {
+            let list = scope.root_handle(&list)?;
+            assert!(
+                match_pattern_ptr(scope, &empty, list)
+                    .expect("pattern matching should not error")
+                    .is_none()
+            );
+            Ok(())
         })
         .unwrap();
 
         let wrong_len = Pattern::List(Span::default(), vec![wildcard()]);
-        heap.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let pointer = scope.root(pointer);
-                assert!(
-                    match_pattern_ptr(scope, &wrong_len, pointer)
-                        .expect("pattern matching should not error")
-                        .is_none()
-                );
-                Ok(())
-            })
+        heap.with_root_scope(|scope| {
+            let list = scope.root_handle(&list)?;
+            assert!(
+                match_pattern_ptr(scope, &wrong_len, list)
+                    .expect("pattern matching should not error")
+                    .is_none()
+            );
+            Ok(())
         })
         .unwrap();
 
@@ -2136,22 +2120,20 @@ mod tests {
             Span::default(),
             vec![wildcard(), wildcard(), wildcard(), wildcard()],
         );
-        heap.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let pointer = scope.root(pointer);
-                assert_eq!(
-                    match_pattern_ptr(scope, &exact_wildcards, pointer)
-                        .expect("pattern matching should not error")
-                        .unwrap()
-                        .len(),
-                    0
-                );
-                Ok(())
-            })
+        heap.with_root_scope(|scope| {
+            let list = scope.root_handle(&list)?;
+            assert_eq!(
+                match_pattern_ptr(scope, &exact_wildcards, list)
+                    .expect("pattern matching should not error")
+                    .unwrap()
+                    .len(),
+                0
+            );
+            Ok(())
         })
         .unwrap();
         assert_eq!(
-            heap.with_locked(|heap| Ok(heap.collection_count()))
+            heap.collection_count()
                 .expect("collection count should be available"),
             collections_before,
             "matching must not allocate a heap cell for each byte"
@@ -2161,30 +2143,15 @@ mod tests {
     #[test]
     fn nested_binary_list_bindings_survive_collection() {
         let heap = Heap::new();
-        let (_first, _second, outer) = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let first = scope
-                        .alloc_root_binary_list(vec![10])
-                        .expect("first binary list should allocate");
-                    let second = scope
-                        .alloc_root_binary_list(vec![20])
-                        .expect("second binary list should allocate");
-                    let outer = scope
-                        .alloc_root_list(vec![first, second])
-                        .expect("outer list should allocate");
-
-                    let first = scope.pointer(first);
-                    let second = scope.pointer(second);
-                    let outer = scope.pointer(outer);
-                    Ok((first, second, outer))
-                })
-            })
-            .unwrap();
-        let outer = heap.handle(outer).expect("outer list should be rooted");
-        let pointer = heap
-            .with_locked(|heap| outer.pointer(heap))
-            .expect("outer list pointer should resolve");
+        let first = heap
+            .alloc_binary_list(vec![10])
+            .expect("first binary list should allocate");
+        let second = heap
+            .alloc_binary_list(vec![20])
+            .expect("second binary list should allocate");
+        let outer = heap
+            .alloc_list(vec![first, second])
+            .expect("outer list should allocate");
         let x = Symbol::intern("x");
         let y = Symbol::intern("y");
         let pattern = Pattern::List(
@@ -2195,39 +2162,25 @@ mod tests {
             ],
         );
 
-        heap.with_locked_ok(|heap| heap.set_collect_on_every_alloc(true))
+        heap.set_collect_on_every_alloc(true)
             .expect("collection setting should succeed");
         let collections_before = heap
-            .with_locked_ok(|heap| heap.collection_count())
+            .collection_count()
             .expect("collection count should be available");
-        let bindings = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let pointer = scope.root(pointer);
-                    let res = match_pattern_ptr(scope, &pattern, pointer)
-                        .expect("pattern matching should not error")
-                        .expect("nested list pattern should match");
-                    Ok(BTreeMap::from_iter(
-                        res.into_iter().map(|(k, v)| (k, scope.pointer(v))),
-                    ))
-                })
-            })
-            .unwrap();
-
-        heap.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let x = bindings.get(&x).expect("x should be bound");
-                let x = scope.root(*x);
-                assert_eq!(scope.root_as_u8(x).expect("x should be a u8"), 10);
-                let y = bindings.get(&y).expect("y should be bound");
-                let y = scope.root(*y);
-                assert_eq!(scope.root_as_u8(y).expect("y should be a u8"), 20);
-                Ok(())
-            })
+        heap.with_root_scope(|scope| {
+            let outer = scope.root_handle(&outer)?;
+            let bindings = match_pattern_ptr(scope, &pattern, outer)
+                .expect("pattern matching should not error")
+                .expect("nested list pattern should match");
+            let x = *bindings.get(&x).expect("x should be bound");
+            assert_eq!(scope.root_as_u8(x).expect("x should be a u8"), 10);
+            let y = *bindings.get(&y).expect("y should be bound");
+            assert_eq!(scope.root_as_u8(y).expect("y should be a u8"), 20);
+            Ok(())
         })
         .unwrap();
         assert_eq!(
-            heap.with_locked(|heap| Ok(heap.collection_count()))
+            heap.collection_count()
                 .expect("collection count should be available")
                 - collections_before,
             2,

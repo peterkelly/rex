@@ -1026,13 +1026,7 @@ where
         if let Some(existing) = env_rec.get(&decl.name.name) {
             slots.push(existing);
         } else {
-            let placeholder = heap.with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let root = scope.alloc_root_uninitialized(decl.name.name.clone())?;
-                    Ok(scope.pointer(root))
-                })
-            })?;
-            let placeholder = heap.handle(placeholder)?;
+            let placeholder = heap.alloc_uninitialized(decl.name.name.clone())?;
             env_rec = env_rec.extend(decl.name.name.clone(), placeholder.clone());
             slots.push(placeholder);
         }
@@ -1080,22 +1074,18 @@ where
                     "fn declaration did not lower to lambda".into(),
                 ));
             };
-            let ptr = heap.with_locked(|heap| {
-                let closure_env = env.to_environment(heap)?;
-                heap.root_scope(|scope| {
-                    let root = scope.alloc_root_closure(
-                        closure_env,
-                        param.clone(),
-                        param_ty,
-                        typed.typ.clone(),
-                        Arc::new(body.as_ref().clone()),
-                    )?;
-                    Ok(scope.pointer(root))
-                })
+            heap.with_root_scope(|scope| {
+                let closure_env = env.to_scoped_environment(scope)?;
+                let value = scope.alloc_root_closure(
+                    closure_env,
+                    param.clone(),
+                    param_ty,
+                    typed.typ.clone(),
+                    Arc::new(body.as_ref().clone()),
+                )?;
+                let slot = scope.root_handle(slot)?;
+                scope.overwrite_root(slot, value)
             })?;
-            let value = heap.clone_cell(&ptr)?;
-            let slot = heap.with_locked(|heap| slot.pointer(heap))?;
-            heap.with_locked(|heap| heap.overwrite(&slot, value))?;
         }
         Ok(())
     })();
@@ -1169,13 +1159,7 @@ fn publish_runtime_decl_interfaces_parts(
         if env.get(&df.name.name).is_some() {
             continue;
         }
-        let placeholder = heap.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_uninitialized(df.name.name.clone())?;
-                Ok(scope.pointer(root))
-            })
-        })?;
-        let placeholder = heap.handle(placeholder)?;
+        let placeholder = heap.alloc_uninitialized(df.name.name.clone())?;
         *env = env.extend(df.name.name.clone(), placeholder);
     }
     Ok(())

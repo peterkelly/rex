@@ -1,6 +1,7 @@
 //! Heap storage, roots, handles, cells, and public value views.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::convert::Infallible;
 use std::fmt;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,14 +9,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
 use rex_ast::Symbol;
-use rex_typesystem::types::{Type, TypedExpr};
+use rex_typesystem::types::{BuiltinTypeId, Type, TypedExpr};
 use uuid::Uuid;
 
 use crate::{
-    EngineError,
-    env::{Environment, ScopedEnvironment},
-    native_fn::NativeFn,
-    overloaded_fn::OverloadedFn,
+    EngineError, env::ScopedEnvironment, native_fn::NativeFn, overloaded_fn::OverloadedFn,
 };
 
 use super::{
@@ -26,12 +24,118 @@ use super::{
         list_slice_backing_len, list_slice_head_element, materialize_list_elements,
         validate_list_slice_bounds,
     },
-    traits::{self, Collection, FromRex},
+    traits::FromRex,
 };
+
+trait Collection {
+    fn map_pointers<E>(
+        &mut self,
+        map: &mut impl FnMut(InternalPtr) -> Result<InternalPtr, E>,
+    ) -> Result<(), E>;
+
+    fn trace_pointers(&mut self, out: &mut Vec<InternalPtr>) {
+        let result: Result<(), Infallible> = self.map_pointers(&mut |pointer| {
+            out.push(pointer);
+            Ok(pointer)
+        });
+        match result {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
+    }
+}
+
+#[derive(Clone)]
+struct InternalEnvironment(Arc<InternalEnvEntry>);
+
+#[derive(Clone)]
+struct InternalEnvEntry {
+    parent: Option<InternalEnvironment>,
+    bindings: BTreeMap<Symbol, InternalPtr>,
+}
+
+impl InternalEnvironment {
+    fn parent(&self) -> Option<&InternalEnvironment> {
+        self.0.parent.as_ref()
+    }
+
+    fn bindings(&self) -> &BTreeMap<Symbol, InternalPtr> {
+        &self.0.bindings
+    }
+
+    fn from_scoped<'scope>(env: &ScopedEnvironment<'scope>, scope: &RootScope<'_, 'scope>) -> Self {
+        let mut rebuilt = None;
+        for bindings in env.entries().into_iter().rev() {
+            let bindings = bindings
+                .into_iter()
+                .map(|(name, value)| (name, scope.pointer(value)))
+                .collect();
+            rebuilt = Some(Self(Arc::new(InternalEnvEntry {
+                parent: rebuilt,
+                bindings,
+            })));
+        }
+        rebuilt.unwrap_or_else(|| {
+            Self(Arc::new(InternalEnvEntry {
+                parent: None,
+                bindings: BTreeMap::new(),
+            }))
+        })
+    }
+
+    fn to_scoped<'scope>(&self, scope: &mut RootScope<'_, 'scope>) -> ScopedEnvironment<'scope> {
+        let mut entries = Vec::new();
+        let mut current = Some(self);
+        while let Some(env) = current {
+            entries.push(
+                env.0
+                    .bindings
+                    .iter()
+                    .map(|(name, value)| (name.clone(), scope.root(*value)))
+                    .collect(),
+            );
+            current = env.0.parent.as_ref();
+        }
+        ScopedEnvironment::from_entries(entries)
+    }
+}
+
+impl Collection for InternalEnvironment {
+    fn map_pointers<E>(
+        &mut self,
+        map: &mut impl FnMut(InternalPtr) -> Result<InternalPtr, E>,
+    ) -> Result<(), E> {
+        let mut entries = Vec::new();
+        let mut current = Some(&*self);
+        while let Some(env) = current {
+            let mut bindings = BTreeMap::new();
+            for (name, pointer) in &env.0.bindings {
+                bindings.insert(name.clone(), map(*pointer)?);
+            }
+            entries.push(bindings);
+            current = env.0.parent.as_ref();
+        }
+
+        let mut rebuilt = None;
+        for bindings in entries.into_iter().rev() {
+            rebuilt = Some(Self(Arc::new(InternalEnvEntry {
+                parent: rebuilt,
+                bindings,
+            })));
+        }
+        *self = rebuilt.unwrap_or_else(|| {
+            Self(Arc::new(InternalEnvEntry {
+                parent: None,
+                bindings: BTreeMap::new(),
+            }))
+        });
+        Ok(())
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct Closure {
-    pub env: Environment,
+    env: InternalEnvironment,
     pub param: Symbol,
     pub param_ty: Type,
     pub typ: Type,
@@ -55,7 +159,7 @@ pub(crate) enum RootedCallable<'scope> {
 // GC invariants:
 //
 // - Any alloc_* call may run collection before it creates the requested object.
-//   Callers must not keep raw Pointer values across allocation unless those
+//   Callers must not keep raw InternalPtr values across allocation unless those
 //   pointers are reachable from a Handle, RootedPtr, a registered root slot, a
 //   stack frame, or another traced runtime structure.
 // - Handle, RootedPtr, and PersistentRootStore slots
@@ -63,13 +167,13 @@ pub(crate) enum RootedCallable<'scope> {
 //   store slot; it never contains a raw copying-collector location.
 // - Synchronous evaluator frames, environments, and scheduler-native tasks use
 //   RootedPtr and are rewritten through the temporary root stack.
-// - The collector is copying: every traced Pointer must be rewritten after a
-//   collection. A raw Pointer from before collection is stale by design.
-pub(crate) struct HeapState {
+// - The collector is copying: every traced InternalPtr must be rewritten after a
+//   collection. A raw InternalPtr from before collection is stale by design.
+pub(super) struct HeapState {
     id: u64,
     slots: Vec<HeapSlot>,
     root_slots: Vec<RootSlot>,
-    temporary_roots: Vec<Pointer>,
+    temporary_roots: Vec<InternalPtr>,
     free_root_list: Vec<u64>,
     next_persistent_store_id: u64,
     next_gc_slot_count: usize,
@@ -150,7 +254,7 @@ impl HeapState {
         self.next_gc_slot_count = grown.max(with_slack).max(DEFAULT_GC_SLOT_THRESHOLD);
     }
 
-    fn get_slot_checked<'a>(&'a self, pointer: &Pointer) -> Result<&'a HeapSlot, EngineError> {
+    fn get_slot_checked<'a>(&'a self, pointer: &InternalPtr) -> Result<&'a HeapSlot, EngineError> {
         if pointer.heap_id != self.id {
             return Err(wrong_heap_pointer(
                 pointer.heap_id,
@@ -169,7 +273,7 @@ impl HeapState {
         Ok(slot)
     }
 
-    pub(super) fn register_root(&mut self, pointer: Pointer) -> Result<RootId, EngineError> {
+    pub(super) fn register_root(&mut self, pointer: InternalPtr) -> Result<RootId, EngineError> {
         self.get_slot_checked(&pointer)?;
 
         if let Some(index) = self.free_root_list.pop() {
@@ -207,7 +311,7 @@ impl HeapState {
 
     pub(super) fn register_roots(
         &mut self,
-        pointers: impl IntoIterator<Item = Pointer>,
+        pointers: impl IntoIterator<Item = InternalPtr>,
     ) -> Result<Vec<RootId>, EngineError> {
         let mut root_ids = Vec::new();
         for pointer in pointers {
@@ -265,7 +369,7 @@ impl HeapState {
         }
     }
 
-    fn resolve_root(&self, root_id: RootId) -> Result<Pointer, EngineError> {
+    fn resolve_root(&self, root_id: RootId) -> Result<InternalPtr, EngineError> {
         if root_id.heap_id != self.id {
             return Err(invalid_root(root_id));
         }
@@ -341,7 +445,7 @@ impl HeapState {
             self.get_slot_checked(pointer)?;
             let index = u32::try_from(destinations[live_index])
                 .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
-            forwarding[pointer.index as usize] = Some(Pointer {
+            forwarding[pointer.index as usize] = Some(InternalPtr {
                 heap_id: self.id,
                 index,
                 generation: next_epoch,
@@ -392,9 +496,9 @@ impl HeapState {
 
     fn forward_for_gc(
         &self,
-        pointer: Pointer,
-        forwarding: &[Option<Pointer>],
-    ) -> Result<Pointer, EngineError> {
+        pointer: InternalPtr,
+        forwarding: &[Option<InternalPtr>],
+    ) -> Result<InternalPtr, EngineError> {
         self.get_slot_checked(&pointer)?;
         forwarding
             .get(pointer.index as usize)
@@ -473,7 +577,7 @@ impl HeapState {
             }
             let index = u32::try_from(index)
                 .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
-            let pointer = Pointer {
+            let pointer = InternalPtr {
                 heap_id: self.id,
                 index,
                 generation: slot.generation,
@@ -541,7 +645,10 @@ impl HeapState {
         self.get_cell_from_pointer(&pointer)
     }
 
-    pub(crate) fn get_cell_from_pointer(&self, pointer: &Pointer) -> Result<&Cell, EngineError> {
+    pub(super) fn get_cell_from_pointer(
+        &self,
+        pointer: &InternalPtr,
+    ) -> Result<&Cell, EngineError> {
         if pointer.heap_id != self.id {
             return Err(wrong_heap_pointer(
                 pointer.heap_id,
@@ -564,12 +671,12 @@ impl HeapState {
             .ok_or_else(|| invalid_pointer(heap_id, pointer.index, pointer.generation))
     }
 
-    pub(crate) fn type_name(&self, pointer: &Pointer) -> Result<&'static str, EngineError> {
+    pub(super) fn type_name(&self, pointer: &InternalPtr) -> Result<&'static str, EngineError> {
         self.get_cell_from_pointer(pointer)
             .map(Cell::cell_type_name)
     }
 
-    pub(crate) fn overwrite(&mut self, pointer: &Pointer, cell: Cell) -> Result<(), EngineError> {
+    fn overwrite(&mut self, pointer: &InternalPtr, cell: Cell) -> Result<(), EngineError> {
         if pointer.heap_id != self.id {
             return Err(wrong_heap_pointer(
                 pointer.heap_id,
@@ -591,10 +698,10 @@ impl HeapState {
         Ok(())
     }
 
-    pub(crate) fn pointer_as_list(
+    pub(super) fn pointer_as_list(
         &mut self,
-        pointer: &Pointer,
-    ) -> Result<Vec<Pointer>, EngineError> {
+        pointer: &InternalPtr,
+    ) -> Result<Vec<InternalPtr>, EngineError> {
         let elements = list_elements_from_pointer(self, *pointer)?;
         self.root_scope(|scope| {
             materialize_list_elements(scope, elements)
@@ -602,7 +709,7 @@ impl HeapState {
         })
     }
 
-    pub(crate) fn root_scope<R>(
+    pub(super) fn root_scope<R>(
         &mut self,
         f: impl for<'scope> FnOnce(&mut RootScope<'_, 'scope>) -> R,
     ) -> R {
@@ -646,7 +753,7 @@ struct HeapSlot {
 #[derive(Clone)]
 struct RootSlot {
     generation: u64,
-    pointer: Option<Pointer>,
+    pointer: Option<InternalPtr>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -698,7 +805,7 @@ pub(crate) struct RootedPtr<'scope> {
 }
 
 pub(crate) struct RootScope<'heap, 'scope> {
-    pub(crate) heap: &'heap mut HeapState,
+    pub(super) heap: &'heap mut HeapState,
     base: usize,
     _brand: PhantomData<std::cell::Cell<&'scope ()>>,
 }
@@ -710,7 +817,19 @@ impl Drop for RootScope<'_, '_> {
 }
 
 impl<'h, 'scope> RootScope<'h, 'scope> {
-    pub(crate) fn root(&mut self, ptr: Pointer) -> RootedPtr<'scope> {
+    pub(crate) fn root_handle(
+        &mut self,
+        handle: &Handle,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        let pointer = handle.pointer(self.heap)?;
+        Ok(self.root(pointer))
+    }
+
+    pub(crate) fn persistent_root_store(&mut self) -> Result<PersistentRootStore, EngineError> {
+        self.heap.persistent_root_store()
+    }
+
+    pub(super) fn root(&mut self, ptr: InternalPtr) -> RootedPtr<'scope> {
         // This operation itself must not invoke the language GC.
         let slot = self.heap.temporary_roots.len();
         self.heap.temporary_roots.push(ptr);
@@ -721,7 +840,7 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
         }
     }
 
-    pub(crate) fn pointer(&self, root: RootedPtr<'scope>) -> Pointer {
+    pub(super) fn pointer(&self, root: RootedPtr<'scope>) -> InternalPtr {
         self.heap.temporary_roots[root.slot]
     }
 
@@ -730,7 +849,11 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
             .map(Cell::cell_type_name)
     }
 
-    pub(crate) fn get_cell_from_rooted_ptr(
+    pub(crate) fn infer_type(&self, root: RootedPtr<'scope>) -> Result<Type, EngineError> {
+        infer_cell_type(self.heap, self.get_cell_from_rooted_ptr(root)?)
+    }
+
+    pub(super) fn get_cell_from_rooted_ptr(
         &self,
         root: RootedPtr<'scope>,
     ) -> Result<&Cell, EngineError> {
@@ -748,7 +871,7 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
             ListItemsSeed::Elements(elements) => {
                 if elements
                     .iter()
-                    .all(|element| matches!(element, ListElement::Pointer(_)))
+                    .all(|element| matches!(element, ListElement::InternalPtr(_)))
                 {
                     return list_elements_to_rooted_ptr_vec(self, elements)
                         .map(ListRootedItems::Pointers);
@@ -900,12 +1023,13 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
 
     pub(crate) fn alloc_root_closure(
         &mut self,
-        env: Environment,
+        env: ScopedEnvironment<'scope>,
         param: Symbol,
         param_ty: Type,
         typ: Type,
         body: Arc<TypedExpr>,
     ) -> Result<RootedPtr<'scope>, EngineError> {
+        let env = InternalEnvironment::from_scoped(&env, self);
         self.alloc_reference(Cell::Closure(Closure {
             env,
             param,
@@ -1072,9 +1196,55 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
         self.get_cell_from_rooted_ptr(root)?.cell_as_u8()
     }
 
-    #[cfg(test)]
+    pub(crate) fn root_as_u16(&self, root: RootedPtr<'scope>) -> Result<u16, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_u16()
+    }
+
+    pub(crate) fn root_as_u32(&self, root: RootedPtr<'scope>) -> Result<u32, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_u32()
+    }
+
+    pub(crate) fn root_as_u64(&self, root: RootedPtr<'scope>) -> Result<u64, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_u64()
+    }
+
+    pub(crate) fn root_as_i8(&self, root: RootedPtr<'scope>) -> Result<i8, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_i8()
+    }
+
+    pub(crate) fn root_as_i16(&self, root: RootedPtr<'scope>) -> Result<i16, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_i16()
+    }
+
     pub(crate) fn root_as_i32(&self, root: RootedPtr<'scope>) -> Result<i32, EngineError> {
         self.get_cell_from_rooted_ptr(root)?.cell_as_i32()
+    }
+
+    pub(crate) fn root_as_i64(&self, root: RootedPtr<'scope>) -> Result<i64, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_i64()
+    }
+
+    pub(crate) fn root_as_f32(&self, root: RootedPtr<'scope>) -> Result<f32, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_f32()
+    }
+
+    pub(crate) fn root_as_f64(&self, root: RootedPtr<'scope>) -> Result<f64, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_f64()
+    }
+
+    pub(crate) fn root_as_string(&self, root: RootedPtr<'scope>) -> Result<String, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_string()
+    }
+
+    pub(crate) fn root_as_uuid(&self, root: RootedPtr<'scope>) -> Result<Uuid, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_uuid()
+    }
+
+    pub(crate) fn root_as_datetime(
+        &self,
+        root: RootedPtr<'scope>,
+    ) -> Result<DateTime<Utc>, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_datetime()
     }
 
     pub(crate) fn root_as_tuple(
@@ -1093,7 +1263,7 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
         &mut self,
         root: RootedPtr<'scope>,
     ) -> Result<BTreeMap<Symbol, RootedPtr<'scope>>, EngineError> {
-        let dict: BTreeMap<Symbol, Pointer> =
+        let dict: BTreeMap<Symbol, InternalPtr> =
             self.get_cell_from_rooted_ptr(root)?.cell_as_dict()?;
         Ok(BTreeMap::from_iter(
             dict.into_iter().map(|(k, v)| (k, self.root(v))),
@@ -1130,15 +1300,35 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
                 typ,
                 body,
             }) => Some(RootedCallable::Closure(RootedClosure {
-                env: ScopedEnvironment::from_environment(&env, self),
+                env: env.to_scoped(self),
                 param,
                 param_ty,
                 typ,
                 body,
             })),
-            Cell::Native(native) => Some(RootedCallable::Native(native.rooted(self))),
+            Cell::Native(native) => Some(RootedCallable::Native(NativeFn::from_parts(
+                native.native_id,
+                native.name,
+                native.arity,
+                native.typ,
+                native
+                    .applied
+                    .into_iter()
+                    .map(|value| self.root(value))
+                    .collect(),
+                native.applied_types,
+            ))),
             Cell::Overloaded(overloaded) => {
-                Some(RootedCallable::Overloaded(overloaded.rooted(self)))
+                Some(RootedCallable::Overloaded(OverloadedFn::from_parts(
+                    overloaded.name,
+                    overloaded.typ,
+                    overloaded
+                        .applied
+                        .into_iter()
+                        .map(|value| self.root(value))
+                        .collect(),
+                    overloaded.applied_types,
+                )))
             }
             _ => None,
         })
@@ -1150,7 +1340,18 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
     ) -> Result<Option<NativeFn<RootedPtr<'scope>>>, EngineError> {
         let cell = self.get_cell_from_rooted_ptr(root)?.clone();
         Ok(match cell {
-            Cell::Native(native) => Some(native.rooted(self)),
+            Cell::Native(native) => Some(NativeFn::from_parts(
+                native.native_id,
+                native.name,
+                native.arity,
+                native.typ,
+                native
+                    .applied
+                    .into_iter()
+                    .map(|value| self.root(value))
+                    .collect(),
+                native.applied_types,
+            )),
             _ => None,
         })
     }
@@ -1725,11 +1926,11 @@ impl Handle {
         &self.root.heap
     }
 
-    pub(crate) fn pointer(&self, heap: &HeapState) -> Result<Pointer, EngineError> {
+    fn pointer(&self, heap: &HeapState) -> Result<InternalPtr, EngineError> {
         heap.resolve_root(self.root.root_id)
     }
 
-    pub(crate) fn pointer_for_heap(&self, heap: &Heap) -> Result<Pointer, EngineError> {
+    fn pointer_for_heap(&self, heap: &Heap) -> Result<InternalPtr, EngineError> {
         let pointer = self.heap().with_locked(|heap| self.pointer(heap))?;
         if pointer.heap_id != heap.id {
             return Err(wrong_heap_pointer(
@@ -1740,6 +1941,10 @@ impl Handle {
             ));
         }
         Ok(pointer)
+    }
+
+    pub(crate) fn ensure_heap(&self, heap: &Heap) -> Result<(), EngineError> {
+        self.pointer_for_heap(heap).map(|_| ())
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, HeapState>, EngineError> {
@@ -1773,7 +1978,7 @@ impl Heap {
         }
     }
 
-    pub(crate) fn with_locked<R>(
+    fn with_locked<R>(
         &self,
         f: impl FnOnce(&mut HeapState) -> Result<R, EngineError>,
     ) -> Result<R, EngineError> {
@@ -1797,10 +2002,7 @@ impl Heap {
         state.root_scope(f)
     }
 
-    pub(crate) fn with_locked_ok<R>(
-        &self,
-        f: impl FnOnce(&mut HeapState) -> R,
-    ) -> Result<R, EngineError> {
+    fn with_locked_ok<R>(&self, f: impl FnOnce(&mut HeapState) -> R) -> Result<R, EngineError> {
         // Keep all heap reads inside this access object while the lock is held.
         let mut state = self
             .state
@@ -1809,7 +2011,7 @@ impl Heap {
         Ok(f(&mut state))
     }
 
-    pub(crate) fn handle(&self, pointer: Pointer) -> Result<Handle, EngineError> {
+    fn handle(&self, pointer: InternalPtr) -> Result<Handle, EngineError> {
         let mut state = self
             .state
             .lock()
@@ -1833,11 +2035,16 @@ impl Heap {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn collection_count(&self) -> Result<u64, EngineError> {
+        self.with_locked_ok(|heap| heap.collection_count())
+    }
+
     pub fn alloc_bool(&self, value: bool) -> Result<Handle, EngineError> {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_bool(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1847,7 +2054,7 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_u8(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1857,7 +2064,7 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_u16(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1867,7 +2074,7 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_u32(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1877,7 +2084,7 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_u64(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1887,7 +2094,7 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_i8(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1897,7 +2104,7 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_i16(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1907,7 +2114,7 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_i32(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1917,7 +2124,7 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_i64(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1927,7 +2134,7 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_f32(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1937,7 +2144,7 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_f64(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1947,7 +2154,7 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_string(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1957,7 +2164,7 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_uuid(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1967,7 +2174,17 @@ impl Heap {
         let pointer = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_datetime(value)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
+            })
+        })?;
+        self.handle(pointer)
+    }
+
+    pub(crate) fn alloc_uninitialized(&self, name: Symbol) -> Result<Handle, EngineError> {
+        let pointer = self.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let root = scope.alloc_root_uninitialized(name)?;
+                Ok(scope.pointer(root))
             })
         })?;
         self.handle(pointer)
@@ -1994,11 +2211,11 @@ impl Heap {
                 Ok(scope.pointer(root))
             })
         })?;
-        traits::handle_from_pointer(self, list)
+        self.handle(list)
     }
 
     pub fn alloc_binary_list(&self, values: Vec<u8>) -> Result<Handle, EngineError> {
-        let pointer: Pointer = self.with_locked(|heap| {
+        let pointer: InternalPtr = self.with_locked(|heap| {
             heap.root_scope(|scope| {
                 let root = scope.alloc_root_binary_list(values)?;
                 Ok(scope.pointer(root))
@@ -2071,7 +2288,7 @@ impl Heap {
     }
 
     pub fn alloc_dict(&self, values: BTreeMap<Symbol, Handle>) -> Result<Handle, EngineError> {
-        let mut pointers: BTreeMap<Symbol, Pointer> = BTreeMap::new();
+        let mut pointers: BTreeMap<Symbol, InternalPtr> = BTreeMap::new();
         for (name, handle) in values {
             pointers.insert(name, handle.pointer_for_heap(self)?);
         }
@@ -2098,18 +2315,19 @@ impl Heap {
         self.handle(pointer)
     }
 
-    fn pointers_from_handles(&self, values: Vec<Handle>) -> Result<Vec<Pointer>, EngineError> {
+    fn pointers_from_handles(&self, values: Vec<Handle>) -> Result<Vec<InternalPtr>, EngineError> {
         values
             .iter()
             .map(|handle| handle.pointer_for_heap(self))
             .collect()
     }
 
-    pub(crate) fn clone_cell(&self, pointer: &Pointer) -> Result<Cell, EngineError> {
+    #[cfg(test)]
+    fn clone_cell(&self, pointer: &InternalPtr) -> Result<Cell, EngineError> {
         self.with_locked(|heap| Ok(heap.get_cell_from_pointer(pointer)?.clone()))
     }
 
-    fn handles_from_pointers(&self, values: &[Pointer]) -> Result<Vec<Handle>, EngineError> {
+    fn handles_from_pointers(&self, values: &[InternalPtr]) -> Result<Vec<Handle>, EngineError> {
         let root_ids = {
             let mut state = self
                 .state
@@ -2135,21 +2353,21 @@ impl Heap {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct Pointer {
-    pub(super) heap_id: u64,
-    pub(super) index: u32,
-    pub(super) generation: u64,
+pub(super) struct InternalPtr {
+    heap_id: u64,
+    index: u32,
+    generation: u64,
 }
 
-pub(crate) struct Reference<'a> {
+struct Reference<'a> {
     heap: &'a mut HeapState,
     index: u32,
     generation: u64,
 }
 
 impl<'a> Reference<'a> {
-    pub(crate) fn into_pointer(self) -> Pointer {
-        Pointer {
+    fn into_pointer(self) -> InternalPtr {
+        InternalPtr {
             heap_id: self.heap.id,
             index: self.index,
             generation: self.generation,
@@ -2158,7 +2376,7 @@ impl<'a> Reference<'a> {
 }
 
 #[derive(Clone)]
-pub(crate) enum Cell {
+pub(super) enum Cell {
     Bool(bool),
     U8(u8),
     U16(u16),
@@ -2173,26 +2391,26 @@ pub(crate) enum Cell {
     String(String),
     Uuid(Uuid),
     DateTime(DateTime<Utc>),
-    Tuple(Vec<Pointer>),
+    Tuple(Vec<InternalPtr>),
     Empty,
-    Cons(Pointer, Pointer),
+    Cons(InternalPtr, InternalPtr),
     ListSlice {
         start: usize,
         end: usize,
-        elements: Pointer,
+        elements: InternalPtr,
     },
-    Data(Vec<Pointer>),
+    Data(Vec<InternalPtr>),
     BinaryData(Vec<u8>),
-    Dict(BTreeMap<Symbol, Pointer>),
-    Adt(Symbol, Vec<Pointer>),
+    Dict(BTreeMap<Symbol, InternalPtr>),
+    Adt(Symbol, Vec<InternalPtr>),
     Uninitialized(Symbol),
     Closure(Closure),
-    Native(NativeFn<Pointer>),
-    Overloaded(OverloadedFn<Pointer>),
+    Native(NativeFn<InternalPtr>),
+    Overloaded(OverloadedFn<InternalPtr>),
 }
 
 impl Cell {
-    pub(crate) fn cell_type_name(&self) -> &'static str {
+    pub(super) fn cell_type_name(&self) -> &'static str {
         match self {
             Cell::Bool(..) => "bool",
             Cell::U8(..) => "u8",
@@ -2228,126 +2446,126 @@ impl Cell {
         }
     }
 
-    pub(crate) fn cell_as_bool(&self) -> Result<bool, EngineError> {
+    pub(super) fn cell_as_bool(&self) -> Result<bool, EngineError> {
         match self {
             Cell::Bool(v) => Ok(*v),
             _ => Err(self.cell_type_error("bool")),
         }
     }
 
-    pub(crate) fn cell_as_u8(&self) -> Result<u8, EngineError> {
+    pub(super) fn cell_as_u8(&self) -> Result<u8, EngineError> {
         match self {
             Cell::U8(v) => Ok(*v),
             _ => Err(self.cell_type_error("u8")),
         }
     }
 
-    pub(crate) fn cell_as_u16(&self) -> Result<u16, EngineError> {
+    pub(super) fn cell_as_u16(&self) -> Result<u16, EngineError> {
         match self {
             Cell::U16(v) => Ok(*v),
             _ => Err(self.cell_type_error("u16")),
         }
     }
 
-    pub(crate) fn cell_as_u32(&self) -> Result<u32, EngineError> {
+    pub(super) fn cell_as_u32(&self) -> Result<u32, EngineError> {
         match self {
             Cell::U32(v) => Ok(*v),
             _ => Err(self.cell_type_error("u32")),
         }
     }
 
-    pub(crate) fn cell_as_u64(&self) -> Result<u64, EngineError> {
+    pub(super) fn cell_as_u64(&self) -> Result<u64, EngineError> {
         match self {
             Cell::U64(v) => Ok(*v),
             _ => Err(self.cell_type_error("u64")),
         }
     }
 
-    pub(crate) fn cell_as_i8(&self) -> Result<i8, EngineError> {
+    pub(super) fn cell_as_i8(&self) -> Result<i8, EngineError> {
         match self {
             Cell::I8(v) => Ok(*v),
             _ => Err(self.cell_type_error("i8")),
         }
     }
 
-    pub(crate) fn cell_as_i16(&self) -> Result<i16, EngineError> {
+    pub(super) fn cell_as_i16(&self) -> Result<i16, EngineError> {
         match self {
             Cell::I16(v) => Ok(*v),
             _ => Err(self.cell_type_error("i16")),
         }
     }
 
-    pub(crate) fn cell_as_i32(&self) -> Result<i32, EngineError> {
+    pub(super) fn cell_as_i32(&self) -> Result<i32, EngineError> {
         match self {
             Cell::I32(v) => Ok(*v),
             _ => Err(self.cell_type_error("i32")),
         }
     }
 
-    pub(crate) fn cell_as_i64(&self) -> Result<i64, EngineError> {
+    pub(super) fn cell_as_i64(&self) -> Result<i64, EngineError> {
         match self {
             Cell::I64(v) => Ok(*v),
             _ => Err(self.cell_type_error("i64")),
         }
     }
 
-    pub(crate) fn cell_as_f32(&self) -> Result<f32, EngineError> {
+    pub(super) fn cell_as_f32(&self) -> Result<f32, EngineError> {
         match self {
             Cell::F32(v) => Ok(*v),
             _ => Err(self.cell_type_error("f32")),
         }
     }
 
-    pub(crate) fn cell_as_f64(&self) -> Result<f64, EngineError> {
+    pub(super) fn cell_as_f64(&self) -> Result<f64, EngineError> {
         match self {
             Cell::F64(v) => Ok(*v),
             _ => Err(self.cell_type_error("f64")),
         }
     }
 
-    pub(crate) fn cell_as_string(&self) -> Result<String, EngineError> {
+    pub(super) fn cell_as_string(&self) -> Result<String, EngineError> {
         match self {
             Cell::String(v) => Ok(v.clone()),
             _ => Err(self.cell_type_error("string")),
         }
     }
 
-    pub(crate) fn cell_as_uuid(&self) -> Result<Uuid, EngineError> {
+    pub(super) fn cell_as_uuid(&self) -> Result<Uuid, EngineError> {
         match self {
             Cell::Uuid(v) => Ok(*v),
             _ => Err(self.cell_type_error("uuid")),
         }
     }
 
-    pub(crate) fn cell_as_datetime(&self) -> Result<DateTime<Utc>, EngineError> {
+    pub(super) fn cell_as_datetime(&self) -> Result<DateTime<Utc>, EngineError> {
         match self {
             Cell::DateTime(v) => Ok(*v),
             _ => Err(self.cell_type_error("datetime")),
         }
     }
 
-    pub(crate) fn cell_as_tuple(&self) -> Result<Vec<Pointer>, EngineError> {
+    pub(super) fn cell_as_tuple(&self) -> Result<Vec<InternalPtr>, EngineError> {
         match self {
             Cell::Tuple(v) => Ok(v.clone()),
             _ => Err(self.cell_type_error("tuple")),
         }
     }
 
-    pub(crate) fn cell_as_data(&self) -> Result<Vec<Pointer>, EngineError> {
+    pub(super) fn cell_as_data(&self) -> Result<Vec<InternalPtr>, EngineError> {
         match self {
             Cell::Data(v) => Ok(v.clone()),
             _ => Err(self.cell_type_error("data")),
         }
     }
 
-    pub(crate) fn cell_as_dict(&self) -> Result<BTreeMap<Symbol, Pointer>, EngineError> {
+    pub(super) fn cell_as_dict(&self) -> Result<BTreeMap<Symbol, InternalPtr>, EngineError> {
         match self {
             Cell::Dict(v) => Ok(v.clone()),
             _ => Err(self.cell_type_error("dict")),
         }
     }
 
-    pub(crate) fn cell_as_adt(&self) -> Result<(Symbol, Vec<Pointer>), EngineError> {
+    pub(super) fn cell_as_adt(&self) -> Result<(Symbol, Vec<InternalPtr>), EngineError> {
         match self {
             Cell::Adt(name, args) => Ok((name.clone(), args.clone())),
             _ => Err(self.cell_type_error("adt")),
@@ -2355,10 +2573,133 @@ impl Cell {
     }
 }
 
+fn infer_cell_type(heap: &HeapState, cell: &Cell) -> Result<Type, EngineError> {
+    let pointer_type = |pointer: &InternalPtr| -> Result<Type, EngineError> {
+        infer_cell_type(heap, heap.get_cell_from_pointer(pointer)?)
+    };
+
+    match cell {
+        Cell::Bool(..) => Ok(Type::builtin(BuiltinTypeId::Bool)),
+        Cell::U8(..) => Ok(Type::builtin(BuiltinTypeId::U8)),
+        Cell::U16(..) => Ok(Type::builtin(BuiltinTypeId::U16)),
+        Cell::U32(..) => Ok(Type::builtin(BuiltinTypeId::U32)),
+        Cell::U64(..) => Ok(Type::builtin(BuiltinTypeId::U64)),
+        Cell::I8(..) => Ok(Type::builtin(BuiltinTypeId::I8)),
+        Cell::I16(..) => Ok(Type::builtin(BuiltinTypeId::I16)),
+        Cell::I32(..) => Ok(Type::builtin(BuiltinTypeId::I32)),
+        Cell::I64(..) => Ok(Type::builtin(BuiltinTypeId::I64)),
+        Cell::F32(..) => Ok(Type::builtin(BuiltinTypeId::F32)),
+        Cell::F64(..) => Ok(Type::builtin(BuiltinTypeId::F64)),
+        Cell::String(..) => Ok(Type::builtin(BuiltinTypeId::String)),
+        Cell::Uuid(..) => Ok(Type::builtin(BuiltinTypeId::Uuid)),
+        Cell::DateTime(..) => Ok(Type::builtin(BuiltinTypeId::DateTime)),
+        Cell::Tuple(elems) => {
+            let mut tys = Vec::with_capacity(elems.len());
+            for elem in elems {
+                tys.push(pointer_type(elem)?);
+            }
+            Ok(Type::tuple(tys))
+        }
+        Cell::Empty => Err(EngineError::UnknownType(Symbol::intern("list"))),
+        Cell::Cons(head, _tail) => {
+            let elem_ty = pointer_type(head)?;
+            Ok(Type::app(Type::builtin(BuiltinTypeId::List), elem_ty))
+        }
+        Cell::ListSlice {
+            start,
+            end,
+            elements,
+        } => {
+            let elements_cell = heap.get_cell_from_pointer(elements)?;
+            match elements_cell {
+                Cell::Data(elems) => {
+                    if *start > *end || *end > elems.len() {
+                        return Err(EngineError::NativeType {
+                            expected: format!("valid list slice within len {}", elems.len()),
+                            got: format!("start {start}, end {end}"),
+                        });
+                    }
+                    let first = elems
+                        .get(*start)
+                        .ok_or_else(|| EngineError::UnknownType(Symbol::intern("list")))?;
+                    let elem_ty = pointer_type(first)?;
+                    for elem in elems.iter().take(*end).skip(*start + 1) {
+                        let ty = pointer_type(elem)?;
+                        if ty != elem_ty {
+                            return Err(EngineError::NativeType {
+                                expected: elem_ty.to_string(),
+                                got: ty.to_string(),
+                            });
+                        }
+                    }
+                    Ok(Type::app(Type::builtin(BuiltinTypeId::List), elem_ty))
+                }
+                Cell::BinaryData(bytes) => {
+                    if *start > *end || *end > bytes.len() {
+                        return Err(EngineError::NativeType {
+                            expected: format!("valid binary list slice within len {}", bytes.len()),
+                            got: format!("start {start}, end {end}"),
+                        });
+                    }
+                    if start == end {
+                        return Err(EngineError::UnknownType(Symbol::intern("list")));
+                    }
+                    Ok(Type::list(Type::builtin(BuiltinTypeId::U8)))
+                }
+                _ => Err(EngineError::NativeType {
+                    expected: "list slice backing data".into(),
+                    got: elements_cell.cell_type_name().into(),
+                }),
+            }
+        }
+        Cell::Data(..) | Cell::BinaryData(..) => {
+            Err(EngineError::UnknownType(Symbol::intern(match cell {
+                Cell::Data(..) => "data",
+                Cell::BinaryData(..) => "binary_data",
+                _ => unreachable!(),
+            })))
+        }
+        Cell::Dict(map) => {
+            let first = map
+                .values()
+                .next()
+                .ok_or_else(|| EngineError::UnknownType(Symbol::intern("dict")))?;
+            let elem_ty = pointer_type(first)?;
+            for val in map.values().skip(1) {
+                let ty = pointer_type(val)?;
+                if ty != elem_ty {
+                    return Err(EngineError::NativeType {
+                        expected: elem_ty.to_string(),
+                        got: ty.to_string(),
+                    });
+                }
+            }
+            Ok(Type::app(Type::builtin(BuiltinTypeId::Dict), elem_ty))
+        }
+        Cell::Adt(tag, args) if tag.as_ref() == "Some" && args.len() == 1 => {
+            let inner = pointer_type(&args[0])?;
+            Ok(Type::app(Type::builtin(BuiltinTypeId::Option), inner))
+        }
+        Cell::Adt(tag, args) if tag.as_ref() == "None" && args.is_empty() => {
+            Err(EngineError::UnknownType(Symbol::intern("option")))
+        }
+        Cell::Adt(tag, args)
+            if (tag.as_ref() == "Ok" || tag.as_ref() == "Err") && args.len() == 1 =>
+        {
+            Err(EngineError::UnknownType(Symbol::intern("result")))
+        }
+        Cell::Adt(tag, _args) => Err(EngineError::UnknownType(tag.clone())),
+        Cell::Uninitialized(..) => Err(EngineError::UnknownType(Symbol::intern("uninitialized"))),
+        Cell::Closure(..) => Err(EngineError::UnknownType(Symbol::intern("closure"))),
+        Cell::Native(..) => Err(EngineError::UnknownType(Symbol::intern("native"))),
+        Cell::Overloaded(..) => Err(EngineError::UnknownType(Symbol::intern("overloaded"))),
+    }
+}
+
 impl Collection for Cell {
     fn map_pointers<E>(
         &mut self,
-        map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
+        map: &mut impl FnMut(InternalPtr) -> Result<InternalPtr, E>,
     ) -> Result<(), E> {
         match self {
             Cell::Tuple(values) | Cell::Data(values) | Cell::Adt(_, values) => {
@@ -2383,8 +2724,18 @@ impl Collection for Cell {
                 Ok(())
             }
             Cell::Closure(closure) => closure.env.map_pointers(map),
-            Cell::Native(native) => native.map_pointers(map),
-            Cell::Overloaded(overloaded) => overloaded.map_pointers(map),
+            Cell::Native(native) => {
+                for pointer in &mut native.applied {
+                    *pointer = map(*pointer)?;
+                }
+                Ok(())
+            }
+            Cell::Overloaded(overloaded) => {
+                for pointer in &mut overloaded.applied {
+                    *pointer = map(*pointer)?;
+                }
+                Ok(())
+            }
             Cell::Bool(_)
             | Cell::U8(_)
             | Cell::U16(_)
@@ -2406,8 +2757,8 @@ impl Collection for Cell {
     }
 }
 
-pub(super) type PointerKey = (u64, u32, u64);
-pub(super) type PointerPairKey = (PointerKey, PointerKey);
+pub(super) type InternalPtrKey = (u64, u32, u64);
+pub(super) type InternalPtrPairKey = (InternalPtrKey, InternalPtrKey);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValueDisplayOptions {
@@ -2447,18 +2798,18 @@ fn maybe_strip_snippet_qualifier(name: &str, opts: ValueDisplayOptions) -> Strin
     name.to_string()
 }
 
-fn pointer_key(pointer: &Pointer) -> PointerKey {
+fn pointer_key(pointer: &InternalPtr) -> InternalPtrKey {
     (pointer.heap_id, pointer.index, pointer.generation)
 }
 
-fn canonical_pointer_pair(lhs: PointerKey, rhs: PointerKey) -> PointerPairKey {
+fn canonical_pointer_pair(lhs: InternalPtrKey, rhs: InternalPtrKey) -> InternalPtrPairKey {
     if lhs <= rhs { (lhs, rhs) } else { (rhs, lhs) }
 }
 
 pub(super) fn pointer_debug_inner(
     heap: &HeapState,
-    pointer: &Pointer,
-    active: &mut HashSet<PointerKey>,
+    pointer: &InternalPtr,
+    active: &mut HashSet<InternalPtrKey>,
 ) -> Result<String, EngineError> {
     let key = pointer_key(pointer);
     if !active.insert(key) {
@@ -2472,8 +2823,8 @@ pub(super) fn pointer_debug_inner(
 
 pub(super) fn pointer_display_inner(
     heap: &HeapState,
-    pointer: &Pointer,
-    active: &mut HashSet<PointerKey>,
+    pointer: &InternalPtr,
+    active: &mut HashSet<InternalPtrKey>,
     opts: ValueDisplayOptions,
 ) -> Result<String, EngineError> {
     let key = pointer_key(pointer);
@@ -2488,8 +2839,8 @@ pub(super) fn pointer_display_inner(
 
 fn env_debug_inner(
     heap: &HeapState,
-    env: &Environment,
-    active: &mut HashSet<PointerKey>,
+    env: &InternalEnvironment,
+    active: &mut HashSet<InternalPtrKey>,
 ) -> Result<String, EngineError> {
     let mut bindings = env.bindings().iter().collect::<Vec<_>>();
     bindings.sort_by(|(lhs, _), (rhs, _)| lhs.as_ref().cmp(rhs.as_ref()));
@@ -2516,7 +2867,7 @@ fn env_debug_inner(
 fn closure_debug_inner(
     heap: &HeapState,
     closure: &Closure,
-    active: &mut HashSet<PointerKey>,
+    active: &mut HashSet<InternalPtrKey>,
 ) -> Result<String, EngineError> {
     Ok(format!(
         "Closure {{ env: {}, param: {}, param_ty: {}, typ: {}, body: {:?} }}",
@@ -2531,7 +2882,7 @@ fn closure_debug_inner(
 fn cell_debug_inner(
     heap: &HeapState,
     cell: &Cell,
-    active: &mut HashSet<PointerKey>,
+    active: &mut HashSet<InternalPtrKey>,
 ) -> Result<String, EngineError> {
     Ok(match cell {
         Cell::Bool(v) => v.to_string(),
@@ -2598,7 +2949,7 @@ fn cell_debug_inner(
 fn cell_display_inner(
     heap: &HeapState,
     cell: &Cell,
-    active: &mut HashSet<PointerKey>,
+    active: &mut HashSet<InternalPtrKey>,
     opts: ValueDisplayOptions,
 ) -> Result<String, EngineError> {
     Ok(match cell {
@@ -2723,14 +3074,17 @@ fn cell_display_inner(
     })
 }
 
-pub(crate) fn pointer_debug(heap: &HeapState, pointer: &Pointer) -> Result<String, EngineError> {
+pub(super) fn pointer_debug(
+    heap: &HeapState,
+    pointer: &InternalPtr,
+) -> Result<String, EngineError> {
     let mut active = HashSet::new();
     pointer_debug_inner(heap, pointer, &mut active)
 }
 
-pub(crate) fn pointer_display_with(
+pub(super) fn pointer_display_with(
     heap: &HeapState,
-    pointer: &Pointer,
+    pointer: &InternalPtr,
     opts: ValueDisplayOptions,
 ) -> Result<String, EngineError> {
     let mut active = HashSet::new();
@@ -2739,9 +3093,9 @@ pub(crate) fn pointer_display_with(
 
 pub(super) fn pointer_eq_inner(
     heap: &HeapState,
-    lhs: &Pointer,
-    rhs: &Pointer,
-    seen: &mut HashSet<PointerPairKey>,
+    lhs: &InternalPtr,
+    rhs: &InternalPtr,
+    seen: &mut HashSet<InternalPtrPairKey>,
 ) -> Result<bool, EngineError> {
     let lhs_key = pointer_key(lhs);
     let rhs_key = pointer_key(rhs);
@@ -2759,9 +3113,9 @@ pub(super) fn pointer_eq_inner(
 
 fn env_eq_inner(
     heap: &HeapState,
-    lhs: &Environment,
-    rhs: &Environment,
-    seen: &mut HashSet<PointerPairKey>,
+    lhs: &InternalEnvironment,
+    rhs: &InternalEnvironment,
+    seen: &mut HashSet<InternalPtrPairKey>,
 ) -> Result<bool, EngineError> {
     if lhs.bindings().len() != rhs.bindings().len() {
         return Ok(false);
@@ -2785,7 +3139,7 @@ fn closure_eq_inner(
     heap: &HeapState,
     lhs: &Closure,
     rhs: &Closure,
-    seen: &mut HashSet<PointerPairKey>,
+    seen: &mut HashSet<InternalPtrPairKey>,
 ) -> Result<bool, EngineError> {
     if lhs.param != rhs.param
         || lhs.param_ty != rhs.param_ty
@@ -2801,7 +3155,7 @@ fn cell_eq_inner(
     heap: &HeapState,
     lhs: &Cell,
     rhs: &Cell,
-    seen: &mut HashSet<PointerPairKey>,
+    seen: &mut HashSet<InternalPtrPairKey>,
 ) -> Result<bool, EngineError> {
     match (lhs, rhs) {
         (Cell::Bool(lhs), Cell::Bool(rhs)) => Ok(lhs == rhs),
@@ -2867,10 +3221,10 @@ fn cell_eq_inner(
     }
 }
 
-pub(crate) fn pointer_eq(
+pub(super) fn pointer_eq(
     heap: &HeapState,
-    lhs: &Pointer,
-    rhs: &Pointer,
+    lhs: &InternalPtr,
+    rhs: &InternalPtr,
 ) -> Result<bool, EngineError> {
     let mut seen = HashSet::new();
     pointer_eq_inner(heap, lhs, rhs, &mut seen)
@@ -3408,13 +3762,13 @@ mod tests {
         let _garbage = heap
             .root_scope(|scope| {
                 let root = scope.alloc_root_i32(7)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
             .expect("garbage should allocate");
         let stale = heap
             .root_scope(|scope| {
                 let root = scope.alloc_root_i32(42)?;
-                Ok::<Pointer, EngineError>(scope.pointer(root))
+                Ok::<InternalPtr, EngineError>(scope.pointer(root))
             })
             .expect("rooted value should allocate");
 

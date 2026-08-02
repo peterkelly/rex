@@ -84,8 +84,8 @@ use crate::{
         },
     },
     memory::{
-        heap::{Cell, Handle, Heap, HeapState, RootScope, RootedPtr},
-        lists::{ListItems, list_to_vec},
+        heap::{Handle, Heap, RootScope, RootedPtr},
+        lists::ListItems,
     },
     modules::{
         CanonicalSymbol, CompilationPackage, Declarations, ModuleExports, ModuleId,
@@ -466,21 +466,17 @@ fn tuple_elem_type(typ: &Type) -> Result<Type, EngineError> {
 
 fn extremum_handle_by_type(
     heap: &Heap,
-    name: &'static str,
     elem_ty: &Type,
     values: Vec<Handle>,
     choose: std::cmp::Ordering,
 ) -> Result<Handle, EngineError> {
-    let name = Symbol::intern(name);
     let mut values = values.into_iter();
     let mut best = values.next().ok_or(EngineError::EmptySequence)?;
     for value in values {
-        let ord = heap.with_locked(|heap| {
-            let value_ptr = value.pointer(heap)?;
-            let best_ptr = best.pointer(heap)?;
-            let cell = heap.get_cell_from_pointer(&value_ptr)?;
-            let best_cell = heap.get_cell_from_pointer(&best_ptr)?;
-            cmp_cell_by_type(&name, elem_ty, cell, best_cell)
+        let ord = heap.with_root_scope(|scope| {
+            let value = scope.root_handle(&value)?;
+            let best = scope.root_handle(&best)?;
+            cmp_rooted_by_type(scope, elem_ty, value, best)
         })?;
         if ord == choose {
             best = value;
@@ -559,148 +555,71 @@ fn as_nonneg_usize(n: i32) -> usize {
     if n <= 0 { 0 } else { n as usize }
 }
 
-fn cmp_cell_by_type(
-    op_name: &Symbol,
+fn cmp_rooted_by_type<'scope>(
+    scope: &RootScope<'_, 'scope>,
     typ: &Type,
-    lhs: &Cell,
-    rhs: &Cell,
+    lhs: RootedPtr<'scope>,
+    rhs: RootedPtr<'scope>,
 ) -> Result<std::cmp::Ordering, EngineError> {
-    fn mismatch(op_name: &Symbol, expected: &str, lhs: &Cell, rhs: &Cell) -> EngineError {
-        let _ = op_name;
-        EngineError::NativeType {
-            expected: expected.to_string(),
-            got: format!("{}, {}", lhs.cell_type_name(), rhs.cell_type_name()),
-        }
+    let mismatch = |expected: &str| EngineError::NativeType {
+        expected: expected.to_string(),
+        got: format!(
+            "{}, {}",
+            scope.type_name(lhs).unwrap_or("<invalid>"),
+            scope.type_name(rhs).unwrap_or("<invalid>")
+        ),
+    };
+
+    macro_rules! compare_ord {
+        ($accessor:ident, $expected:expr) => {{
+            let lhs = scope.$accessor(lhs).map_err(|_| mismatch($expected))?;
+            let rhs = scope.$accessor(rhs).map_err(|_| mismatch($expected))?;
+            Ok(lhs.cmp(&rhs))
+        }};
     }
 
     match typ.as_ref() {
         TypeKind::Con(tc) => match tc.builtin_id() {
-            Some(BuiltinTypeId::U8) => {
-                let a = lhs
-                    .cell_as_u8()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_u8()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                Ok(a.cmp(&b))
-            }
-            Some(BuiltinTypeId::U16) => {
-                let a = lhs
-                    .cell_as_u16()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_u16()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                Ok(a.cmp(&b))
-            }
-            Some(BuiltinTypeId::U32) => {
-                let a = lhs
-                    .cell_as_u32()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_u32()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                Ok(a.cmp(&b))
-            }
-            Some(BuiltinTypeId::U64) => {
-                let a = lhs
-                    .cell_as_u64()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_u64()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                Ok(a.cmp(&b))
-            }
-            Some(BuiltinTypeId::I8) => {
-                let a = lhs
-                    .cell_as_i8()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_i8()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                Ok(a.cmp(&b))
-            }
-            Some(BuiltinTypeId::I16) => {
-                let a = lhs
-                    .cell_as_i16()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_i16()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                Ok(a.cmp(&b))
-            }
-            Some(BuiltinTypeId::I32) => {
-                let a = lhs
-                    .cell_as_i32()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_i32()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                Ok(a.cmp(&b))
-            }
-            Some(BuiltinTypeId::I64) => {
-                let a = lhs
-                    .cell_as_i64()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_i64()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                Ok(a.cmp(&b))
-            }
+            Some(BuiltinTypeId::U8) => compare_ord!(root_as_u8, tc.name_str()),
+            Some(BuiltinTypeId::U16) => compare_ord!(root_as_u16, tc.name_str()),
+            Some(BuiltinTypeId::U32) => compare_ord!(root_as_u32, tc.name_str()),
+            Some(BuiltinTypeId::U64) => compare_ord!(root_as_u64, tc.name_str()),
+            Some(BuiltinTypeId::I8) => compare_ord!(root_as_i8, tc.name_str()),
+            Some(BuiltinTypeId::I16) => compare_ord!(root_as_i16, tc.name_str()),
+            Some(BuiltinTypeId::I32) => compare_ord!(root_as_i32, tc.name_str()),
+            Some(BuiltinTypeId::I64) => compare_ord!(root_as_i64, tc.name_str()),
             Some(BuiltinTypeId::F32) => {
-                let a = lhs
-                    .cell_as_f32()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_f32()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
-                    expected: tc.name_str().to_string(),
-                    got: "nan".into(),
-                })
+                let lhs = scope
+                    .root_as_f32(lhs)
+                    .map_err(|_| mismatch(tc.name_str()))?;
+                let rhs = scope
+                    .root_as_f32(rhs)
+                    .map_err(|_| mismatch(tc.name_str()))?;
+                lhs.partial_cmp(&rhs)
+                    .ok_or_else(|| EngineError::NativeType {
+                        expected: tc.name_str().to_string(),
+                        got: "nan".into(),
+                    })
             }
             Some(BuiltinTypeId::F64) => {
-                let a = lhs
-                    .cell_as_f64()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_f64()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
-                    expected: tc.name_str().to_string(),
-                    got: "nan".into(),
-                })
+                let lhs = scope
+                    .root_as_f64(lhs)
+                    .map_err(|_| mismatch(tc.name_str()))?;
+                let rhs = scope
+                    .root_as_f64(rhs)
+                    .map_err(|_| mismatch(tc.name_str()))?;
+                lhs.partial_cmp(&rhs)
+                    .ok_or_else(|| EngineError::NativeType {
+                        expected: tc.name_str().to_string(),
+                        got: "nan".into(),
+                    })
             }
-            Some(BuiltinTypeId::String) => {
-                let a = lhs
-                    .cell_as_string()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_string()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                Ok(a.cmp(&b))
-            }
-            Some(BuiltinTypeId::Uuid) => {
-                let a = lhs
-                    .cell_as_uuid()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_uuid()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                Ok(a.cmp(&b))
-            }
-            Some(BuiltinTypeId::DateTime) => {
-                let a = lhs
-                    .cell_as_datetime()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                let b = rhs
-                    .cell_as_datetime()
-                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
-                Ok(a.cmp(&b))
-            }
-            _ => Err(mismatch(op_name, tc.name_str(), lhs, rhs)),
+            Some(BuiltinTypeId::String) => compare_ord!(root_as_string, tc.name_str()),
+            Some(BuiltinTypeId::Uuid) => compare_ord!(root_as_uuid, tc.name_str()),
+            Some(BuiltinTypeId::DateTime) => compare_ord!(root_as_datetime, tc.name_str()),
+            _ => Err(mismatch(tc.name_str())),
         },
-        _ => Err(mismatch(op_name, &typ.to_string(), lhs, rhs)),
+        _ => Err(mismatch(&typ.to_string())),
     }
 }
 
@@ -1556,69 +1475,59 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             object: Symbol::intern("Object"),
         };
 
-        fn to_serde_json(heap: &HeapState, v: &Cell, tags: &Tags) -> Option<serde_json::Value> {
-            match v {
-                Cell::Adt(tag, _) if tag == &tags.null => Some(serde_json::Value::Null),
-                Cell::Adt(tag, args) if tag == &tags.bool_ => match args.as_slice() {
-                    [arg] => heap
-                        .get_cell_from_pointer(arg)
-                        .ok()?
-                        .cell_as_bool()
-                        .ok()
-                        .map(serde_json::Value::Bool),
-                    _ => None,
-                },
-                Cell::Adt(tag, args) if tag == &tags.string => match args.as_slice() {
-                    [arg] => heap
-                        .get_cell_from_pointer(arg)
-                        .ok()?
-                        .cell_as_string()
-                        .ok()
-                        .map(serde_json::Value::String),
-                    _ => None,
-                },
-                Cell::Adt(tag, args) if tag == &tags.number => match args.as_slice() {
-                    [arg] => {
-                        let n = heap.get_cell_from_pointer(arg).ok()?.cell_as_f64().ok()?;
-                        serde_json::Number::from_f64(n)
-                            .map(serde_json::Value::Number)
-                            .or(Some(serde_json::Value::Null))
-                    }
-                    _ => None,
-                },
-                Cell::Adt(tag, args) if tag == &tags.array => match args.as_slice() {
-                    [arg] => {
-                        let xs = list_to_vec(heap, heap.get_cell_from_pointer(arg).ok()?).ok()?;
-                        let mut out = Vec::with_capacity(xs.len());
-                        for x in &xs {
-                            let x_value = heap.get_cell_from_pointer(x).ok()?;
-                            out.push(to_serde_json(heap, x_value, tags)?);
-                        }
-                        Some(serde_json::Value::Array(out))
-                    }
-                    _ => None,
-                },
-                Cell::Adt(tag, args) if tag == &tags.object => match args.as_slice() {
-                    [arg] => {
-                        let map = heap.get_cell_from_pointer(arg).ok()?.cell_as_dict().ok()?;
-                        let mut out = serde_json::Map::with_capacity(map.len());
-                        for (k, v) in &map {
-                            let v_value = heap.get_cell_from_pointer(v).ok()?;
-                            out.insert(k.as_ref().to_string(), to_serde_json(heap, v_value, tags)?);
-                        }
-                        Some(serde_json::Value::Object(out))
-                    }
-                    _ => None,
-                },
-                _ => None,
+        fn to_serde_json<'scope>(
+            scope: &mut RootScope<'_, 'scope>,
+            value: RootedPtr<'scope>,
+            tags: &Tags,
+        ) -> Option<serde_json::Value> {
+            let (tag, args) = scope.root_as_adt(value).ok()?;
+            if tag == tags.null {
+                return Some(serde_json::Value::Null);
             }
+            let [arg] = args.as_slice() else {
+                return None;
+            };
+            if tag == tags.bool_ {
+                return scope.root_as_bool(*arg).ok().map(serde_json::Value::Bool);
+            }
+            if tag == tags.string {
+                return scope
+                    .root_as_string(*arg)
+                    .ok()
+                    .map(serde_json::Value::String);
+            }
+            if tag == tags.number {
+                let number = scope.root_as_f64(*arg).ok()?;
+                return serde_json::Number::from_f64(number)
+                    .map(serde_json::Value::Number)
+                    .or(Some(serde_json::Value::Null));
+            }
+            if tag == tags.array {
+                let values = scope.root_as_list(*arg).ok()?;
+                let mut out = Vec::with_capacity(values.len());
+                for value in values {
+                    out.push(to_serde_json(scope, value, tags)?);
+                }
+                return Some(serde_json::Value::Array(out));
+            }
+            if tag == tags.object {
+                let values = scope.root_as_dict(*arg).ok()?;
+                let mut out = serde_json::Map::with_capacity(values.len());
+                for (name, value) in values {
+                    out.insert(
+                        name.as_ref().to_string(),
+                        to_serde_json(scope, value, tags)?,
+                    );
+                }
+                return Some(serde_json::Value::Object(out));
+            }
+            None
         }
 
         engine.export_native("prim_json_stringify", scheme, 1, move |engine, _, args| {
-            let json = engine.heap().with_locked(|heap| {
-                let pointer = args[0].pointer(heap)?;
-                let value = heap.get_cell_from_pointer(&pointer)?;
-                Ok(to_serde_json(heap, value, &tags))
+            let json = engine.heap().with_root_scope(|scope| {
+                let value = scope.root_handle(&args[0])?;
+                Ok(to_serde_json(scope, value, &tags))
             })?;
             let Some(json) = json else {
                 return engine.heap().alloc_string("<non-std.json.Value>".into());
@@ -2689,13 +2598,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
             let values = args[0].as_list()?;
-            extremum_handle_by_type(
-                engine.heap(),
-                "min",
-                &elem_ty,
-                values,
-                std::cmp::Ordering::Less,
-            )
+            extremum_handle_by_type(engine.heap(), &elem_ty, values, std::cmp::Ordering::Less)
         })?;
     }
 
@@ -2723,13 +2626,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
             let values = args[0].as_list()?;
-            extremum_handle_by_type(
-                engine.heap(),
-                "max",
-                &elem_ty,
-                values,
-                std::cmp::Ordering::Greater,
-            )
+            extremum_handle_by_type(engine.heap(), &elem_ty, values, std::cmp::Ordering::Greater)
         })?;
     }
 
