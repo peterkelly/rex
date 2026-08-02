@@ -11,6 +11,7 @@ use crate::{
         runtime_core::RuntimeCore,
     },
     memory::{
+        handle_promotion::HandlePromoter,
         heap::{Handle, Heap, Pointer, RootScope},
         traits::{FromRex, IntoRex},
     },
@@ -392,8 +393,8 @@ where
 
     pub(crate) fn root_in_scope<'heap, 'scope>(
         self,
-        heap: &Heap,
         scope: &mut RootScope<'heap, 'scope>,
+        promoter: &HandlePromoter<'_>,
     ) -> Result<NativeCall<State>, EngineError> {
         let Self {
             callable,
@@ -406,7 +407,7 @@ where
             .into_iter()
             .map(|value| scope.root(value))
             .collect::<Vec<_>>();
-        let args = heap.handles_rooted(scope, &args)?;
+        let args = promoter.promote_all(scope, &args)?;
         Ok(NativeCall {
             callable,
             scheduling,

@@ -149,7 +149,7 @@ impl HeapState {
         Ok(slot)
     }
 
-    fn register_root(&mut self, pointer: Pointer) -> Result<RootId, EngineError> {
+    pub(super) fn register_root(&mut self, pointer: Pointer) -> Result<RootId, EngineError> {
         self.get_slot_checked(&pointer)?;
 
         if let Some(index) = self.free_root_list.pop() {
@@ -185,7 +185,7 @@ impl HeapState {
         })
     }
 
-    fn register_roots(
+    pub(super) fn register_roots(
         &mut self,
         pointers: impl IntoIterator<Item = Pointer>,
     ) -> Result<Vec<RootId>, EngineError> {
@@ -606,6 +606,10 @@ impl HeapState {
         f(&mut scope)
     }
 
+    pub(super) fn id(&self) -> u64 {
+        self.id
+    }
+
     pub(crate) fn persistent_root_store(&mut self) -> Result<PersistentRootStore, EngineError> {
         let store_id = self.next_persistent_store_id;
         self.next_persistent_store_id = self
@@ -635,7 +639,7 @@ struct RootSlot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct RootId {
+pub(super) struct RootId {
     heap_id: u64,
     index: u64,
     generation: u64,
@@ -1331,7 +1335,7 @@ impl PersistentRootStore {
 #[derive(Clone)]
 pub struct Heap {
     pub(super) id: u64,
-    pub(crate) state: Arc<Mutex<HeapState>>,
+    pub(super) state: Arc<Mutex<HeapState>>,
 }
 
 /// Internal temporary roots used while runtime code is constructing heap cells
@@ -1423,6 +1427,15 @@ impl Value {
 struct HandleRoot {
     heap: Heap,
     root_id: RootId,
+}
+
+pub(super) fn handle_from_registered_root(heap: &Heap, root_id: RootId) -> Handle {
+    Handle {
+        root: Arc::new(HandleRoot {
+            heap: heap.clone(),
+            root_id,
+        }),
+    }
 }
 
 impl TempRoots {
@@ -1753,6 +1766,18 @@ impl Heap {
         f(&mut state)
     }
 
+    /// Run one synchronous operation under a branded root scope.
+    pub(crate) fn with_root_scope<R>(
+        &self,
+        f: impl for<'scope> FnOnce(&mut RootScope<'_, 'scope>) -> Result<R, EngineError>,
+    ) -> Result<R, EngineError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::HeapStatePoisoned)?;
+        state.root_scope(f)
+    }
+
     pub(crate) fn with_locked_ok<R>(
         &self,
         f: impl FnOnce(&mut HeapState) -> R,
@@ -1790,47 +1815,6 @@ impl Heap {
                 root_id,
             }),
         })
-    }
-
-    /// Promote a scope-branded value to a public handle without reacquiring
-    /// the heap mutex. The caller must already own this heap's `RootScope`.
-    pub(crate) fn handle_rooted<'heap, 'scope>(
-        &self,
-        scope: &mut RootScope<'heap, 'scope>,
-        value: RootedPtr<'scope>,
-    ) -> Result<Handle, EngineError> {
-        if scope.heap.id != self.id {
-            return Err(EngineError::Internal(format!(
-                "root scope belongs to heap {}, not heap {}",
-                scope.heap.id, self.id
-            )));
-        }
-        let root_id = scope.heap.register_root(scope.pointer(value))?;
-        Ok(Handle {
-            root: Arc::new(HandleRoot {
-                heap: self.clone(),
-                root_id,
-            }),
-        })
-    }
-
-    pub(crate) fn handles_rooted<'heap, 'scope>(
-        &self,
-        scope: &mut RootScope<'heap, 'scope>,
-        values: &[RootedPtr<'scope>],
-    ) -> Result<Vec<Handle>, EngineError> {
-        if scope.heap.id != self.id {
-            return Err(EngineError::Internal(format!(
-                "root scope belongs to heap {}, not heap {}",
-                scope.heap.id, self.id
-            )));
-        }
-        let pointers = values
-            .iter()
-            .map(|value| scope.pointer(*value))
-            .collect::<Vec<_>>();
-        let root_ids = scope.heap.register_roots(pointers)?;
-        Ok(self.handles_from_root_ids(root_ids))
     }
 
     pub fn set_collect_on_every_alloc(&self, enabled: bool) -> Result<(), EngineError> {

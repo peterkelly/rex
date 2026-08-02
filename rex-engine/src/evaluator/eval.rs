@@ -11,6 +11,7 @@ use crate::{
     },
     handlers::NativeCallRequest,
     memory::{
+        handle_promotion::{HandlePromoter, with_promotable_root_scope},
         heap::{
             Cell, Closure, Handle, Heap, HeapState, PersistentPtr, PersistentRootStore, Pointer,
             RootScope, RootedPtr, TempRoots,
@@ -247,53 +248,65 @@ where
     let mut frames = FrameStore::default();
     let root_frame = frames.insert(frame_for_expr(None, expr, env));
     let scheduler = EvalScheduler::new(root_frame, runtime.parallelism_controller.clone());
-    let mut state = Some(heap.with_locked(|heap_state| {
-        heap_state.root_scope(|scope| persist_eval_state(scope, frames, scheduler, None))
-    })?);
+    let state = heap.with_root_scope(|scope| persist_eval_state(scope, frames, scheduler, None))?;
+    let mut boundary = EvalBoundary::MoreInternalWork(state);
 
-    let mut iteration = 0;
     loop {
-        let persistent = state.as_mut().ok_or_else(|| {
-            EngineError::Internal("evaluator persistent state was unavailable".into())
-        })?;
-        let mut completed_native =
-            match poll_pending_native(&runtime, heap, &mut persistent.scheduler, false).await? {
-                NativePoll::Progress => continue,
+        let (mut state, wait_for_host) = match boundary {
+            EvalBoundary::MoreInternalWork(state) => (state, false),
+            EvalBoundary::HostWork(state) | EvalBoundary::WaitingForHost(state) => (state, true),
+            EvalBoundary::Completed(result) => return Ok(result),
+        };
+
+        let completed_native =
+            match poll_pending_native(&runtime, heap, &mut state.scheduler, wait_for_host).await? {
+                NativePoll::Progress => {
+                    boundary = EvalBoundary::from_state(state)?;
+                    continue;
+                }
                 NativePoll::Completed { frame, handle } => Some((frame, handle)),
-                NativePoll::Idle => None,
+                NativePoll::Idle if !wait_for_host => None,
+                NativePoll::Idle => {
+                    return Err(EngineError::Internal(
+                        "eval scheduler ran out of host work".into(),
+                    ));
+                }
             };
 
-        if iteration % 1000 == 0 {
-            println!("Iteration {}", iteration);
-        }
-        iteration += 1;
-
-        if !persistent.scheduler.has_ready_work() && completed_native.is_none() {
-            completed_native =
-                match poll_pending_native(&runtime, heap, &mut persistent.scheduler, true).await? {
-                    NativePoll::Progress => continue,
-                    NativePoll::Completed { frame, handle } => Some((frame, handle)),
-                    NativePoll::Idle => {
-                        return Err(EngineError::Internal(
-                            "eval scheduler ran out of ready work".into(),
-                        ));
-                    }
-                };
-        }
-
-        let current = state.take().ok_or_else(|| {
-            EngineError::Internal("evaluator persistent state was unavailable".into())
-        })?;
-        let outcome = heap.with_locked(|heap_state| {
-            heap_state.root_scope(|scope| {
-                run_locked_eval_cycle(&mut runtime, heap, scope, current, completed_native)
-            })
+        let outcome = with_promotable_root_scope(heap, |scope, promoter| {
+            run_locked_eval_cycle(&mut runtime, scope, promoter, state, completed_native)
         })?;
         drop(outcome.released_host_handle);
-        if let Some(result) = outcome.result {
-            return Ok(result);
+        boundary = outcome.boundary;
+    }
+}
+
+enum EvalBoundary<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    MoreInternalWork(PersistentEvalState<State>),
+    HostWork(PersistentEvalState<State>),
+    WaitingForHost(PersistentEvalState<State>),
+    Completed(Handle),
+}
+
+impl<State> EvalBoundary<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn from_state(state: PersistentEvalState<State>) -> Result<Self, EngineError> {
+        if state.scheduler.has_ready_work() {
+            Ok(Self::MoreInternalWork(state))
+        } else if state.scheduler.has_queued_native_work() {
+            Ok(Self::HostWork(state))
+        } else if state.scheduler.has_pending_native_work() {
+            Ok(Self::WaitingForHost(state))
+        } else {
+            Err(EngineError::Internal(
+                "eval scheduler has no internal or host work".into(),
+            ))
         }
-        state = outcome.state;
     }
 }
 
@@ -301,15 +314,14 @@ struct LockedCycleOutcome<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    state: Option<PersistentEvalState<State>>,
-    result: Option<Handle>,
+    boundary: EvalBoundary<State>,
     released_host_handle: Option<Handle>,
 }
 
 fn run_locked_eval_cycle<'heap, 'scope, State>(
     runtime: &mut RuntimeCore<State>,
-    heap: &Heap,
     scope: &mut RootScope<'heap, 'scope>,
+    promoter: &HandlePromoter<'_>,
     state: PersistentEvalState<State>,
     completed_native: Option<(FrameId, Handle)>,
 ) -> Result<LockedCycleOutcome<State>, EngineError>
@@ -384,7 +396,7 @@ where
             }
             EvalControl::Wait => {}
             EvalControl::AwaitNative(call) => {
-                let call = call.root_in_scope(heap, scope)?;
+                let call = call.root_in_scope(scope, promoter)?;
                 let frame = Frame::NativeHost(FrNativeHost {
                     parent: Some(item.frame),
                 });
@@ -406,18 +418,16 @@ where
     if let Some(result) = result {
         previous_roots.clear(scope)?;
         let result = scope.root(result);
-        let result = heap.handle_rooted(scope, result)?;
+        let result = promoter.promote(scope, result)?;
         return Ok(LockedCycleOutcome {
-            state: None,
-            result: Some(result),
+            boundary: EvalBoundary::Completed(result),
             released_host_handle,
         });
     }
 
     let state = persist_eval_state(scope, frames, scheduler, Some(previous_roots))?;
     Ok(LockedCycleOutcome {
-        state: Some(state),
-        result: None,
+        boundary: EvalBoundary::from_state(state)?,
         released_host_handle,
     })
 }

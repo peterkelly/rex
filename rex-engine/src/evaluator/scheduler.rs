@@ -66,6 +66,14 @@ where
         !self.ready.is_empty() || !self.deferred_ready.is_empty()
     }
 
+    pub(crate) fn has_queued_native_work(&self) -> bool {
+        self.has_immediate_native() || self.has_deferred_native()
+    }
+
+    pub(crate) fn has_pending_native_work(&self) -> bool {
+        self.has_pending_native()
+    }
+
     fn has_pending_native(&self) -> bool {
         !self.pending_native.is_empty()
     }

@@ -55,10 +55,20 @@ removed; the cactus evaluator had not populated it since its introduction.
 
 One synchronous evaluator cycle now resolves persistent state under a single
 `RootScope`, executes a work item, and rebuilds the persistent arena before
-unlocking. Raw `Pointer` frames and native tasks are transient generic
-instantiations used only inside that locked cycle. The old bulk
-`PersistentRoots` scheduler snapshot and its cross-lock refresh pass have been
-removed.
+unlocking. The cycle receives no `Heap` capability. Its only access to
+`HeapState` is the active `RootScope`; a separate sealed `HandlePromoter` can
+only promote rooted values without locking, inspecting heap values, allocating
+Rex values, or collecting. The promoter is supplied only by the explicitly
+named top-level promotable-scope entry point in the handle-promotion module;
+ordinary root scopes never receive it. Host-call arguments and final results
+are therefore made boundary-safe without giving `RootScope` or `Heap` a
+promotion-specific field or method. The cycle's explicit outcome
+distinguishes ready internal work, queued host work, already-started host work,
+and completion. The outer async coordinator consumes those outcomes and is the
+only layer that starts or polls host futures. Raw `Pointer` frames and native
+tasks are transient generic instantiations used only inside that locked cycle.
+The old bulk `PersistentRoots` scheduler snapshot and its cross-lock refresh
+pass have been removed.
 
 The transition is still not complete. Synchronous evaluation helpers retain
 raw-pointer APIs and local temporary-root refreshes for collections initiated
@@ -100,7 +110,7 @@ thread-safety invariant.
 
 Introduce an opaque `PersistentPtr` and an evaluator-owned persistent root
 store. This is the representation for values kept in frames, scheduler state,
-native tasks, and runtime caches between synchronous cycles.
+native tasks, and environments between synchronous cycles.
 
 `PersistentPtr` should identify a registered heap root without containing or
 exposing a `Heap` clone. Resolving it must require an active `RootScope` or an
@@ -132,8 +142,7 @@ Migrate the state in small, compiling groups:
 1. `EvalWorkItem` return values and scheduler ready queues.
 2. Every value-bearing field in `Frame` and `NativeTask`.
 3. Environments stored in frames and evaluator-owned native state.
-4. The runtime typeclass cache and any other runtime cache containing values.
-5. Pending host-call metadata that currently contains raw arguments before it
+4. Pending host-call metadata that currently contains raw arguments before it
    is promoted to handles.
 
 Do not move control frames back into the GC heap. `FrameStore` should remain a
@@ -154,7 +163,7 @@ Acceptance criteria for this step:
 
 - An evaluator may be paused indefinitely while other threads allocate and
   collect.
-- No frame, ready item, native task, environment, or runtime cache contains a
+- No frame, ready item, native task, or environment contains a
   raw copying-collector location while the mutex is unlocked.
 - The evaluator no longer needs a bulk trace/refresh pass merely to survive an
   async boundary.
@@ -176,8 +185,10 @@ One cycle should perform all of the following under the same guard:
 5. Promote final results or host-call arguments to `Handle` before unlocking.
 
 The function must not accept `&Heap`, call `Heap::with_locked`, invoke a host
-callback, or contain an `await`. Its heap capability is only
-`&mut RootScope<'_, 'scope>`.
+callback, or contain an `await`. Its only capability for reading, allocating,
+or mutating `HeapState` is `&mut RootScope<'_, 'scope>`. A separate sealed
+promotion capability may only convert scope-rooted values to handles without
+locking.
 
 Make the cycle outcome explicit. It should distinguish at least:
 
@@ -300,7 +311,7 @@ Run the full suite and specifically verify:
 - `binary_list_equality_uses_visible_elements_across_runtime_shapes`.
 - Nested binary-list matching and materialization.
 - Captured closure environments and recursive declarations.
-- Typeclass cache lookups during collection.
+- Repeated typeclass method resolution during collection.
 - Immediate and deferred host callbacks returning scalar and composite values.
 - Foreign-heap handle rejection.
 - `cargo run --bin rex -- rex-cli/examples/adt.rex`.
