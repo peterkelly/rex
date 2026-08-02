@@ -11,8 +11,8 @@ use clap::{Args, Parser};
 use rex::{
     ast::CompilationUnit,
     engine::{
-        Builder, CompileOptions, CompiledProgram, Context, Evaluator, Importer, MainInputSpec,
-        Manifest, ModuleId, type_has_vars,
+        Builder, CompileOptions, CompiledProgram, Evaluator, Importer, MainInputSpec, Manifest,
+        ModuleId, type_has_vars,
     },
     json::{json_to_main_inputs, rex_to_json},
     parser::{ParseError, parse as parse_rex},
@@ -245,14 +245,12 @@ async fn eval_result_json(
         type_system.as_ref(),
     )
     .map_err(|e| format!("{e}"))?;
-    let heap = evaluator.heap().clone();
     let (mut value, ctx) = evaluator
         .run_with_context(compiled, inputs)
         .await
         .map_err(|e| format!("{e}"))?;
     if let Some(inner_type) = cli_prelude::io_result_type_arg(&result_type) {
-        let wrapped = Context::new(ctx, heap);
-        value = cli_prelude::run_io_handle(wrapped, value)
+        value = cli_prelude::run_io_handle(ctx, value)
             .await
             .map_err(|e| format!("{e}"))?;
         result_type = inner_type;

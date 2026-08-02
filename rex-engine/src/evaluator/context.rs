@@ -38,17 +38,7 @@ impl<State> Context<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    /// Pair an internal evaluator context with its public heap capability.
-    ///
-    /// Host callbacks receive a `Context` from the evaluator and do not need
-    /// to call this constructor. It exists for follow-up host work after
-    /// [`Evaluator::run_with_context`](crate::Evaluator::run_with_context).
-    /// `heap` must be the heap from that same evaluator lineage; use the heap
-    /// of the returned [`Handle`] or clone [`Evaluator::heap`](crate::Evaluator::heap)
-    /// before consuming the evaluator. Pairing an internal context with an
-    /// unrelated heap causes later callback evaluation to reject foreign-heap
-    /// handles.
-    pub fn new(inner: InternalCtx<State>, heap: Heap) -> Self {
+    pub(crate) fn new(inner: InternalCtx<State>, heap: Heap) -> Self {
         Self { inner, heap }
     }
 
@@ -70,7 +60,7 @@ where
 }
 
 #[derive(Clone)]
-pub struct InternalCtx<State = ()>
+pub(crate) struct InternalCtx<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -97,14 +87,6 @@ where
             runtime: runtime.clone(),
             call_site,
         }
-    }
-
-    pub fn state(&self) -> &State {
-        self.runtime.state.as_ref()
-    }
-
-    pub fn type_system(&self) -> &TypeSystem {
-        self.runtime.type_system.as_ref()
     }
 
     /// Resume one Rex callback from engine-owned host action machinery.

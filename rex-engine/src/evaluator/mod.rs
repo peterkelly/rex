@@ -12,7 +12,11 @@ use rex_typesystem::{
 use crate::{
     compiler::program::CompiledProgram,
     error::EngineError,
-    evaluator::{context::InternalCtx, eval::eval_typed_expr, runtime_core::RuntimeCore},
+    evaluator::{
+        context::{Context, InternalCtx},
+        eval::eval_typed_expr,
+        runtime_core::RuntimeCore,
+    },
     memory::heap::{Handle, Heap, RootScope, RootedPtr},
     stack::FrameId,
     util::split_fun,
@@ -96,27 +100,26 @@ where
     /// This is used by embedders that treat the evaluated result as a host-managed action and
     /// need to resume Rex callbacks after the top-level expression has produced that action.
     /// Runtime inputs have the same naming and same-heap requirements as [`run`](Self::run).
-    /// To construct a public [`Context`](crate::Context) for that follow-up work, pair the returned
-    /// internal context with the returned handle's heap (or with a clone of [`Self::heap`] taken
-    /// before this method consumes the evaluator). Do not substitute an independently created
-    /// heap.
+    /// The returned [`Context`] retains the evaluator's heap and runtime, so it is ready for
+    /// follow-up host work and cannot be paired with an unrelated heap.
     pub async fn run_with_context(
         self,
         program: CompiledProgram,
         inputs: BTreeMap<String, Handle>,
-    ) -> Result<(Handle, InternalCtx<State>), EngineError> {
-        let runtime = self.runtime;
+    ) -> Result<(Handle, Context<State>), EngineError> {
+        let Self { runtime, heap } = self;
         let main_signature = program.main_signature().clone();
-        let args = main_input_args(&self.heap, &main_signature, &inputs)?;
+        let args = main_input_args(&heap, &main_signature, &inputs)?;
         let value = eval_typed_expr(
             runtime.clone(),
-            &self.heap,
+            &heap,
             program.env,
             Arc::clone(&program.expr),
             args,
         )
         .await?;
-        let ctx = InternalCtx::new_at_call_site(&runtime, CallSite { parent: None });
+        let inner = InternalCtx::new_at_call_site(&runtime, CallSite { parent: None });
+        let ctx = Context::new(inner, heap);
         Ok((value, ctx))
     }
 }

@@ -40,7 +40,7 @@ pub use config::{
 pub use error::{EngineError, ExecutionError, ModuleError};
 pub use evaluator::{
     Evaluator,
-    context::{Context, InternalCtx},
+    context::Context,
     host_action::{HostAction, HostActionEffect, HostActionFuture, run_host_action},
 };
 pub use handlers::RexDefault;

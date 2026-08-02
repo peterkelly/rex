@@ -50,6 +50,33 @@ async fn owning_evaluator_resources_can_be_kept_after_run() {
 }
 
 #[tokio::test]
+async fn run_with_context_returns_context_for_evaluator_heap() {
+    let compiler = Builder::with_prelude(()).unwrap().build_compiler();
+    let parsed = parse_rex("(7 is i32)").unwrap();
+    let (program, evaluator) = compiler
+        .compile_program(&parsed, CompileOptions::for_module("test.main").unwrap())
+        .await
+        .unwrap();
+
+    let (value, ctx) = evaluator
+        .run_with_context(program, Default::default())
+        .await
+        .unwrap();
+
+    let extra = ctx.heap().alloc_i32(8).unwrap();
+    let values = ctx.heap().alloc_tuple(vec![value, extra]).unwrap();
+    let values = values.as_tuple().unwrap();
+    assert_eq!(values[0].to_rust::<i32>().unwrap(), 7);
+    assert_eq!(values[1].to_rust::<i32>().unwrap(), 8);
+    assert!(
+        ctx.type_system()
+            .adts
+            .contains_key(&Symbol::intern("Option")),
+        "the returned context should retain the evaluator runtime"
+    );
+}
+
+#[tokio::test]
 async fn baseline_control_flow_typeclass_and_recursion_paths_still_evaluate() {
     let builder = Builder::with_prelude(()).unwrap();
     let (value, ty) = run_snippet(
