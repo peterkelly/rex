@@ -65,16 +65,23 @@ are therefore made boundary-safe without giving `RootScope` or `Heap` a
 promotion-specific field or method. The cycle's explicit outcome
 distinguishes ready internal work, queued host work, already-started host work,
 and completion. The outer async coordinator consumes those outcomes and is the
-only layer that starts or polls host futures. Raw `Pointer` frames and native
-tasks are transient generic instantiations used only inside that locked cycle.
-The old bulk `PersistentRoots` scheduler snapshot and its cross-lock refresh
-pass have been removed.
+only layer that starts or polls host futures.
 
-The transition is still not complete. Synchronous evaluation helpers retain
-raw-pointer APIs and local temporary-root refreshes for collections initiated
-inside a locked cycle. `InternalPtr` has not yet been confined to the heap
-implementation, and the remaining temporary-root compatibility APIs still
-need the later cleanup steps below.
+Synchronous frames, work items, environments, native tasks, native-call
+requests, and control results now use `RootedPtr<'scope>`. Heap inspection of
+closures, partial native functions, overloaded functions, tuples,
+dictionaries, ADTs, and lists produces rooted views before evaluator code can
+allocate. Pattern bindings, record-update fields, application arguments, and
+prelude scheduler intermediates remain rooted for their complete synchronous
+lifetime. The old `TempRoots` compatibility API, collection-epoch refreshes,
+post-allocation frame rewrites, transient evaluator `Collection`
+implementations, and bulk `PersistentRoots` scheduler snapshot have been
+removed.
+
+The remaining transition starts at Step 7: raw internal cell edges still use
+the crate-visible `Pointer` name and have not yet been confined to the heap
+implementation. Handle cleanup and final invariant documentation remain in
+Step 8.
 
 ## Step 1: Add deterministic concurrency regressions
 

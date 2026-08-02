@@ -10,12 +10,12 @@ use rex_typesystem::{
 
 use crate::{
     builder::registry::NativeImpl,
-    env::{Environment, RootedEnvironment},
+    env::{Environment, RootedEnvironment, ScopedEnvironment},
     error::EngineError,
     evaluator::{
         CallSite, application_result_type, eval::eval_typed_expr, runtime_core::RuntimeCore,
     },
-    memory::heap::{Handle, Heap, HeapState, Pointer, RootScope},
+    memory::heap::{Handle, Heap, HeapState, RootScope, RootedPtr},
     overloaded_fn::OverloadedFn,
     stack::FrameId,
     util::{impl_matches_type, is_function_type},
@@ -60,6 +60,14 @@ where
     #[allow(dead_code)]
     #[doc(hidden)]
     pub(crate) call_site: CallSite,
+}
+
+pub(crate) enum ClassMethodPlan<'scope> {
+    Evaluate {
+        env: ScopedEnvironment<'scope>,
+        expr: TypedExpr,
+    },
+    Deferred(RootedPtr<'scope>),
 }
 
 impl<State> InternalCtx<State>
@@ -189,21 +197,22 @@ where
         scope: &mut RootScope<'_, 'scope>,
         name: &Symbol,
         typ: &Type,
-    ) -> Result<Result<(Environment, TypedExpr), Pointer>, EngineError> {
+    ) -> Result<ClassMethodPlan<'scope>, EngineError> {
         let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ, scope.heap) {
             Ok(res) => res,
             Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
-                let (name, typ, applied, applied_types) =
+                let (name, typ, _applied, applied_types) =
                     OverloadedFn::new(name.clone(), typ.clone()).into_parts();
-                let applied = applied.into_iter().map(|x| scope.root(x)).collect();
-                let root = scope.alloc_root_overloaded(name, typ, applied, applied_types)?;
-                let pointer = scope.pointer(root);
-                return Ok(Err(pointer));
+                let root = scope.alloc_root_overloaded(name, typ, Vec::new(), applied_types)?;
+                return Ok(ClassMethodPlan::Deferred(root));
             }
             Err(err) => return Err(err),
         };
         let specialized = typed.as_ref().apply(&s);
-        Ok(Ok((def_env, specialized)))
+        Ok(ClassMethodPlan::Evaluate {
+            env: ScopedEnvironment::from_environment(&def_env, scope),
+            expr: specialized,
+        })
     }
 
     pub(crate) fn resolve_native_impl(
@@ -240,7 +249,7 @@ where
         scope: &mut RootScope<'_, 'scope>,
         name: &str,
         typ: &Type,
-    ) -> Result<Pointer, EngineError> {
+    ) -> Result<RootedPtr<'scope>, EngineError> {
         let sym_name = Symbol::intern(name);
         let impls = self
             .runtime
@@ -259,12 +268,17 @@ where
             }),
             1 => {
                 let imp = matches[0].clone();
-                let (native_id, name, arity, typ, applied, applied_types) =
+                let (native_id, name, arity, typ, _applied, applied_types) =
                     imp.to_native_fn(typ.clone()).into_parts();
-                let applied = applied.into_iter().map(|x| scope.root(x)).collect();
-                let root =
-                    scope.alloc_root_native(native_id, name, arity, typ, applied, applied_types)?;
-                Ok(scope.pointer(root))
+                let root = scope.alloc_root_native(
+                    native_id,
+                    name,
+                    arity,
+                    typ,
+                    Vec::new(),
+                    applied_types,
+                )?;
+                Ok(root)
             }
             _ => {
                 if typ.ftv().is_empty() {
@@ -273,11 +287,10 @@ where
                         typ: typ.to_string(),
                     })
                 } else if is_function_type(typ) {
-                    let (name, typ, applied, applied_types) =
+                    let (name, typ, _applied, applied_types) =
                         OverloadedFn::new(sym_name.clone(), typ.clone()).into_parts();
-                    let applied = applied.into_iter().map(|x| scope.root(x)).collect();
-                    let root = scope.alloc_root_overloaded(name, typ, applied, applied_types)?;
-                    Ok(scope.pointer(root))
+                    let root = scope.alloc_root_overloaded(name, typ, Vec::new(), applied_types)?;
+                    Ok(root)
                 } else {
                     Err(EngineError::AmbiguousOverload { name: sym_name })
                 }

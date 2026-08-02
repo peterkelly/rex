@@ -1,9 +1,9 @@
 use crate::{
-    env::{Environment, PersistentEnvironment, RootedEnvironment},
+    env::{PersistentEnvironment, RootedEnvironment, ScopedEnvironment},
     error::EngineError,
     evaluator::{
         CallSite, application_result_type,
-        context::InternalCtx,
+        context::{ClassMethodPlan, InternalCtx},
         native_functions::{NativeTask, eval_native_enter, eval_native_receive},
         resolve_arg_type,
         runtime_core::RuntimeCore,
@@ -13,11 +13,10 @@ use crate::{
     memory::{
         handle_promotion::{HandlePromoter, with_promotable_root_scope},
         heap::{
-            Cell, Closure, Handle, Heap, HeapState, PersistentPtr, PersistentRootStore, Pointer,
-            RootScope, RootedPtr, TempRoots,
+            Handle, Heap, PersistentPtr, PersistentRootStore, RootScope, RootedCallable,
+            RootedClosure, RootedPtr,
         },
         lists::ListRootedItems,
-        traits::Collection,
     },
     native_fn::NativeApplyResult,
     overloaded_fn::OverloadedFn,
@@ -35,21 +34,18 @@ use rex_typesystem::{
     types::{BuiltinTypeId, Type, TypeKind, TypedExpr, TypedExprKind, Types},
     unification::{Subst, compose_subst, unify},
 };
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
-pub(crate) enum EvalControl<State: Clone + Send + Sync + 'static> {
+pub(crate) enum EvalControl<'scope, State: Clone + Send + Sync + 'static> {
     Push {
         expr: Arc<TypedExpr>,
-        env: Environment,
+        env: ScopedEnvironment<'scope>,
     },
-    PushFrame(Box<Frame<Pointer, Environment>>),
+    PushFrame(Box<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>),
     Schedule(Vec<FrameId>),
     Wait,
-    AwaitNative(NativeCallRequest<State>),
-    Return(Pointer),
+    AwaitNative(NativeCallRequest<'scope, State>),
+    Return(RootedPtr<'scope>),
 }
 
 type PersistentFrame = Frame<PersistentPtr, PersistentEnvironment>;
@@ -64,13 +60,13 @@ where
     scheduler: EvalScheduler<State, PersistentPtr>,
 }
 
-struct TransientEvalState<State>
+struct TransientEvalState<'scope, State>
 where
     State: Clone + Send + Sync + 'static,
 {
     previous_roots: PersistentRootStore,
-    frames: FrameStore<Frame<Pointer, Environment>>,
-    scheduler: EvalScheduler<State, Pointer>,
+    frames: FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
+    scheduler: EvalScheduler<State, RootedPtr<'scope>>,
 }
 
 struct PersistFrameMapper<'a, 'heap, 'scope> {
@@ -78,19 +74,21 @@ struct PersistFrameMapper<'a, 'heap, 'scope> {
     scope: &'a mut RootScope<'heap, 'scope>,
 }
 
-impl<'a, 'heap, 'scope> FrameValueMapper<Pointer, Environment>
+impl<'a, 'heap, 'scope> FrameValueMapper<RootedPtr<'scope>, ScopedEnvironment<'scope>>
     for PersistFrameMapper<'a, 'heap, 'scope>
 {
     type Value = PersistentPtr;
     type Environment = PersistentEnvironment;
     type Error = EngineError;
 
-    fn map_value(&mut self, value: Pointer) -> Result<Self::Value, Self::Error> {
-        let rooted = self.scope.root(value);
-        self.roots.insert(self.scope, rooted)
+    fn map_value(&mut self, value: RootedPtr<'scope>) -> Result<Self::Value, Self::Error> {
+        self.roots.insert(self.scope, value)
     }
 
-    fn map_environment(&mut self, env: Environment) -> Result<Self::Environment, Self::Error> {
+    fn map_environment(
+        &mut self,
+        env: ScopedEnvironment<'scope>,
+    ) -> Result<Self::Environment, Self::Error> {
         PersistentEnvironment::persist(env, self.roots, self.scope)
     }
 }
@@ -103,13 +101,13 @@ struct ResolveFrameMapper<'a, 'heap, 'scope> {
 impl<'a, 'heap, 'scope> FrameValueMapper<PersistentPtr, PersistentEnvironment>
     for ResolveFrameMapper<'a, 'heap, 'scope>
 {
-    type Value = Pointer;
-    type Environment = Environment;
+    type Value = RootedPtr<'scope>;
+    type Environment = ScopedEnvironment<'scope>;
     type Error = EngineError;
 
     fn map_value(&mut self, value: PersistentPtr) -> Result<Self::Value, Self::Error> {
         let rooted = self.roots.resolve(self.scope, &value)?;
-        Ok(self.scope.pointer(rooted))
+        Ok(rooted)
     }
 
     fn map_environment(
@@ -130,27 +128,13 @@ pub(crate) async fn eval_typed_expr<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let env = heap.with_locked(|heap| rooted_env.to_environment(heap))?;
-    let (env, expr) = if input_args.is_empty() {
-        (env, expr)
-    } else {
-        let args = input_args
-            .iter()
-            .map(|(handle, typ)| Ok((handle.pointer_for_heap(heap)?, typ.clone())))
-            .collect::<Result<Vec<_>, EngineError>>()?;
-        let (env, expr) = synthetic_application_expr_from_head(env, expr.as_ref().clone(), &args)?;
-        (env, Arc::new(expr))
-    };
-    // rooted_env and input_args intentionally remain in scope across this
-    // await; their handles root the raw pointers stored in env and the
-    // synthetic input application.
-    eval_typed_expr_inner(runtime, heap, env, expr).await
+    eval_typed_expr_inner(runtime, heap, rooted_env, expr, input_args).await
 }
 
 fn persist_eval_state<'heap, 'scope, State>(
     scope: &mut RootScope<'heap, 'scope>,
-    frames: FrameStore<Frame<Pointer, Environment>>,
-    scheduler: EvalScheduler<State, Pointer>,
+    frames: FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
+    scheduler: EvalScheduler<State, RootedPtr<'scope>>,
     mut previous_roots: Option<PersistentRootStore>,
 ) -> Result<PersistentEvalState<State>, EngineError>
 where
@@ -166,10 +150,7 @@ where
             };
             frames.map_frames(|frame| frame.map_values(&mut mapper))?
         };
-        let scheduler = scheduler.map_values(&mut |pointer| {
-            let rooted = scope.root(pointer);
-            roots.insert(scope, rooted)
-        })?;
+        let scheduler = scheduler.map_values(&mut |value| roots.insert(scope, value))?;
         Ok::<_, EngineError>((frames, scheduler))
     })();
 
@@ -197,7 +178,7 @@ where
 fn resolve_eval_state<'heap, 'scope, State>(
     scope: &mut RootScope<'heap, 'scope>,
     state: PersistentEvalState<State>,
-) -> Result<TransientEvalState<State>, EngineError>
+) -> Result<TransientEvalState<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -217,7 +198,7 @@ where
         };
         let scheduler = scheduler.map_values(&mut |value| {
             let rooted = roots.resolve(scope, &value)?;
-            Ok::<_, EngineError>(scope.pointer(rooted))
+            Ok::<_, EngineError>(rooted)
         })?;
         Ok::<_, EngineError>((frames, scheduler))
     })();
@@ -239,16 +220,34 @@ where
 async fn eval_typed_expr_inner<State>(
     mut runtime: RuntimeCore<State>,
     heap: &Heap,
-    env: Environment,
+    rooted_env: RootedEnvironment,
     expr: Arc<TypedExpr>,
+    input_args: Vec<(Handle, Type)>,
 ) -> Result<Handle, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    let mut frames = FrameStore::default();
-    let root_frame = frames.insert(frame_for_expr(None, expr, env));
-    let scheduler = EvalScheduler::new(root_frame, runtime.parallelism_controller.clone());
-    let state = heap.with_root_scope(|scope| persist_eval_state(scope, frames, scheduler, None))?;
+    let state = heap.with_root_scope(|scope| {
+        let env = rooted_env.to_scoped_environment(scope)?;
+        let (env, expr) = if input_args.is_empty() {
+            (env, expr)
+        } else {
+            let args = input_args
+                .iter()
+                .map(|(handle, typ)| {
+                    let pointer = handle.pointer(scope.heap)?;
+                    Ok((scope.root(pointer), typ.clone()))
+                })
+                .collect::<Result<Vec<_>, EngineError>>()?;
+            let (env, expr) =
+                synthetic_rooted_application_expr_from_head(env, expr.as_ref().clone(), &args)?;
+            (env, Arc::new(expr))
+        };
+        let mut frames = FrameStore::default();
+        let root_frame = frames.insert(frame_for_expr(None, expr, env));
+        let scheduler = EvalScheduler::new(root_frame, runtime.parallelism_controller.clone());
+        persist_eval_state(scope, frames, scheduler, None)
+    })?;
     let mut boundary = EvalBoundary::MoreInternalWork(state);
 
     loop {
@@ -334,95 +333,65 @@ where
         mut scheduler,
     } = resolve_eval_state(scope, state)?;
     let released_host_handle = if let Some((frame, handle)) = completed_native {
-        let value = handle.pointer(scope.heap)?;
+        let value = scope.root(handle.pointer(scope.heap)?);
         scheduler.schedule_next(EvalWorkItem::receive(frame, frame, value));
         Some(handle)
     } else {
         None
     };
 
-    let mut item = scheduler
+    let item = scheduler
         .pop_next()
         .ok_or_else(|| EngineError::Internal("eval scheduler ran out of ready work".into()))?;
-    let mut protected = Vec::new();
-    frames.trace_pointers(&mut protected);
-    item.trace_pointers(&mut protected);
-    scheduler.trace_pointers(&mut protected);
+    let frame = frames.get(item.frame)?.clone();
+    let returned = item
+        .returned
+        .as_ref()
+        .map(|returned| (returned.child, returned.value));
+    let control = match returned {
+        Some((child, value)) => {
+            eval_receive(runtime, scope, &mut frames, item.frame, frame, child, value)?
+        }
+        None => eval_enter(runtime, scope, &mut frames, item.frame, frame)?,
+    };
 
-    let result = scope.with_temp_roots(protected.clone(), |scope, roots| {
-        refresh_eval_roots(
-            scope.heap,
-            &mut frames,
-            &mut item,
-            &mut scheduler,
-            roots,
-            &protected,
-        )?;
-
-        let frame = frames.get(item.frame)?.clone();
-        let returned = item
-            .returned
-            .as_ref()
-            .map(|returned| (returned.child, returned.value));
-        let control = match returned {
-            Some((child, value)) => {
-                eval_receive(runtime, scope, &mut frames, item.frame, frame, child, value)?
-            }
-            None => eval_enter(runtime, scope, &mut frames, item.frame, frame)?,
-        };
-        refresh_eval_roots(
-            scope.heap,
-            &mut frames,
-            &mut item,
-            &mut scheduler,
-            roots,
-            &protected,
-        )?;
-
-        match control {
-            EvalControl::Push { expr, env } => {
-                let frame = frame_for_expr(Some(item.frame), expr, env);
-                let child = frames.insert(frame);
+    match control {
+        EvalControl::Push { expr, env } => {
+            let frame = frame_for_expr(Some(item.frame), expr, env);
+            let child = frames.insert(frame);
+            scheduler.schedule_next(EvalWorkItem::enter(child));
+        }
+        EvalControl::PushFrame(frame) => {
+            let child = frames.insert(*frame);
+            scheduler.schedule_next(EvalWorkItem::enter(child));
+        }
+        EvalControl::Schedule(children) => {
+            for child in children.into_iter().rev() {
                 scheduler.schedule_next(EvalWorkItem::enter(child));
-            }
-            EvalControl::PushFrame(frame) => {
-                let child = frames.insert(*frame);
-                scheduler.schedule_next(EvalWorkItem::enter(child));
-            }
-            EvalControl::Schedule(children) => {
-                for child in children.into_iter().rev() {
-                    scheduler.schedule_next(EvalWorkItem::enter(child));
-                }
-            }
-            EvalControl::Wait => {}
-            EvalControl::AwaitNative(call) => {
-                let call = call.root_in_scope(scope, promoter)?;
-                let frame = Frame::NativeHost(FrNativeHost {
-                    parent: Some(item.frame),
-                });
-                let child = frames.insert(frame);
-                scheduler.schedule_native(child, call);
-            }
-            EvalControl::Return(value) => {
-                let frame = frames.remove(item.frame)?;
-                let parent = frame.parent();
-                let Some(parent) = parent else {
-                    return Ok(Some(value));
-                };
-                scheduler.schedule_next(EvalWorkItem::receive(parent, item.frame, value));
             }
         }
-        Ok(None)
-    })?;
-
-    if let Some(result) = result {
-        previous_roots.clear(scope)?;
-        let result = scope.root(result);
-        let result = promoter.promote(scope, result)?;
-        return Ok(LockedCycleOutcome {
-            boundary: EvalBoundary::Completed(result),
-            released_host_handle,
-        });
+        EvalControl::Wait => {}
+        EvalControl::AwaitNative(call) => {
+            let call = call.promote(scope, promoter)?;
+            let frame = Frame::NativeHost(FrNativeHost {
+                parent: Some(item.frame),
+            });
+            let child = frames.insert(frame);
+            scheduler.schedule_native(child, call);
+        }
+        EvalControl::Return(value) => {
+            let frame = frames.remove(item.frame)?;
+            let parent = frame.parent();
+            let Some(parent) = parent else {
+                previous_roots.clear(scope)?;
+                let result = promoter.promote(scope, value)?;
+                return Ok(LockedCycleOutcome {
+                    boundary: EvalBoundary::Completed(result),
+                    released_host_handle,
+                });
+            };
+            scheduler.schedule_next(EvalWorkItem::receive(parent, item.frame, value));
+        }
     }
 
     let state = persist_eval_state(scope, frames, scheduler, Some(previous_roots))?;
@@ -432,37 +401,11 @@ where
     })
 }
 
-fn refresh_eval_roots<State>(
-    heap: &HeapState,
-    frames: &mut FrameStore<Frame<Pointer, Environment>>,
-    item: &mut EvalWorkItem<Pointer>,
-    scheduler: &mut EvalScheduler<State, Pointer>,
-    roots: &TempRoots,
-    originals: &[Pointer],
-) -> Result<(), EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    if !roots.has_collected_since_creation(heap)? {
-        return Ok(());
-    }
-
-    let mut rewrites = HashMap::with_capacity(originals.len());
-    for (index, original) in originals.iter().enumerate() {
-        rewrites.insert(*original, roots.get(index, heap)?);
-    }
-    let mut rewrite =
-        |pointer| Ok::<_, EngineError>(rewrites.get(&pointer).copied().unwrap_or(pointer));
-    frames.map_pointers(&mut rewrite)?;
-    item.map_pointers(&mut rewrite)?;
-    scheduler.map_pointers(&mut rewrite)
-}
-
-pub(crate) fn frame_for_expr(
+pub(crate) fn frame_for_expr<'scope>(
     parent: Option<FrameId>,
     expr: Arc<TypedExpr>,
-    env: Environment,
-) -> Frame<Pointer, Environment> {
+    env: ScopedEnvironment<'scope>,
+) -> Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>> {
     let kind = Arc::clone(&expr.kind);
     match kind.as_ref() {
         TypedExprKind::Bool(_) => Frame::Bool(FrBool {
@@ -643,10 +586,10 @@ pub(crate) fn frame_for_expr(
 fn eval_enter<'scope, State>(
     runtime: &RuntimeCore<State>,
     scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<Pointer, Environment>>,
+    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     frame_id: FrameId,
-    frame: Frame<Pointer, Environment>,
-) -> Result<EvalControl<State>, EngineError>
+    frame: Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
+) -> Result<EvalControl<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -654,49 +597,49 @@ where
         Frame::Bool(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Bool(value) => {
                 let root = scope.alloc_root_bool(*value)?;
-                Ok(EvalControl::Return(scope.pointer(root)))
+                Ok(EvalControl::Return(root))
             }
             _ => frame_kind_error("bool"),
         },
         Frame::Uint(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Uint(value) => {
                 let root = alloc_uint_literal_as(scope, *value, &frame.expr.typ)?;
-                Ok(EvalControl::Return(scope.pointer(root)))
+                Ok(EvalControl::Return(root))
             }
             _ => frame_kind_error("uint"),
         },
         Frame::Int(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Int(value) => {
                 let root = alloc_int_literal_as(scope, *value, &frame.expr.typ)?;
-                Ok(EvalControl::Return(scope.pointer(root)))
+                Ok(EvalControl::Return(root))
             }
             _ => frame_kind_error("int"),
         },
         Frame::Float(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Float(value) => {
                 let root = alloc_float_literal_as(scope, *value, &frame.expr.typ)?;
-                Ok(EvalControl::Return(scope.pointer(root)))
+                Ok(EvalControl::Return(root))
             }
             _ => frame_kind_error("float"),
         },
         Frame::String(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::String(value) => {
                 let root = scope.alloc_root_string(value.clone())?;
-                Ok(EvalControl::Return(scope.pointer(root)))
+                Ok(EvalControl::Return(root))
             }
             _ => frame_kind_error("string"),
         },
         Frame::Uuid(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Uuid(value) => {
                 let root = scope.alloc_root_uuid(*value)?;
-                Ok(EvalControl::Return(scope.pointer(root)))
+                Ok(EvalControl::Return(root))
             }
             _ => frame_kind_error("uuid"),
         },
         Frame::DateTime(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::DateTime(value) => {
                 let root = scope.alloc_root_datetime(*value)?;
-                Ok(EvalControl::Return(scope.pointer(root)))
+                Ok(EvalControl::Return(root))
             }
             _ => frame_kind_error("datetime"),
         },
@@ -750,13 +693,13 @@ where
                     .map(|(arg, _)| arg)
                     .ok_or_else(|| EngineError::NotCallable(frame.expr.typ.to_string()))?;
                 let root = scope.alloc_root_closure(
-                    frame.env.clone(),
+                    frame.env.to_environment(scope),
                     param.clone(),
                     param_ty,
                     frame.expr.typ.clone(),
                     Arc::clone(body),
                 )?;
-                Ok(EvalControl::Return(scope.pointer(root)))
+                Ok(EvalControl::Return(root))
             }
             _ => frame_kind_error("lambda"),
         },
@@ -776,43 +719,31 @@ where
             };
             let bindings = bindings.clone();
             let body = Arc::clone(body);
-            let mut protected = Vec::new();
-            Frame::LetRec(frame.clone()).trace_pointers(&mut protected);
-
-            scope.with_temp_roots(protected.clone(), |scope, frame_roots| {
-                let mut slot_roots: Vec<RootedPtr<'_>> = Vec::with_capacity(bindings.len());
-                for (name, _) in &bindings {
-                    let root = scope.alloc_root_uninitialized(name.clone())?;
-                    slot_roots.push(root);
-                }
-                let mut wrapped = Frame::LetRec(frame);
-                refresh_frame_from_roots(scope.heap, &mut wrapped, &protected, frame_roots, 0)?;
-                let Frame::LetRec(mut frame) = wrapped else {
-                    return frame_kind_error("let rec");
-                };
-                let mut recursive_env = frame.env.clone();
-                let mut slots: Vec<Pointer> = Vec::with_capacity(bindings.len());
-                for ((name, _), root) in bindings.iter().zip(slot_roots.iter()) {
-                    recursive_env = recursive_env.extend(name.clone(), scope.pointer(*root));
-                    slots.push(scope.pointer(*root));
-                }
-                frame.recursive_env = Some(recursive_env.clone());
-                frame.slots = slots;
-                if bindings.is_empty() {
-                    frame.state = FrLetRecState::EvalBody;
-                    frames.replace(frame_id, Frame::LetRec(frame))?;
-                    return Ok(EvalControl::Push {
-                        expr: body,
-                        env: recursive_env,
-                    });
-                }
-                frame.state = FrLetRecState::EvalBinding;
-                let def = Arc::clone(&bindings[0].1);
+            let mut slot_roots = Vec::with_capacity(bindings.len());
+            for (name, _) in &bindings {
+                slot_roots.push(scope.alloc_root_uninitialized(name.clone())?);
+            }
+            let mut frame = frame;
+            let mut recursive_env = frame.env.clone();
+            for ((name, _), root) in bindings.iter().zip(&slot_roots) {
+                recursive_env = recursive_env.extend(name.clone(), *root);
+            }
+            frame.recursive_env = Some(recursive_env.clone());
+            frame.slots = slot_roots;
+            if bindings.is_empty() {
+                frame.state = FrLetRecState::EvalBody;
                 frames.replace(frame_id, Frame::LetRec(frame))?;
-                Ok(EvalControl::Push {
-                    expr: def,
+                return Ok(EvalControl::Push {
+                    expr: body,
                     env: recursive_env,
-                })
+                });
+            }
+            frame.state = FrLetRecState::EvalBinding;
+            let def = Arc::clone(&bindings[0].1);
+            frames.replace(frame_id, Frame::LetRec(frame))?;
+            Ok(EvalControl::Push {
+                expr: def,
+                env: recursive_env,
             })
         }
         Frame::Ite(mut frame) => {
@@ -845,10 +776,10 @@ where
 
 fn eval_tuple_enter<'scope, State>(
     scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<Pointer, Environment>>,
+    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     frame_id: FrameId,
-    mut frame: FrTuple<Pointer, Environment>,
-) -> Result<EvalControl<State>, EngineError>
+    mut frame: FrTuple<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
+) -> Result<EvalControl<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -858,7 +789,7 @@ where
     };
     if elems.is_empty() {
         let root = scope.alloc_root_tuple(vec![])?;
-        return Ok(EvalControl::Return(scope.pointer(root)));
+        return Ok(EvalControl::Return(root));
     }
 
     frame.state = FrSequenceState::EvalItem;
@@ -877,10 +808,10 @@ where
 
 fn eval_list_enter<'scope, State>(
     scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<Pointer, Environment>>,
+    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     frame_id: FrameId,
-    mut frame: FrList<Pointer, Environment>,
-) -> Result<EvalControl<State>, EngineError>
+    mut frame: FrList<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
+) -> Result<EvalControl<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -890,7 +821,7 @@ where
     };
     if elems.is_empty() {
         let empty = scope.alloc_root_empty()?;
-        return Ok(EvalControl::Return(scope.pointer(empty)));
+        return Ok(EvalControl::Return(empty));
     }
 
     frame.state = FrSequenceState::EvalItem;
@@ -909,17 +840,17 @@ where
 
 fn eval_dict_enter<'scope, State>(
     scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<Pointer, Environment>>,
+    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     frame_id: FrameId,
-    mut frame: FrDict<Pointer, Environment>,
-) -> Result<EvalControl<State>, EngineError>
+    mut frame: FrDict<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
+) -> Result<EvalControl<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
     let exprs = dict_exprs_for_keys(&frame, &frame.keys)?;
     if exprs.is_empty() {
         let root = scope.alloc_root_dict(BTreeMap::new())?;
-        return Ok(EvalControl::Return(scope.pointer(root)));
+        return Ok(EvalControl::Return(root));
     }
 
     frame.state = FrSequenceState::EvalItem;
@@ -936,11 +867,11 @@ where
     Ok(EvalControl::Schedule(children))
 }
 
-fn eval_record_update_updates_enter<State>(
-    frames: &mut FrameStore<Frame<Pointer, Environment>>,
+fn eval_record_update_updates_enter<'scope, State>(
+    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     frame_id: FrameId,
-    mut frame: FrRecordUpdate<Pointer, Environment>,
-) -> Result<EvalControl<State>, EngineError>
+    mut frame: FrRecordUpdate<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
+) -> Result<EvalControl<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -959,11 +890,11 @@ where
     Ok(EvalControl::Schedule(children))
 }
 
-fn eval_app_enter<State>(
-    frames: &mut FrameStore<Frame<Pointer, Environment>>,
+fn eval_app_enter<'scope, State>(
+    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     frame_id: FrameId,
-    mut frame: FrApp<Pointer, Environment>,
-) -> Result<EvalControl<State>, EngineError>
+    mut frame: FrApp<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
+) -> Result<EvalControl<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -1011,13 +942,13 @@ where
     Ok(EvalControl::Schedule(children))
 }
 
-fn receive_sequence_value(
+fn receive_sequence_value<P: Copy>(
     kind: &'static str,
     children: &[FrameId],
-    values: &mut [Option<Pointer>],
+    values: &mut [Option<P>],
     remaining: &mut usize,
     child: FrameId,
-    value: Pointer,
+    value: P,
 ) -> Result<(), EngineError> {
     let index = children
         .iter()
@@ -1040,10 +971,10 @@ fn receive_sequence_value(
     Ok(())
 }
 
-fn receive_app_child_value(
-    frame: &mut FrApp<Pointer, Environment>,
+fn receive_app_child_value<'scope>(
+    frame: &mut FrApp<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
     child: FrameId,
-    value: Pointer,
+    value: RootedPtr<'scope>,
 ) -> Result<(), EngineError> {
     if frame.head_child == Some(child) {
         if frame.func.is_some() {
@@ -1081,10 +1012,10 @@ fn receive_app_child_value(
     Ok(())
 }
 
-fn completed_values(
+fn completed_values<P: Copy>(
     kind: &'static str,
-    values: &[Option<Pointer>],
-) -> Result<Vec<Pointer>, EngineError> {
+    values: &[Option<P>],
+) -> Result<Vec<P>, EngineError> {
     values
         .iter()
         .copied()
@@ -1092,11 +1023,11 @@ fn completed_values(
         .ok_or_else(|| EngineError::Internal(format!("{kind} completed with missing result")))
 }
 
-fn map_keys_to_values(
+fn map_keys_to_values<P>(
     kind: &'static str,
     keys: &[Symbol],
-    values: Vec<Pointer>,
-) -> Result<BTreeMap<Symbol, Pointer>, EngineError> {
+    values: Vec<P>,
+) -> Result<BTreeMap<Symbol, P>, EngineError> {
     if keys.len() != values.len() {
         return Err(EngineError::Internal(format!(
             "{kind} completed with mismatched keys and values"
@@ -1105,8 +1036,8 @@ fn map_keys_to_values(
     Ok(keys.iter().cloned().zip(values).collect())
 }
 
-fn dict_exprs_for_keys(
-    frame: &FrDict<Pointer, Environment>,
+fn dict_exprs_for_keys<P, E>(
+    frame: &FrDict<P, E>,
     keys: &[Symbol],
 ) -> Result<Vec<Arc<TypedExpr>>, EngineError> {
     match frame.expr.kind.as_ref() {
@@ -1122,8 +1053,8 @@ fn dict_exprs_for_keys(
     }
 }
 
-fn record_update_exprs_for_keys(
-    frame: &FrRecordUpdate<Pointer, Environment>,
+fn record_update_exprs_for_keys<P, E>(
+    frame: &FrRecordUpdate<P, E>,
     keys: &[Symbol],
 ) -> Result<Vec<Arc<TypedExpr>>, EngineError> {
     match frame.expr.kind.as_ref() {
@@ -1143,12 +1074,12 @@ fn record_update_exprs_for_keys(
 fn eval_receive<'scope, State>(
     runtime: &RuntimeCore<State>,
     scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<Pointer, Environment>>,
+    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     frame_id: FrameId,
-    frame: Frame<Pointer, Environment>,
+    frame: Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
     child: FrameId,
-    value: Pointer,
-) -> Result<EvalControl<State>, EngineError>
+    value: RootedPtr<'scope>,
+) -> Result<EvalControl<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -1185,12 +1116,8 @@ where
                     .ok_or_else(|| {
                         EngineError::Internal("tuple completed with missing result".into())
                     })?;
-                let values = values
-                    .into_iter()
-                    .map(|v| scope.root(v))
-                    .collect::<Vec<_>>();
                 let root = scope.alloc_root_tuple(values)?;
-                return Ok(EvalControl::Return(scope.pointer(root)));
+                return Ok(EvalControl::Return(root));
             }
             frames.replace(frame_id, Frame::Tuple(frame))?;
             Ok(EvalControl::Wait)
@@ -1208,14 +1135,9 @@ where
                 value,
             )?;
             if frame.remaining == 0 {
-                let pointers = completed_values("list", &frame.values)?;
-                let roots = pointers
-                    .into_iter()
-                    .map(|x| scope.root(x))
-                    .collect::<Vec<RootedPtr<'_>>>();
-                let root = scope.alloc_root_list(roots)?;
-                let list = scope.pointer(root);
-                return Ok(EvalControl::Return(list));
+                let values = completed_values("list", &frame.values)?;
+                let root = scope.alloc_root_list(values)?;
+                return Ok(EvalControl::Return(root));
             }
             frames.replace(frame_id, Frame::List(frame))?;
             Ok(EvalControl::Wait)
@@ -1238,10 +1160,8 @@ where
                     &frame.keys,
                     completed_values("dict", &frame.values)?,
                 )?;
-                let values =
-                    BTreeMap::from_iter(values.into_iter().map(|(k, v)| (k, scope.root(v))));
                 let root = scope.alloc_root_dict(values)?;
-                return Ok(EvalControl::Return(scope.pointer(root)));
+                return Ok(EvalControl::Return(root));
             }
             frames.replace(frame_id, Frame::Dict(frame))?;
             Ok(EvalControl::Wait)
@@ -1250,10 +1170,8 @@ where
             FrRecordUpdateState::EvalBase => {
                 frame.base_value = Some(value);
                 if frame.update_keys.is_empty() {
-                    let value = scope.root(value);
                     let root = apply_record_update_values(scope, value, BTreeMap::new())?;
-                    let result = scope.pointer(root);
-                    return Ok(EvalControl::Return(result));
+                    return Ok(EvalControl::Return(root));
                 }
                 eval_record_update_updates_enter(frames, frame_id, frame)
             }
@@ -1275,13 +1193,8 @@ where
                         &frame.update_keys,
                         completed_values("record update", &frame.update_values)?,
                     )?;
-                    let base = scope.root(base);
-                    let update_values = BTreeMap::from_iter(
-                        update_values.into_iter().map(|(k, v)| (k, scope.root(v))),
-                    );
                     let root = apply_record_update_values(scope, base, update_values)?;
-                    let result = scope.pointer(root);
-                    return Ok(EvalControl::Return(result));
+                    return Ok(EvalControl::Return(root));
                 }
                 frames.replace(frame_id, Frame::RecordUpdate(frame))?;
                 Ok(EvalControl::Wait)
@@ -1306,10 +1219,8 @@ where
         },
         Frame::Project(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Project { field, .. } => {
-                let value = scope.root(value);
                 let res = project_pointer(scope, field, value)?;
-                let projected = scope.pointer(res);
-                Ok(EvalControl::Return(projected))
+                Ok(EvalControl::Return(res))
             }
             _ => frame_kind_error("project"),
         },
@@ -1337,9 +1248,7 @@ where
                 let slot = *frame.slots.get(idx).ok_or_else(|| {
                     EngineError::Internal("let rec frame slot index out of bounds".into())
                 })?;
-                let value_root = scope.root(value);
-                let cell = scope.get_cell_from_rooted_ptr(value_root)?.clone();
-                scope.heap.overwrite(&slot, cell)?;
+                scope.overwrite_root(slot, value)?;
                 frame.binding_value = Some(value);
                 frame.next_binding_index += 1;
                 let recursive_env = frame.recursive_env.clone().ok_or_else(|| {
@@ -1374,8 +1283,7 @@ where
                 else {
                     return frame_kind_error("if");
                 };
-                let value_root = scope.root(value);
-                let selected = match scope.root_as_bool(value_root) {
+                let selected = match scope.root_as_bool(value) {
                     Ok(true) => Arc::clone(then_expr),
                     Ok(false) => Arc::clone(else_expr),
                     Err(EngineError::NativeType { got, .. }) => {
@@ -1399,61 +1307,23 @@ where
         Frame::Match(mut frame) => match frame.state {
             FrMatchState::EvalScrutinee => {
                 frame.scrutinee_value = Some(value);
-                let mut protected = Vec::new();
-                Frame::Match(frame.clone()).trace_pointers(&mut protected);
-                scope.with_temp_roots(protected.clone(), |scope, frame_roots| {
-                    loop {
-                        let mut wrapped = Frame::Match(frame);
-                        refresh_frame_from_roots(
-                            scope.heap,
-                            &mut wrapped,
-                            &protected,
-                            frame_roots,
-                            0,
-                        )?;
-                        frame = match wrapped {
-                            Frame::Match(frame) => frame,
-                            _ => return frame_kind_error("match"),
-                        };
-                        let value = frame.scrutinee_value.ok_or_else(|| {
-                            EngineError::Internal("match frame missing scrutinee".into())
-                        })?;
-                        if frame.next_arm_index >= frame.arms.len() {
-                            return Err(EngineError::MatchFailure);
-                        }
-                        let idx = frame.next_arm_index;
-                        let arm = &frame.arms[idx];
-                        let value = scope.root(value);
-                        let matched = match_pattern_ptr(scope, &arm.pattern, value)?;
-                        let matched = matched.map(|matched| {
-                            BTreeMap::from_iter(
-                                matched.into_iter().map(|(k, v)| (k, scope.pointer(v))),
-                            )
-                        });
-                        let mut wrapped = Frame::Match(frame);
-                        refresh_frame_from_roots(
-                            scope.heap,
-                            &mut wrapped,
-                            &protected,
-                            frame_roots,
-                            0,
-                        )?;
-                        frame = match wrapped {
-                            Frame::Match(frame) => frame,
-                            _ => return frame_kind_error("match"),
-                        };
-                        if let Some(bindings) = matched {
-                            let env = frame.env.extend_many(bindings);
-                            let expr = Arc::clone(&frame.arms[idx].expr);
-                            frame.next_arm_index = idx;
-                            frame.matched_env = Some(env.clone());
-                            frame.state = FrMatchState::EvalArm;
-                            frames.replace(frame_id, Frame::Match(frame))?;
-                            return Ok(EvalControl::Push { expr, env });
-                        }
-                        frame.next_arm_index += 1;
+                loop {
+                    if frame.next_arm_index >= frame.arms.len() {
+                        return Err(EngineError::MatchFailure);
                     }
-                })
+                    let idx = frame.next_arm_index;
+                    let arm = &frame.arms[idx];
+                    if let Some(bindings) = match_pattern_ptr(scope, &arm.pattern, value)? {
+                        let env = frame.env.extend_many(bindings);
+                        let expr = Arc::clone(&frame.arms[idx].expr);
+                        frame.next_arm_index = idx;
+                        frame.matched_env = Some(env.clone());
+                        frame.state = FrMatchState::EvalArm;
+                        frames.replace(frame_id, Frame::Match(frame))?;
+                        return Ok(EvalControl::Push { expr, env });
+                    }
+                    frame.next_arm_index += 1;
+                }
             }
             FrMatchState::EvalArm => Ok(EvalControl::Return(value)),
             _ => unexpected_child_result("match"),
@@ -1466,30 +1336,12 @@ where
     }
 }
 
-pub(crate) fn refresh_frame_from_roots(
-    heap: &HeapState,
-    frame: &mut Frame<Pointer, Environment>,
-    originals: &[Pointer],
-    roots: &TempRoots,
-    start: usize,
-) -> Result<(), EngineError> {
-    if !roots.has_collected_since_creation(heap)? {
-        return Ok(());
-    }
-
-    let mut rewrites = HashMap::with_capacity(originals.len().saturating_sub(start));
-    for (idx, original) in originals.iter().enumerate().skip(start) {
-        rewrites.insert(*original, roots.get(idx, heap)?);
-    }
-    frame.map_pointers(&mut |pointer| Ok(rewrites.get(&pointer).copied().unwrap_or(pointer)))
-}
-
 fn eval_apply_overloaded_arg<'scope, State>(
     runtime: &RuntimeCore<State>,
     scope: &mut RootScope<'_, 'scope>,
     parent: FrameId,
-    mut over: OverloadedFn,
-    arg: Pointer,
+    mut over: OverloadedFn<RootedPtr<'scope>>,
+    arg: RootedPtr<'scope>,
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
 ) -> Result<EvalApplyResult<'scope, State>, EngineError>
@@ -1505,8 +1357,7 @@ where
     }
     let (arg_ty, rest_ty) =
         split_fun(&over.typ).ok_or_else(|| EngineError::NotCallable(over.typ.to_string()))?;
-    let arg_root = scope.root(arg);
-    let actual_ty = resolve_arg_type(scope, arg_type, arg_root)?;
+    let actual_ty = resolve_arg_type(scope, arg_type, arg)?;
     let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
         expected: arg_ty.to_string(),
         got: actual_ty.to_string(),
@@ -1515,8 +1366,8 @@ where
     over.applied.push(arg);
     over.applied_types.push(actual_ty);
     if is_function_type(&rest_ty) {
-        let applied = over.applied.into_iter().map(|x| scope.root(x)).collect();
-        let root = scope.alloc_root_overloaded(over.name, rest_ty, applied, over.applied_types)?;
+        let root =
+            scope.alloc_root_overloaded(over.name, rest_ty, over.applied, over.applied_types)?;
         return Ok(EvalApplyResult::Value(root));
     }
 
@@ -1528,19 +1379,19 @@ where
     if runtime.type_system.class_methods.contains_key(&over.name) {
         let ctx = InternalCtx::new_with_parent(runtime, parent);
         return match ctx.resolve_class_method_plan(scope, &over.name, &full_ty)? {
-            Ok((env, method)) => {
+            ClassMethodPlan::Evaluate { env, expr: method } => {
                 let args = over
                     .applied
                     .into_iter()
                     .zip(over.applied_types)
                     .collect::<Vec<_>>();
-                let (env, expr) = synthetic_application_expr_from_head(env, method, &args)?;
+                let (env, expr) = synthetic_rooted_application_expr_from_head(env, method, &args)?;
                 Ok(EvalApplyResult::Push {
                     expr: Arc::new(expr),
                     env,
                 })
             }
-            Err(pointer) => Ok(EvalApplyResult::Value(scope.root(pointer))),
+            ClassMethodPlan::Deferred(value) => Ok(EvalApplyResult::Value(value)),
         };
     }
 
@@ -1556,24 +1407,22 @@ fn eval_apply_arg<'scope, State>(
     runtime: &RuntimeCore<State>,
     scope: &mut RootScope<'_, 'scope>,
     parent: FrameId,
-    func: Pointer,
-    arg: Pointer,
+    func: RootedPtr<'scope>,
+    arg: RootedPtr<'scope>,
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
 ) -> Result<EvalApplyResult<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    let func_root = scope.root(func);
-    let func_value = scope.get_cell_from_rooted_ptr(func_root)?.clone();
-    match func_value {
-        Cell::Closure(Closure {
+    match scope.root_as_callable(func)? {
+        Some(RootedCallable::Closure(RootedClosure {
             env,
             param,
             param_ty,
             typ,
             body,
-        }) => {
+        })) => {
             let mut subst = Subst::new_sync();
             if let Some(expected) = func_type {
                 let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
@@ -1582,8 +1431,7 @@ where
                 })?;
                 subst = compose_subst(s_fun, subst);
             }
-            let arg_root = scope.root(arg);
-            let actual_ty = resolve_arg_type(scope, arg_type, arg_root)?;
+            let actual_ty = resolve_arg_type(scope, arg_type, arg)?;
             let param_ty = param_ty.apply(&subst);
             let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
                 expected: param_ty.to_string(),
@@ -1595,31 +1443,28 @@ where
                 env: env.extend(param, arg),
             })
         }
-        Cell::Native(native) => {
+        Some(RootedCallable::Native(native)) => {
             match native.apply_at_site(runtime, scope, arg, arg_type, CallSite::child(parent))? {
                 NativeApplyResult::Value(value) => Ok(EvalApplyResult::Value(value)),
                 NativeApplyResult::Task(task) => Ok(EvalApplyResult::PushNative(task)),
                 NativeApplyResult::Pending(future) => Ok(EvalApplyResult::AwaitNative(future)),
             }
         }
-        Cell::Overloaded(over) => {
+        Some(RootedCallable::Overloaded(over)) => {
             eval_apply_overloaded_arg(runtime, scope, parent, over, arg, func_type, arg_type)
         }
-        _ => {
-            let func_root = scope.root(func);
-            Err(EngineError::NotCallable(scope.type_name(func_root)?.into()))
-        }
+        None => Err(EngineError::NotCallable(scope.type_name(func)?.into())),
     }
 }
 
 fn continue_app_after_apply<'scope, State>(
     runtime: &RuntimeCore<State>,
     scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<Pointer, Environment>>,
+    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     frame_id: FrameId,
-    mut frame: FrApp<Pointer, Environment>,
-    applied: Option<Pointer>,
-) -> Result<EvalControl<State>, EngineError>
+    mut frame: FrApp<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
+    applied: Option<RootedPtr<'scope>>,
+) -> Result<EvalControl<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -1661,45 +1506,37 @@ where
         frame.arg = Some(arg);
         frame.state = FrAppState::ApplyArg;
         frames.replace(frame_id, Frame::App(frame.clone()))?;
-        let mut protected = vec![func, arg];
-        Frame::App(frame.clone()).trace_pointers(&mut protected);
-        let control = scope.with_temp_roots(protected.clone(), |scope, roots| {
-            let apply_result = eval_apply_arg(
-                runtime,
-                scope,
-                frame_id,
-                func,
-                arg,
-                Some(&arg_info.func_type),
-                Some(&arg_info.expr.typ),
-            )?;
-            let mut wrapped = Frame::App(frame.clone());
-            refresh_frame_from_roots(scope.heap, &mut wrapped, &protected, roots, 0)?;
-            frame = match wrapped {
-                Frame::App(frame) => frame,
-                _ => return frame_kind_error("application"),
-            };
-            match apply_result {
-                EvalApplyResult::Value(applied) => {
-                    frame.arg = None;
-                    frame.func = Some(scope.pointer(applied));
-                    frame.next_arg_index += 1;
-                    frames.replace(frame_id, Frame::App(frame.clone()))?;
-                    Ok(None)
-                }
-                EvalApplyResult::Push { expr, env } => Ok(Some(EvalControl::Push { expr, env })),
-                EvalApplyResult::PushNative(task) => Ok(Some(EvalControl::PushFrame(Box::new(
-                    Frame::NativeCall(FrNativeCall {
+        let apply_result = eval_apply_arg(
+            runtime,
+            scope,
+            frame_id,
+            func,
+            arg,
+            Some(&arg_info.func_type),
+            Some(&arg_info.expr.typ),
+        )?;
+        match apply_result {
+            EvalApplyResult::Value(applied) => {
+                frame.arg = None;
+                frame.func = Some(applied);
+                frame.next_arg_index += 1;
+                frames.replace(frame_id, Frame::App(frame.clone()))?;
+            }
+            EvalApplyResult::Push { expr, env } => {
+                return Ok(EvalControl::Push { expr, env });
+            }
+            EvalApplyResult::PushNative(task) => {
+                return Ok(EvalControl::PushFrame(Box::new(Frame::NativeCall(
+                    FrNativeCall {
                         parent: Some(frame_id),
                         state: FrNativeCallState::Enter,
                         task,
-                    }),
-                )))),
-                EvalApplyResult::AwaitNative(future) => Ok(Some(EvalControl::AwaitNative(future))),
+                    },
+                ))));
             }
-        })?;
-        if let Some(control) = control {
-            return Ok(control);
+            EvalApplyResult::AwaitNative(future) => {
+                return Ok(EvalControl::AwaitNative(future));
+            }
         }
     }
 }
@@ -1708,21 +1545,17 @@ fn eval_resolve_var<'scope, State>(
     runtime: &RuntimeCore<State>,
     scope: &mut RootScope<'_, 'scope>,
     parent: FrameId,
-    env: &Environment,
+    env: &ScopedEnvironment<'scope>,
     name: &Symbol,
     typ: &Type,
-) -> Result<EvalVarResult<State>, EngineError>
+) -> Result<EvalVarResult<'scope, State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
     if let Some(ptr) = env.get(name) {
-        let ptr_root = scope.root(ptr);
-        let native = match scope.get_cell_from_rooted_ptr(ptr_root)? {
-            Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                Some(native.clone())
-            }
-            _ => None,
-        };
+        let native = scope
+            .root_as_native(ptr)?
+            .filter(|native| native.arity == 0 && native.applied.is_empty());
         if let Some(native) = native {
             native
                 .call_zero_at_site(runtime, CallSite::child(parent))
@@ -1733,28 +1566,24 @@ where
     } else if runtime.type_system.class_methods.contains_key(name) {
         let ctx = InternalCtx::new_with_parent(runtime, parent);
         match ctx.resolve_class_method_plan(scope, name, typ)? {
-            Ok((env, specialized)) => Ok(EvalVarResult::Push {
-                expr: Arc::new(specialized),
+            ClassMethodPlan::Evaluate { env, expr } => Ok(EvalVarResult::Push {
+                expr: Arc::new(expr),
                 env,
             }),
-            Err(pointer) => Ok(EvalVarResult::Value(pointer)),
+            ClassMethodPlan::Deferred(value) => Ok(EvalVarResult::Value(value)),
         }
     } else {
         let ctx = InternalCtx::new_with_parent(runtime, parent);
-        let ctx = ctx.resolve_native(scope, name.as_ref(), typ)?;
-        let ctx_root = scope.root(ctx);
-        let native = match scope.get_cell_from_rooted_ptr(ctx_root)? {
-            Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                Some(native.clone())
-            }
-            _ => None,
-        };
+        let ctx_root = ctx.resolve_native(scope, name.as_ref(), typ)?;
+        let native = scope
+            .root_as_native(ctx_root)?
+            .filter(|native| native.arity == 0 && native.applied.is_empty());
         if let Some(native) = native {
             native
                 .call_zero_at_site(runtime, CallSite::child(parent))
                 .map(EvalVarResult::AwaitNative)
         } else {
-            Ok(EvalVarResult::Value(ctx))
+            Ok(EvalVarResult::Value(ctx_root))
         }
     }
 }
@@ -1769,22 +1598,14 @@ fn apply_record_update_values<'scope>(
         Adt(Symbol, BTreeMap<Symbol, RootedPtr<'a>>),
     }
 
-    let base_val = scope.get_cell_from_rooted_ptr(base_ptr)?.clone();
-    let target = match base_val {
-        Cell::Dict(map) => {
-            let map = BTreeMap::from_iter(map.into_iter().map(|(k, v)| (k, scope.root(v))));
-            Ok(RecordUpdateTarget::Dict(map))
-        }
-        Cell::Adt(tag, args) if args.len() == 1 => {
-            let arg0 = scope.root(args[0]);
-            let inner = scope.get_cell_from_rooted_ptr(arg0)?.clone();
-            match inner {
-                Cell::Dict(map) => {
-                    let map = BTreeMap::from_iter(map.into_iter().map(|(k, v)| (k, scope.root(v))));
-                    Ok(RecordUpdateTarget::Adt(tag.clone(), map.clone()))
-                }
-                _ => Err(EngineError::UnsupportedExpr),
+    let target = match scope.type_name(base_ptr)? {
+        "dict" => Ok(RecordUpdateTarget::Dict(scope.root_as_dict(base_ptr)?)),
+        "adt" => {
+            let (tag, args) = scope.root_as_adt(base_ptr)?;
+            if args.len() != 1 || scope.type_name(args[0])? != "dict" {
+                return Err(EngineError::UnsupportedExpr);
             }
+            Ok(RecordUpdateTarget::Adt(tag, scope.root_as_dict(args[0])?))
         }
         _ => Err(EngineError::UnsupportedExpr),
     }?;
@@ -1802,9 +1623,7 @@ fn apply_record_update_values<'scope>(
                 map.insert(key, value);
             }
             let root = scope.alloc_root_dict(map)?;
-            let dict = scope.pointer(root);
-            let dict = scope.root(dict);
-            let root = scope.alloc_root_adt(tag, vec![dict])?;
+            let root = scope.alloc_root_adt(tag, vec![root])?;
             Ok(root)
         }
     }
@@ -1836,23 +1655,16 @@ fn match_pattern_ptr<'scope>(
         }
         Pattern::Named(_, name, ps) => {
             let expected = name.to_dotted_symbol();
-            let v = scope.get_cell_from_rooted_ptr(value)?.clone();
-            let (args, is_list) = match v {
-                Cell::Adt(vname, args)
-                    if runtime_ctor_matches(&vname, &expected) && args.len() == ps.len() =>
-                {
-                    let args: Vec<RootedPtr<'_>> =
-                        args.into_iter().map(|x| scope.root(x)).collect();
-                    (Some(args), false)
+            match scope.type_name(value)? {
+                "adt" => {
+                    let (vname, args) = scope.root_as_adt(value)?;
+                    if runtime_ctor_matches(&vname, &expected) && args.len() == ps.len() {
+                        return match_patterns(scope, ps, &args);
+                    }
+                    return Ok(None);
                 }
-                Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. } => (None, true),
-                _ => (None, false),
-            };
-            if let Some(args) = args {
-                return match_patterns(scope, ps, &args);
-            }
-            if !is_list {
-                return Ok(None);
+                "list" => {}
+                _ => return Ok(None),
             }
 
             match expected
@@ -1871,16 +1683,17 @@ fn match_pattern_ptr<'scope>(
                 _ => Ok(None),
             }
         }
-        Pattern::Tuple(_, ps) => match scope.get_cell_from_rooted_ptr(value)?.clone() {
-            Cell::Tuple(xs) if xs.len() == ps.len() => {
-                let xs = xs
-                    .into_iter()
-                    .map(|x| scope.root(x))
-                    .collect::<Vec<RootedPtr<'_>>>();
-                match_patterns(scope, ps, &xs)
+        Pattern::Tuple(_, ps) => {
+            if scope.type_name(value)? != "tuple" {
+                return Ok(None);
             }
-            _ => Ok(None),
-        },
+            let xs = scope.root_as_tuple(value)?;
+            if xs.len() == ps.len() {
+                match_patterns(scope, ps, &xs)
+            } else {
+                Ok(None)
+            }
+        }
         Pattern::List(_, ps) => {
             if scope.list_len(value)? != ps.len() {
                 return Ok(None);
@@ -1905,20 +1718,14 @@ fn match_pattern_ptr<'scope>(
             )
         }
         Pattern::Dict(_, fields) => {
-            let Some(values) = (|| {
-                let v = scope.get_cell_from_rooted_ptr(value)?.clone();
-                let Cell::Dict(map) = v else {
-                    return Ok::<Option<Vec<RootedPtr<'_>>>, EngineError>(None);
-                };
-                let mut values = Vec::with_capacity(fields.len());
-                for (key, _) in fields {
-                    let Some(pointer) = map.get(key) else {
-                        return Ok(None);
-                    };
-                    values.push(scope.root(*pointer));
-                }
-                Ok(Some(values))
-            })()?
+            if scope.type_name(value)? != "dict" {
+                return Ok(None);
+            }
+            let map = scope.root_as_dict(value)?;
+            let Some(values) = fields
+                .iter()
+                .map(|(key, _)| map.get(key).copied())
+                .collect::<Option<Vec<_>>>()
             else {
                 return Ok(None);
             };
@@ -2173,19 +1980,19 @@ enum EvalApplyResult<'scope, State: Clone + Send + Sync + 'static> {
     Value(RootedPtr<'scope>),
     Push {
         expr: Arc<TypedExpr>,
-        env: Environment,
+        env: ScopedEnvironment<'scope>,
     },
-    PushNative(NativeTask<Pointer>),
-    AwaitNative(NativeCallRequest<State>),
+    PushNative(NativeTask<RootedPtr<'scope>>),
+    AwaitNative(NativeCallRequest<'scope, State>),
 }
 
-enum EvalVarResult<State: Clone + Send + Sync + 'static> {
-    Value(Pointer),
+enum EvalVarResult<'scope, State: Clone + Send + Sync + 'static> {
+    Value(RootedPtr<'scope>),
     Push {
         expr: Arc<TypedExpr>,
-        env: Environment,
+        env: ScopedEnvironment<'scope>,
     },
-    AwaitNative(NativeCallRequest<State>),
+    AwaitNative(NativeCallRequest<'scope, State>),
 }
 
 fn project_pointer<'scope>(
@@ -2193,56 +2000,56 @@ fn project_pointer<'scope>(
     field: &Symbol,
     pointer: RootedPtr<'scope>,
 ) -> Result<RootedPtr<'scope>, EngineError> {
-    let value = scope.get_cell_from_rooted_ptr(pointer)?.clone();
     if let Ok(index) = field.as_ref().parse::<usize>() {
-        return match value {
-            Cell::Tuple(items) => {
-                items
-                    .get(index)
-                    .cloned()
-                    .map(|x| scope.root(x))
-                    .ok_or_else(|| EngineError::UnknownField {
-                        field: field.clone(),
-                        value: "tuple".into(),
-                    })
-            }
-            _ => Err(EngineError::UnknownField {
+        if scope.type_name(pointer)? != "tuple" {
+            return Err(EngineError::UnknownField {
                 field: field.clone(),
                 value: scope.type_name(pointer)?.into(),
-            }),
-        };
-    }
-    match value {
-        Cell::Adt(_, args) if args.len() == 1 => {
-            let arg0 = scope.root(args[0]);
-            let inner = scope.get_cell_from_rooted_ptr(arg0)?.clone();
-            match inner {
-                Cell::Dict(map) => {
-                    map.get(field)
-                        .cloned()
-                        .map(|x| scope.root(x))
-                        .ok_or_else(|| EngineError::UnknownField {
-                            field: field.clone(),
-                            value: "record".into(),
-                        })
-                }
-                _ => Err(EngineError::UnknownField {
-                    field: field.clone(),
-                    value: scope.type_name(arg0)?.into(),
-                }),
-            }
+            });
         }
-        _ => Err(EngineError::UnknownField {
+        return scope
+            .root_as_tuple(pointer)?
+            .get(index)
+            .copied()
+            .ok_or_else(|| EngineError::UnknownField {
+                field: field.clone(),
+                value: "tuple".into(),
+            });
+    }
+    if scope.type_name(pointer)? != "adt" {
+        return Err(EngineError::UnknownField {
             field: field.clone(),
             value: scope.type_name(pointer)?.into(),
-        }),
+        });
     }
+    let (_, args) = scope.root_as_adt(pointer)?;
+    let Some(record) = args.first().copied().filter(|_| args.len() == 1) else {
+        return Err(EngineError::UnknownField {
+            field: field.clone(),
+            value: "adt".into(),
+        });
+    };
+    if scope.type_name(record)? != "dict" {
+        return Err(EngineError::UnknownField {
+            field: field.clone(),
+            value: scope.type_name(record)?.into(),
+        });
+    }
+    scope
+        .root_as_dict(record)?
+        .get(field)
+        .copied()
+        .ok_or_else(|| EngineError::UnknownField {
+            field: field.clone(),
+            value: "record".into(),
+        })
 }
-pub(crate) fn synthetic_application_expr_from_head(
-    mut env: Environment,
+
+fn synthetic_rooted_application_expr_from_head<'scope>(
+    mut env: ScopedEnvironment<'scope>,
     head: TypedExpr,
-    args: &[(Pointer, Type)],
-) -> Result<(Environment, TypedExpr), EngineError> {
+    args: &[(RootedPtr<'scope>, Type)],
+) -> Result<(ScopedEnvironment<'scope>, TypedExpr), EngineError> {
     let mut expr = head;
     let mut cur_type = expr.typ.clone();
 

@@ -12,7 +12,7 @@ use crate::{
     },
     memory::{
         handle_promotion::HandlePromoter,
-        heap::{Handle, Heap, Pointer, RootScope},
+        heap::{Handle, Heap, RootScope, RootedPtr},
         traits::{FromRex, IntoRex},
     },
     modules::ROOT_MODULE_NAME,
@@ -360,18 +360,18 @@ where
     }
 }
 
-// A short-lived request produced inside evaluator code. Its raw arguments may
-// not cross the suspension boundary; `root` is the only conversion into the
-// scheduler-owned form below.
-pub(crate) struct NativeCallRequest<State: Clone + Send + Sync + 'static> {
+// A short-lived request produced inside evaluator code. Its scope-rooted
+// arguments cannot cross the synchronous cycle boundary; `promote` is the
+// only conversion into the scheduler-owned form below.
+pub(crate) struct NativeCallRequest<'scope, State: Clone + Send + Sync + 'static> {
     callable: NativeHandleCallable<State>,
     scheduling: NativeCallScheduling,
     call_site: CallSite,
     typ: Type,
-    args: Vec<Pointer>,
+    args: Vec<RootedPtr<'scope>>,
 }
 
-impl<State> NativeCallRequest<State>
+impl<'scope, State> NativeCallRequest<'scope, State>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -380,7 +380,7 @@ where
         scheduling: NativeCallScheduling,
         call_site: CallSite,
         typ: Type,
-        args: Vec<Pointer>,
+        args: Vec<RootedPtr<'scope>>,
     ) -> Self {
         Self {
             callable,
@@ -391,7 +391,7 @@ where
         }
     }
 
-    pub(crate) fn root_in_scope<'heap, 'scope>(
+    pub(crate) fn promote<'heap>(
         self,
         scope: &mut RootScope<'heap, 'scope>,
         promoter: &HandlePromoter<'_>,
@@ -403,10 +403,6 @@ where
             typ,
             args,
         } = self;
-        let args = args
-            .into_iter()
-            .map(|value| scope.root(value))
-            .collect::<Vec<_>>();
         let args = promoter.promote_all(scope, &args)?;
         Ok(NativeCall {
             callable,

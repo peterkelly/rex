@@ -11,7 +11,12 @@ use rex_ast::Symbol;
 use rex_typesystem::types::{Type, TypedExpr};
 use uuid::Uuid;
 
-use crate::{EngineError, Environment, native_fn::NativeFn, overloaded_fn::OverloadedFn};
+use crate::{
+    EngineError,
+    env::{Environment, ScopedEnvironment},
+    native_fn::NativeFn,
+    overloaded_fn::OverloadedFn,
+};
 
 use super::{
     lists::{
@@ -33,17 +38,31 @@ pub(crate) struct Closure {
     pub body: Arc<TypedExpr>,
 }
 
+pub(crate) struct RootedClosure<'scope> {
+    pub(crate) env: ScopedEnvironment<'scope>,
+    pub(crate) param: Symbol,
+    pub(crate) param_ty: Type,
+    pub(crate) typ: Type,
+    pub(crate) body: Arc<TypedExpr>,
+}
+
+pub(crate) enum RootedCallable<'scope> {
+    Closure(RootedClosure<'scope>),
+    Native(NativeFn<RootedPtr<'scope>>),
+    Overloaded(OverloadedFn<RootedPtr<'scope>>),
+}
+
 // GC invariants:
 //
 // - Any alloc_* call may run collection before it creates the requested object.
 //   Callers must not keep raw Pointer values across allocation unless those
 //   pointers are reachable from a Handle, RootedPtr, a registered root slot, a
 //   stack frame, or another traced runtime structure.
-// - Handle, RootedPtr, TempRoots, and PersistentRootStore slots
+// - Handle, RootedPtr, and PersistentRootStore slots
 //   are heap-managed roots. PersistentPtr is an opaque identifier for one such
 //   store slot; it never contains a raw copying-collector location.
-// - Scheduler-native code may still store Pointer values directly, but only in
-//   frame/task state that implements Collection.
+// - Synchronous evaluator frames, environments, and scheduler-native tasks use
+//   RootedPtr and are rewritten through the temporary root stack.
 // - The collector is copying: every traced Pointer must be rewritten after a
 //   collection. A raw Pointer from before collection is stale by design.
 pub(crate) struct HeapState {
@@ -105,6 +124,7 @@ impl HeapState {
         self.collect_on_every_alloc = enabled;
     }
 
+    #[cfg(test)]
     pub(crate) fn collection_count(&self) -> u64 {
         self.collection_epoch
     }
@@ -582,15 +602,6 @@ impl HeapState {
         })
     }
 
-    fn temp_roots(&mut self, pointers: Vec<Pointer>) -> Result<TempRoots, EngineError> {
-        let root_ids = self.register_roots(pointers)?;
-        let collection_count = self.collection_count();
-        Ok(TempRoots {
-            root_ids,
-            collection_count,
-        })
-    }
-
     pub(crate) fn root_scope<R>(
         &mut self,
         f: impl for<'scope> FnOnce(&mut RootScope<'_, 'scope>) -> R,
@@ -680,7 +691,7 @@ pub(crate) struct PersistentRootStore {
     live_count: usize,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RootedPtr<'scope> {
     slot: usize,
     _brand: PhantomData<std::cell::Cell<&'scope ()>>,
@@ -1066,7 +1077,6 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
         self.get_cell_from_rooted_ptr(root)?.cell_as_i32()
     }
 
-    #[allow(unused)]
     pub(crate) fn root_as_tuple(
         &mut self,
         root: RootedPtr<'scope>,
@@ -1107,16 +1117,52 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
         materialize_list_elements(self, elements)
     }
 
-    pub(crate) fn with_temp_roots<R>(
+    pub(crate) fn root_as_callable(
         &mut self,
-        pointers: Vec<Pointer>,
-        f: impl FnOnce(&mut RootScope<'h, 'scope>, &TempRoots) -> Result<R, EngineError>,
-    ) -> Result<R, EngineError> {
-        let mut tr = self.heap.temp_roots(pointers)?;
-        let res = f(self, &tr);
-        self.heap
-            .unregister_roots(std::mem::take(&mut tr.root_ids))?;
-        res
+        root: RootedPtr<'scope>,
+    ) -> Result<Option<RootedCallable<'scope>>, EngineError> {
+        let cell = self.get_cell_from_rooted_ptr(root)?.clone();
+        Ok(match cell {
+            Cell::Closure(Closure {
+                env,
+                param,
+                param_ty,
+                typ,
+                body,
+            }) => Some(RootedCallable::Closure(RootedClosure {
+                env: ScopedEnvironment::from_environment(&env, self),
+                param,
+                param_ty,
+                typ,
+                body,
+            })),
+            Cell::Native(native) => Some(RootedCallable::Native(native.rooted(self))),
+            Cell::Overloaded(overloaded) => {
+                Some(RootedCallable::Overloaded(overloaded.rooted(self)))
+            }
+            _ => None,
+        })
+    }
+
+    pub(crate) fn root_as_native(
+        &mut self,
+        root: RootedPtr<'scope>,
+    ) -> Result<Option<NativeFn<RootedPtr<'scope>>>, EngineError> {
+        let cell = self.get_cell_from_rooted_ptr(root)?.clone();
+        Ok(match cell {
+            Cell::Native(native) => Some(native.rooted(self)),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn overwrite_root(
+        &mut self,
+        target: RootedPtr<'scope>,
+        value: RootedPtr<'scope>,
+    ) -> Result<(), EngineError> {
+        let cell = self.get_cell_from_rooted_ptr(value)?.clone();
+        let target = self.pointer(target);
+        self.heap.overwrite(&target, cell)
     }
 }
 
@@ -1338,16 +1384,6 @@ pub struct Heap {
     pub(super) state: Arc<Mutex<HeapState>>,
 }
 
-/// Internal temporary roots used while runtime code is constructing heap cells
-/// from raw pointers.
-///
-/// This type is deliberately crate-private. Public API and host callbacks should
-/// use [`Handle`] instead.
-pub(crate) struct TempRoots {
-    root_ids: Vec<RootId>,
-    collection_count: u64,
-}
-
 /// A rooted reference to a Rex heap value.
 ///
 /// Cloning a handle clones the root, so the underlying value remains visible to
@@ -1435,23 +1471,6 @@ pub(super) fn handle_from_registered_root(heap: &Heap, root_id: RootId) -> Handl
             heap: heap.clone(),
             root_id,
         }),
-    }
-}
-
-impl TempRoots {
-    pub(crate) fn has_collected_since_creation(
-        &self,
-        heap: &HeapState,
-    ) -> Result<bool, EngineError> {
-        Ok(heap.collection_count() != self.collection_count)
-    }
-
-    pub(crate) fn get(&self, index: usize, heap: &HeapState) -> Result<Pointer, EngineError> {
-        let root_id = *self
-            .root_ids
-            .get(index)
-            .ok_or_else(|| EngineError::Internal("temporary root index out of bounds".into()))?;
-        heap.resolve_root(root_id)
     }
 }
 
@@ -1630,12 +1649,12 @@ impl Handle {
     }
 
     pub fn as_list(&self) -> Result<Vec<Handle>, EngineError> {
-        let pointer = self.heap().with_locked(|heap| self.pointer(heap))?;
-        self.heap()
-            .with_locked(|heap| heap.pointer_as_list(&pointer))?
-            .into_iter()
-            .map(|pointer| self.heap().handle(pointer))
-            .collect()
+        let root_ids = self.heap().with_locked(|heap| {
+            let pointer = self.pointer(heap)?;
+            let values = heap.pointer_as_list(&pointer)?;
+            heap.register_roots(values)
+        })?;
+        Ok(self.heap().handles_from_root_ids(root_ids))
     }
 
     pub fn as_binary_list(&self) -> Result<Vec<u8>, EngineError> {
@@ -1788,18 +1807,6 @@ impl Heap {
             .lock()
             .map_err(|_| EngineError::HeapStatePoisoned)?;
         Ok(f(&mut state))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_temp_roots<R>(
-        &self,
-        pointers: Vec<Pointer>,
-        f: impl FnOnce(&TempRoots) -> Result<R, EngineError>,
-    ) -> Result<R, EngineError> {
-        let mut tr = self.with_locked(|heap| heap.temp_roots(pointers))?;
-        let res = f(&tr);
-        self.with_locked(|heap| heap.unregister_roots(std::mem::take(&mut tr.root_ids)))?;
-        res
     }
 
     pub(crate) fn handle(&self, pointer: Pointer) -> Result<Handle, EngineError> {
@@ -2180,8 +2187,8 @@ pub(crate) enum Cell {
     Adt(Symbol, Vec<Pointer>),
     Uninitialized(Symbol),
     Closure(Closure),
-    Native(NativeFn),
-    Overloaded(OverloadedFn),
+    Native(NativeFn<Pointer>),
+    Overloaded(OverloadedFn<Pointer>),
 }
 
 impl Cell {
@@ -3427,58 +3434,6 @@ mod tests {
         .expect("collection should update the temporary root");
 
         assert!(heap.temporary_roots.is_empty());
-    }
-
-    #[test]
-    fn temp_roots_detect_and_follow_copying_collection() {
-        let heap = Heap::new();
-        let stale = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let root = scope.alloc_root_i32(42)?;
-                    Ok(scope.pointer(root))
-                })
-            })
-            .expect("alloc_i32 should succeed");
-        heap.with_temp_roots(vec![stale], |roots| {
-            assert!(
-                !heap
-                    .with_locked(|heap| roots.has_collected_since_creation(heap))
-                    .expect("collection state should be available")
-            );
-            heap.with_locked(|heap| heap.collect())
-                .expect("collection should succeed");
-            assert!(
-                heap.with_locked(|heap| roots.has_collected_since_creation(heap))
-                    .expect("collection state should be available")
-            );
-
-            let refreshed = heap
-                .with_locked(|heap| roots.get(0, heap))
-                .expect("temporary root should be rewritten");
-            assert_eq!(
-                heap.with_locked(|heap| {
-                    heap.root_scope(|scope| {
-                        let refreshed = scope.root(refreshed);
-                        scope.root_as_i32(refreshed)
-                    })
-                })
-                .expect("rewritten pointer should resolve"),
-                42
-            );
-            assert!(
-                heap.with_locked(|heap| {
-                    heap.root_scope(|scope| {
-                        let stale = scope.root(stale);
-                        scope.root_as_i32(stale)
-                    })
-                })
-                .is_err(),
-                "raw pointer from before collection should be stale"
-            );
-            Ok(())
-        })
-        .expect("temporary root should register");
     }
 
     #[test]

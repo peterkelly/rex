@@ -10,7 +10,7 @@ use crate::{
     env::{Environment, RootedEnvironment},
     error::EngineError,
     evaluator::native_callable::NativeCallable,
-    memory::heap::HeapState,
+    memory::heap::{HeapState, Pointer},
     native_fn::NativeFn,
 };
 
@@ -26,7 +26,7 @@ pub(crate) struct NativeImpl<State: Clone + Send + Sync + 'static> {
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeImpl<State> {
-    pub(crate) fn to_native_fn(&self, typ: Type) -> NativeFn {
+    pub(crate) fn to_native_fn(&self, typ: Type) -> NativeFn<Pointer> {
         NativeFn::new(self.id, self.name.clone(), self.arity, typ)
     }
 }

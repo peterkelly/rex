@@ -84,7 +84,7 @@ use crate::{
         },
     },
     memory::{
-        heap::{Cell, Handle, Heap, HeapState, Pointer, RootScope, RootedPtr},
+        heap::{Cell, Handle, Heap, HeapState, RootScope, RootedPtr},
         lists::{ListItems, list_to_vec},
     },
     modules::{
@@ -475,9 +475,9 @@ fn extremum_handle_by_type(
     let mut values = values.into_iter();
     let mut best = values.next().ok_or(EngineError::EmptySequence)?;
     for value in values {
-        let value_ptr = heap.with_locked(|heap| value.pointer(heap))?;
-        let best_ptr = heap.with_locked(|heap| best.pointer(heap))?;
         let ord = heap.with_locked(|heap| {
+            let value_ptr = value.pointer(heap)?;
+            let best_ptr = best.pointer(heap)?;
             let cell = heap.get_cell_from_pointer(&value_ptr)?;
             let best_cell = heap.get_cell_from_pointer(&best_ptr)?;
             cmp_cell_by_type(&name, elem_ty, cell, best_cell)
@@ -513,7 +513,7 @@ fn checked_endpoint(name: Symbol, index: i32, len: usize) -> Result<usize, Engin
 
 fn list_range_from_items(
     heap: &Heap,
-    items: ListItems<Pointer>,
+    items: Vec<Handle>,
     start: usize,
     end: usize,
 ) -> Result<Handle, EngineError> {
@@ -523,67 +523,7 @@ fn list_range_from_items(
             items.len()
         )));
     }
-    if start == end {
-        return heap.alloc_empty();
-    }
-    match items {
-        ListItems::Slice {
-            elements,
-            start: base_start,
-            end: base_end,
-        } => {
-            let slice_start = base_start
-                .checked_add(start)
-                .ok_or_else(|| EngineError::Internal("list slice start overflow".into()))?;
-            let slice_end = base_start
-                .checked_add(end)
-                .ok_or_else(|| EngineError::Internal("list slice end overflow".into()))?;
-            if slice_end > base_end {
-                return Err(EngineError::Internal(
-                    "list slice range exceeds backing slice".into(),
-                ));
-            }
-            heap.handle(heap.with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let elements = scope.root(elements);
-                    let root = scope.alloc_root_list_slice(slice_start, slice_end, elements)?;
-                    Ok(scope.pointer(root))
-                })
-            })?)
-        }
-        ListItems::BinarySlice {
-            elements,
-            start: base_start,
-            end: base_end,
-            ..
-        } => {
-            let slice_start = base_start
-                .checked_add(start)
-                .ok_or_else(|| EngineError::Internal("list slice start overflow".into()))?;
-            let slice_end = base_start
-                .checked_add(end)
-                .ok_or_else(|| EngineError::Internal("list slice end overflow".into()))?;
-            if slice_end > base_end {
-                return Err(EngineError::Internal(
-                    "list slice range exceeds backing slice".into(),
-                ));
-            }
-            heap.handle(heap.with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let elements = scope.root(elements);
-                    let root = scope.alloc_root_list_slice(slice_start, slice_end, elements)?;
-                    Ok(scope.pointer(root))
-                })
-            })?)
-        }
-        ListItems::Pointers(values) => heap.handle(heap.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let slice = values[start..end].iter().map(|x| scope.root(*x)).collect();
-                let root = scope.alloc_root_list(slice)?;
-                Ok(scope.pointer(root))
-            })
-        })?),
-    }
+    heap.alloc_list(items[start..end].to_vec())
 }
 
 fn zip_tuple2_handles(
@@ -890,8 +830,8 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
                 })?;
                 let list_ty = lhs_ty.apply(&subst);
                 let elem_ty = list_elem_type(&list_ty)?;
-                let xs = scope.list_items(args[0])?.into_list_items(scope);
-                let ys = scope.list_items(args[1])?.into_list_items(scope);
+                let xs = scope.list_items(args[0])?.into_rooted_list_items();
+                let ys = scope.list_items(args[1])?.into_rooted_list_items();
                 Ok(SchedulerNativeResult::Task(NativeTask::ArrayEq(
                     NativeArrayEq {
                         elem_type: elem_ty,
@@ -918,8 +858,8 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
                 })?;
                 let list_ty = lhs_ty.apply(&subst);
                 let elem_ty = list_elem_type(&list_ty)?;
-                let xs = scope.list_items(args[0])?.into_list_items(scope);
-                let ys = scope.list_items(args[1])?.into_list_items(scope);
+                let xs = scope.list_items(args[0])?.into_rooted_list_items();
+                let ys = scope.list_items(args[1])?.into_rooted_list_items();
                 Ok(SchedulerNativeResult::Task(NativeTask::ArrayEq(
                     NativeArrayEq {
                         elem_type: elem_ty,
@@ -1511,11 +1451,10 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let dict_ty = arg_tys[1].clone();
                 let elem_ty = dict_elem_type(&dict_ty)?;
-                let dict = scope.root_as_dict(args[1])?;
-                let map = BTreeMap::from_iter(dict.into_iter().map(|(k, v)| (k, scope.pointer(v))));
+                let map = scope.root_as_dict(args[1])?;
                 Ok(SchedulerNativeResult::Task(NativeTask::DictMap(
                     NativeDictMap {
-                        func: scope.pointer(args[0]),
+                        func: args[0],
                         func_type: func_ty,
                         elem_type: elem_ty,
                         entries: map.into_iter().collect(),
@@ -1544,11 +1483,10 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let dict_ty = arg_tys[1].clone();
                 let elem_ty = dict_elem_type(&dict_ty)?;
-                let dict = scope.root_as_dict(args[1])?;
-                let map = BTreeMap::from_iter(dict.into_iter().map(|(k, v)| (k, scope.pointer(v))));
+                let map = scope.root_as_dict(args[1])?;
                 Ok(SchedulerNativeResult::Task(NativeTask::DictTraverse(
                     NativeDictTraverse {
-                        func: scope.pointer(args[0]),
+                        func: args[0],
                         func_type: func_ty,
                         elem_type: elem_ty,
                         entries: map.into_iter().collect(),
@@ -1677,8 +1615,8 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         }
 
         engine.export_native("prim_json_stringify", scheme, 1, move |engine, _, args| {
-            let pointer = engine.heap().with_locked(|heap| args[0].pointer(heap))?;
             let json = engine.heap().with_locked(|heap| {
+                let pointer = args[0].pointer(heap)?;
                 let value = heap.get_cell_from_pointer(&pointer)?;
                 Ok(to_serde_json(heap, value, &tags))
             })?;
@@ -1808,10 +1746,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[1])?.into_list_items(scope);
+                let values = scope.list_items(args[1])?.into_rooted_list_items();
                 Ok(SchedulerNativeResult::Task(NativeTask::SequenceMap(
                     NativeSequenceMap {
-                        func: scope.pointer(args[0]),
+                        func: args[0],
                         func_type: func_ty,
                         elem_type: elem_ty,
                         values,
@@ -1844,10 +1782,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 match option_value(scope, args[1])? {
                     Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryMap(
                         NativeUnaryMap {
-                            func: scope.pointer(args[0]),
+                            func: args[0],
                             func_type: func_ty,
                             elem_type: elem_ty,
-                            value: scope.pointer(value),
+                            value,
                             shape: NativeUnaryShape::Option,
                         },
                     ))),
@@ -1879,10 +1817,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 match result_value(scope, args[1])? {
                     Ok(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryMap(
                         NativeUnaryMap {
-                            func: scope.pointer(args[0]),
+                            func: args[0],
                             func_type: func_ty,
                             elem_type: ok_ty,
-                            value: scope.pointer(value),
+                            value,
                             shape: NativeUnaryShape::Result,
                         },
                     ))),
@@ -1918,14 +1856,14 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     });
                 }
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[2])?.into_list_items(scope);
+                let values = scope.list_items(args[2])?.into_rooted_list_items();
                 Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                    func: scope.pointer(args[0]),
+                    func: args[0],
                     func_type: func_ty,
                     acc_type: acc_ty,
                     elem_type: elem_ty,
                     values,
-                    acc: scope.pointer(args[1]),
+                    acc: args[1],
                     order: NativeFoldOrder::Left,
                     state: NativeFoldState::Enter,
                     next_index: 0,
@@ -1958,19 +1896,15 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     });
                 }
                 let elem_ty = option_elem_type(&opt_ty)?;
-                let values = ListItems::Pointers(
-                    option_value(scope, args[2])?
-                        .into_iter()
-                        .map(|x| scope.pointer(x))
-                        .collect(),
-                );
+                let values =
+                    ListItems::Pointers(option_value(scope, args[2])?.into_iter().collect());
                 Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                    func: scope.pointer(args[0]),
+                    func: args[0],
                     func_type: func_ty,
                     acc_type: acc_ty,
                     elem_type: elem_ty,
                     values,
-                    acc: scope.pointer(args[1]),
+                    acc: args[1],
                     order: NativeFoldOrder::Left,
                     state: NativeFoldState::Enter,
                     next_index: 0,
@@ -2003,14 +1937,14 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     });
                 }
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[2])?.into_list_items(scope);
+                let values = scope.list_items(args[2])?.into_rooted_list_items();
                 Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                    func: scope.pointer(args[0]),
+                    func: args[0],
                     func_type: func_ty,
                     acc_type: acc_ty,
                     elem_type: elem_ty,
                     values,
-                    acc: scope.pointer(args[1]),
+                    acc: args[1],
                     order: NativeFoldOrder::Right,
                     state: NativeFoldState::Enter,
                     next_index: 0,
@@ -2043,19 +1977,15 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     });
                 }
                 let elem_ty = option_elem_type(&opt_ty)?;
-                let values = ListItems::Pointers(
-                    option_value(scope, args[2])?
-                        .into_iter()
-                        .map(|x| scope.pointer(x))
-                        .collect(),
-                );
+                let values =
+                    ListItems::Pointers(option_value(scope, args[2])?.into_iter().collect());
                 Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                    func: scope.pointer(args[0]),
+                    func: args[0],
                     func_type: func_ty,
                     acc_type: acc_ty,
                     elem_type: elem_ty,
                     values,
-                    acc: scope.pointer(args[1]),
+                    acc: args[1],
                     order: NativeFoldOrder::Right,
                     state: NativeFoldState::Enter,
                     next_index: 0,
@@ -2088,14 +2018,14 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     });
                 }
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[2])?.into_list_items(scope);
+                let values = scope.list_items(args[2])?.into_rooted_list_items();
                 Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                    func: scope.pointer(args[0]),
+                    func: args[0],
                     func_type: func_ty,
                     acc_type: acc_ty,
                     elem_type: elem_ty,
                     values,
-                    acc: scope.pointer(args[1]),
+                    acc: args[1],
                     order: NativeFoldOrder::Left,
                     state: NativeFoldState::Enter,
                     next_index: 0,
@@ -2128,19 +2058,15 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     });
                 }
                 let elem_ty = option_elem_type(&opt_ty)?;
-                let values = ListItems::Pointers(
-                    option_value(scope, args[2])?
-                        .into_iter()
-                        .map(|x| scope.pointer(x))
-                        .collect(),
-                );
+                let values =
+                    ListItems::Pointers(option_value(scope, args[2])?.into_iter().collect());
                 Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                    func: scope.pointer(args[0]),
+                    func: args[0],
                     func_type: func_ty,
                     acc_type: acc_ty,
                     elem_type: elem_ty,
                     values,
-                    acc: scope.pointer(args[1]),
+                    acc: args[1],
                     order: NativeFoldOrder::Left,
                     state: NativeFoldState::Enter,
                     next_index: 0,
@@ -2166,10 +2092,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[1])?.into_list_items(scope);
+                let values = scope.list_items(args[1])?.into_rooted_list_items();
                 Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilter(
                     NativeSequenceFilter {
-                        func: scope.pointer(args[0]),
+                        func: args[0],
                         func_type: func_ty,
                         elem_type: elem_ty,
                         values,
@@ -2202,11 +2128,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 match option_value(scope, args[1])? {
                     Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFilter(
                         NativeUnaryFilter {
-                            func: scope.pointer(args[0]),
+                            func: args[0],
                             func_type: func_ty,
                             elem_type: elem_ty,
-                            value: scope.pointer(value),
-                            original: scope.pointer(args[1]),
+                            value,
+                            original: args[1],
                         },
                     ))),
                     None => {
@@ -2234,10 +2160,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[1])?.into_list_items(scope);
+                let values = scope.list_items(args[1])?.into_rooted_list_items();
                 Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilterMap(
                     NativeSequenceFilterMap {
-                        func: scope.pointer(args[0]),
+                        func: args[0],
                         func_type: func_ty,
                         elem_type: elem_ty,
                         values,
@@ -2270,10 +2196,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 match option_value(scope, args[1])? {
                     Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFilterMap(
                         NativeUnaryFilterMap {
-                            func: scope.pointer(args[0]),
+                            func: args[0],
                             func_type: func_ty,
                             elem_type: elem_ty,
-                            value: scope.pointer(value),
+                            value,
                         },
                     ))),
                     None => {
@@ -2301,10 +2227,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[1])?.into_list_items(scope);
+                let values = scope.list_items(args[1])?.into_rooted_list_items();
                 Ok(SchedulerNativeResult::Task(NativeTask::SequenceFlatMap(
                     NativeSequenceFlatMap {
-                        func: scope.pointer(args[0]),
+                        func: args[0],
                         func_type: func_ty,
                         elem_type: elem_ty,
                         values,
@@ -2337,10 +2263,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 match option_value(scope, args[1])? {
                     Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFlatMap(
                         NativeUnaryFlatMap {
-                            func: scope.pointer(args[0]),
+                            func: args[0],
                             func_type: func_ty,
                             elem_type: elem_ty,
-                            value: scope.pointer(value),
+                            value,
                             shape: NativeUnaryShape::Option,
                         },
                     ))),
@@ -2372,10 +2298,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 match result_value(scope, args[1])? {
                     Ok(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFlatMap(
                         NativeUnaryFlatMap {
-                            func: scope.pointer(args[0]),
+                            func: args[0],
                             func_type: func_ty,
                             elem_type: ok_ty,
-                            value: scope.pointer(value),
+                            value,
                             shape: NativeUnaryShape::Result,
                         },
                     ))),
@@ -2408,9 +2334,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 }
                 Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
                     NativeApplyUnary {
-                        func: scope.pointer(args[0]),
+                        func: args[0],
                         func_type: func_ty,
-                        arg: scope.pointer(args[1]),
+                        arg: args[1],
                         arg_type: list_ty,
                     },
                 )))
@@ -2438,9 +2364,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 }
                 Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
                     NativeApplyUnary {
-                        func: scope.pointer(args[0]),
+                        func: args[0],
                         func_type: func_ty,
-                        arg: scope.pointer(args[1]),
+                        arg: args[1],
                         arg_type: opt_ty,
                     },
                 )))
@@ -2468,9 +2394,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 }
                 Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
                     NativeApplyUnary {
-                        func: scope.pointer(args[0]),
+                        func: args[0],
                         func_type: func_ty,
-                        arg: scope.pointer(args[1]),
+                        arg: args[1],
                         arg_type: result_ty,
                     },
                 )))
@@ -2486,7 +2412,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = scope.list_items(args[0])?.into_list_items(scope);
+            let values = scope.list_items(args[0])?.into_rooted_list_items();
             Ok(SchedulerNativeResult::Task(NativeTask::Sum(NativeSum {
                 elem_type: elem_ty,
                 values,
@@ -2507,12 +2433,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values = ListItems::Pointers(
-                option_value(scope, args[0])?
-                    .into_iter()
-                    .map(|x| scope.pointer(x))
-                    .collect(),
-            );
+            let values = ListItems::Pointers(option_value(scope, args[0])?.into_iter().collect());
             Ok(SchedulerNativeResult::Task(NativeTask::Sum(NativeSum {
                 elem_type: elem_ty,
                 values,
@@ -2533,7 +2454,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = scope.list_items(args[0])?.into_list_items(scope);
+            let values = scope.list_items(args[0])?.into_rooted_list_items();
             if values.is_empty() {
                 return Err(EngineError::EmptySequence);
             }
@@ -2559,7 +2480,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let opt_ty = arg_tys[0].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
             let values = match option_value(scope, args[0])? {
-                Some(value) => ListItems::Pointers(vec![scope.pointer(value)]),
+                Some(value) => ListItems::Pointers(vec![value]),
                 None => return Err(EngineError::EmptySequence),
             };
             Ok(SchedulerNativeResult::Task(NativeTask::Mean(NativeMean {
@@ -2580,13 +2501,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(Type::list(a), Type::builtin(BuiltinTypeId::I32))
         );
         engine.export_native("length", scheme, 1, |engine, _, args| {
-            let arg0_ptr = engine.heap().with_locked(|heap| args[0].pointer(heap))?;
-            let values = engine.heap().with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let arg0_root = scope.root(arg0_ptr);
-                    Ok(scope.list_items(arg0_root)?.into_list_items(scope))
-                })
-            })?;
+            let values = args[0].as_list()?;
             engine.heap().alloc_i32(values.len() as i32)
         })?;
     }
@@ -2611,13 +2526,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("first", scheme, 2, |engine, _, args| {
             let n = args[0].as_i32()?;
-            let arg1_ptr = engine.heap().with_locked(|heap| args[1].pointer(heap))?;
-            let values = engine.heap().with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let arg1_root = scope.root(arg1_ptr);
-                    Ok(scope.list_items(arg1_root)?.into_list_items(scope))
-                })
-            })?;
+            let values = args[1].as_list()?;
             let end = checked_endpoint(Symbol::intern("first"), n, values.len())?;
             list_range_from_items(engine.heap(), values, 0, end)
         })?;
@@ -2632,13 +2541,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("last", scheme, 2, |engine, _, args| {
             let n = args[0].as_i32()?;
-            let arg1_ptr = engine.heap().with_locked(|heap| args[1].pointer(heap))?;
-            let values = engine.heap().with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let arg1_root = scope.root(arg1_ptr);
-                    Ok(scope.list_items(arg1_root)?.into_list_items(scope))
-                })
-            })?;
+            let values = args[1].as_list()?;
             let len = values.len();
             let n = checked_endpoint(Symbol::intern("last"), n, len)?;
             let start = len - n;
@@ -2659,13 +2562,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         engine.export_native("slice", scheme, 3, |engine, _, args| {
             let n = args[0].as_i32()?;
             let m = args[1].as_i32()?;
-            let arg2_ptr = engine.heap().with_locked(|heap| args[2].pointer(heap))?;
-            let values = engine.heap().with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let arg2_root = scope.root(arg2_ptr);
-                    Ok(scope.list_items(arg2_root)?.into_list_items(scope))
-                })
-            })?;
+            let values = args[2].as_list()?;
             let start = checked_endpoint(Symbol::intern("slice"), n, values.len())?;
             let end = checked_endpoint(Symbol::intern("slice"), m, values.len())?;
             if end < start {
@@ -2687,13 +2584,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
             let n = args[0].as_i32()?;
             let n = as_nonneg_usize(n);
-            let arg1_ptr = engine.heap().with_locked(|heap| args[1].pointer(heap))?;
-            let values = engine.heap().with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let arg1_root = scope.root(arg1_ptr);
-                    Ok(scope.list_items(arg1_root)?.into_list_items(scope))
-                })
-            })?;
+            let values = args[1].as_list()?;
             let end = values.len().min(n);
             list_range_from_items(engine.heap(), values, 0, end)
         })?;
@@ -2709,13 +2600,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
             let n = args[0].as_i32()?;
             let n = as_nonneg_usize(n);
-            let arg1_ptr = engine.heap().with_locked(|heap| args[1].pointer(heap))?;
-            let values = engine.heap().with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let arg1_root = scope.root(arg1_ptr);
-                    Ok(scope.list_items(arg1_root)?.into_list_items(scope))
-                })
-            })?;
+            let values = args[1].as_list()?;
             let len = values.len();
             let start = len.min(n);
             list_range_from_items(engine.heap(), values, start, len)
@@ -2729,26 +2614,14 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(a), a),
             )
         );
-        engine.export_native("prim_get", scheme, 2, |engine, call_type, args| {
+        engine.export_native("prim_get", scheme, 2, |_, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
             let list_ty = arg_tys[1].clone();
             let _elem_ty = list_elem_type(&list_ty)?;
             let idx = args[0].as_i32()?;
-            let arg1_ptr = engine.heap().with_locked(|heap| args[1].pointer(heap))?;
-            let values = engine.heap().with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let arg1_root = scope.root(arg1_ptr);
-                    Ok(scope.list_items(arg1_root)?.into_list_items(scope))
-                })
-            })?;
+            let values = args[1].as_list()?;
             let idx = checked_index(Symbol::intern("prim_get"), idx, values.len())?;
-            let pointer = engine.heap().with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let root = values.get(scope, idx)?;
-                    Ok(scope.pointer(root))
-                })
-            })?;
-            engine.heap().handle(pointer)
+            Ok(values[idx].clone())
         })?;
     }
 

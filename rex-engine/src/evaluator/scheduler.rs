@@ -3,7 +3,7 @@ use crate::{
     error::EngineError,
     evaluator::{native_callable::NativeCallScheduling, runtime_core::RuntimeCore},
     handlers::{NativeCall, NativeHandleFuture},
-    memory::heap::{Handle, Heap, Pointer},
+    memory::heap::{Handle, Heap},
     stack::FrameId,
 };
 use futures::future::poll_fn;
@@ -220,33 +220,6 @@ where
             deferred_native: self.deferred_native,
             parallelism_controller: self.parallelism_controller,
         })
-    }
-}
-
-impl<State> EvalScheduler<State, Pointer>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        for item in &self.ready {
-            item.trace_pointers(out);
-        }
-        for item in &self.deferred_ready {
-            item.trace_pointers(out);
-        }
-    }
-
-    pub(crate) fn map_pointers<E>(
-        &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
-    ) -> Result<(), E> {
-        for item in &mut self.ready {
-            item.map_pointers(rewrite)?;
-        }
-        for item in &mut self.deferred_ready {
-            item.map_pointers(rewrite)?;
-        }
-        Ok(())
     }
 }
 
@@ -487,23 +460,5 @@ impl<P> EvalWorkItem<P> {
                 })
                 .transpose()?,
         })
-    }
-}
-
-impl EvalWorkItem<Pointer> {
-    pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        if let Some(returned) = self.returned.as_ref() {
-            out.push(returned.value);
-        }
-    }
-
-    pub(crate) fn map_pointers<E>(
-        &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
-    ) -> Result<(), E> {
-        if let Some(returned) = self.returned.as_mut() {
-            returned.value = rewrite(returned.value)?;
-        }
-        Ok(())
     }
 }

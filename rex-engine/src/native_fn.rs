@@ -24,21 +24,21 @@ use rex_typesystem::{
 
 pub(crate) enum NativeApplyResult<'scope, State: Clone + Send + Sync + 'static> {
     Value(RootedPtr<'scope>),
-    Task(NativeTask<Pointer>),
-    Pending(NativeCallRequest<State>),
+    Task(NativeTask<RootedPtr<'scope>>),
+    Pending(NativeCallRequest<'scope, State>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeFn {
+pub(crate) struct NativeFn<P> {
     pub(crate) native_id: NativeId,
     pub(crate) name: Symbol,
     pub(crate) arity: usize,
     pub(crate) typ: Type,
-    pub(crate) applied: Vec<Pointer>,
+    pub(crate) applied: Vec<P>,
     pub(crate) applied_types: Vec<Type>,
 }
 
-impl NativeFn {
+impl NativeFn<Pointer> {
     pub(crate) fn new(native_id: NativeId, name: Symbol, arity: usize, typ: Type) -> Self {
         Self {
             native_id,
@@ -79,15 +79,37 @@ impl NativeFn {
         )
     }
 
+    pub(crate) fn rooted<'scope>(
+        &self,
+        scope: &mut RootScope<'_, 'scope>,
+    ) -> NativeFn<RootedPtr<'scope>> {
+        NativeFn {
+            native_id: self.native_id,
+            name: self.name.clone(),
+            arity: self.arity,
+            typ: self.typ.clone(),
+            applied: self
+                .applied
+                .iter()
+                .map(|value| scope.root(*value))
+                .collect(),
+            applied_types: self.applied_types.clone(),
+        }
+    }
+}
+
+impl<P> NativeFn<P> {
     pub(crate) fn name(&self) -> &Symbol {
         &self.name
     }
+}
 
+impl<'scope> NativeFn<RootedPtr<'scope>> {
     pub(crate) fn call_zero_at_site<State: Clone + Send + Sync + 'static>(
         &self,
         runtime: &RuntimeCore<State>,
         call_site: CallSite,
-    ) -> Result<NativeCallRequest<State>, EngineError> {
+    ) -> Result<NativeCallRequest<'scope, State>, EngineError> {
         if self.arity != 0 {
             return Err(EngineError::NativeArity {
                 name: self.name.clone(),
@@ -100,11 +122,11 @@ impl NativeFn {
             .call_at_site(self.typ.clone(), &[], call_site)
     }
 
-    pub(crate) fn apply_at_site<'scope, State: Clone + Send + Sync + 'static>(
+    pub(crate) fn apply_at_site<State: Clone + Send + Sync + 'static>(
         mut self,
         runtime: &RuntimeCore<State>,
         scope: &mut RootScope<'_, 'scope>,
-        arg: Pointer,
+        arg: RootedPtr<'scope>,
         arg_type: Option<&Type>,
         call_site: CallSite,
     ) -> Result<NativeApplyResult<'scope, State>, EngineError> {
@@ -119,14 +141,13 @@ impl NativeFn {
         }
         let (arg_ty, rest_ty) =
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
-        let arg = scope.root(arg);
         let actual_ty = resolve_arg_type(scope, arg_type, arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
             expected: arg_ty.to_string(),
             got: actual_ty.to_string(),
         })?;
         self.typ = rest_ty.apply(&subst);
-        self.applied.push(scope.pointer(arg));
+        self.applied.push(arg);
         self.applied_types.push(actual_ty);
         if is_function_type(&self.typ) {
             let NativeFn {
@@ -137,7 +158,6 @@ impl NativeFn {
                 applied,
                 applied_types,
             } = self;
-            let applied = applied.into_iter().map(|x| scope.root(x)).collect();
             let root =
                 scope.alloc_root_native(native_id, name, arity, typ, applied, applied_types)?;
             return Ok(NativeApplyResult::Value(root));
@@ -151,12 +171,7 @@ impl NativeFn {
         match runtime.native_callable(self.native_id)? {
             NativeCallable::Scheduler(f) => {
                 let ctx = InternalCtx::new_at_call_site(runtime, call_site);
-                let applied = self
-                    .applied
-                    .iter()
-                    .map(|x| scope.root(*x))
-                    .collect::<Vec<_>>();
-                match f(ctx, scope, full_ty, &applied)? {
+                match f(ctx, scope, full_ty, &self.applied)? {
                     SchedulerNativeResult::Ready(value) => Ok(NativeApplyResult::Value(value)),
                     SchedulerNativeResult::Task(task) => Ok(NativeApplyResult::Task(task)),
                 }
@@ -168,7 +183,7 @@ impl NativeFn {
     }
 }
 
-impl Collection for NativeFn {
+impl Collection for NativeFn<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,

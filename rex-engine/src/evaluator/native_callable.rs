@@ -6,7 +6,7 @@ use crate::{
         native_functions::NativeTask,
     },
     handlers::{NativeCallRequest, NativeHandleFuture},
-    memory::heap::{Handle, Pointer, RootScope, RootedPtr},
+    memory::heap::{Handle, RootScope, RootedPtr},
 };
 use rex_typesystem::types::Type;
 use std::sync::Arc;
@@ -34,7 +34,7 @@ pub(crate) type SchedulerNativeCallable<State> = Arc<
 
 pub(crate) enum SchedulerNativeResult<'scope> {
     Ready(RootedPtr<'scope>),
-    Task(NativeTask<Pointer>),
+    Task(NativeTask<RootedPtr<'scope>>),
 }
 
 #[derive(Clone)]
@@ -64,12 +64,12 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
-    pub(crate) fn call_at_site(
+    pub(crate) fn call_at_site<'scope>(
         &self,
         typ: Type,
-        args: &[Pointer],
+        args: &[RootedPtr<'scope>],
         call_site: CallSite,
-    ) -> Result<NativeCallRequest<State>, EngineError> {
+    ) -> Result<NativeCallRequest<'scope, State>, EngineError> {
         match self {
             NativeCallable::Host {
                 callable,
