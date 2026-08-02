@@ -12,6 +12,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+pub(crate) type CycleTypeclassCache = BTreeMap<(Symbol, Type), Pointer>;
+
 #[derive(Clone)]
 pub(crate) struct RuntimeCore<State = ()>
 where
@@ -21,7 +23,10 @@ where
     pub(crate) natives: Arc<NativeRegistry<State>>,
     pub(crate) typeclasses: Arc<TypeclassRegistry>,
     pub(crate) type_system: Arc<TypeSystem>,
-    pub(crate) typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
+    /// Raw cache view installed only while the evaluator owns `HeapState`.
+    /// `None` is the unlocked state; persistent cache entries live in the
+    /// evaluator's `PersistentEvalState` between cycles.
+    pub(crate) cycle_typeclass_cache: Arc<Mutex<Option<CycleTypeclassCache>>>,
     pub(crate) async_call_policy: AsyncCallPolicy,
     pub(crate) parallelism_controller: Arc<dyn ParallelismController>,
 }
@@ -32,10 +37,12 @@ where
 {
     pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) -> Result<(), EngineError> {
         let cache = self
-            .typeclass_cache
+            .cycle_typeclass_cache
             .lock()
             .map_err(|_| EngineError::Internal("typeclass cache poisoned".into()))?;
-        out.extend(cache.values().copied());
+        if let Some(cache) = cache.as_ref() {
+            out.extend(cache.values().copied());
+        }
         Ok(())
     }
 
@@ -44,11 +51,13 @@ where
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
         let mut cache = self
-            .typeclass_cache
+            .cycle_typeclass_cache
             .lock()
             .map_err(|_| EngineError::Internal("typeclass cache poisoned".into()))?;
-        for pointer in cache.values_mut() {
-            *pointer = rewrite(*pointer)?;
+        if let Some(cache) = cache.as_mut() {
+            for pointer in cache.values_mut() {
+                *pointer = rewrite(*pointer)?;
+            }
         }
         Ok(())
     }

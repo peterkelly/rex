@@ -84,7 +84,7 @@ use crate::{
         },
     },
     memory::{
-        heap::{Cell, Handle, Heap, HeapState, RootScope, RootedPtr},
+        heap::{Cell, Handle, Heap, HeapState, Pointer, RootScope, RootedPtr},
         lists::{ListItems, list_to_vec},
     },
     modules::{
@@ -513,7 +513,7 @@ fn checked_endpoint(name: Symbol, index: i32, len: usize) -> Result<usize, Engin
 
 fn list_range_from_items(
     heap: &Heap,
-    items: ListItems,
+    items: ListItems<Pointer>,
     start: usize,
     end: usize,
 ) -> Result<Handle, EngineError> {

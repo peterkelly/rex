@@ -86,7 +86,7 @@ where
                 natives: Arc::new(self.runtime.natives.clone()),
                 typeclasses: Arc::new(self.runtime.typeclasses.clone()),
                 type_system: Arc::new(self.type_system.clone()),
-                typeclass_cache: Arc::clone(&self.runtime.typeclass_cache),
+                cycle_typeclass_cache: Arc::new(std::sync::Mutex::new(None)),
                 async_call_policy: self.policy.async_call_policy.clone(),
                 parallelism_controller: Arc::clone(&self.policy.parallelism_controller),
             },

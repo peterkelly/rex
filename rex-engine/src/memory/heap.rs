@@ -37,11 +37,11 @@ pub(crate) struct Closure {
 //
 // - Any alloc_* call may run collection before it creates the requested object.
 //   Callers must not keep raw Pointer values across allocation unless those
-//   pointers are reachable from a Handle, RootedPtr, TempRoots, PersistentRoots,
-//   a stack frame, or another traced runtime structure.
-// - Handle, RootedPtr, TempRoots, and PersistentRoots are heap-managed roots.
-//   They are the safe way for public API and ordinary native/prelude code to keep
-//   values alive while allocating.
+//   pointers are reachable from a Handle, RootedPtr, a registered root slot, a
+//   stack frame, or another traced runtime structure.
+// - Handle, RootedPtr, TempRoots, and PersistentRootStore slots
+//   are heap-managed roots. PersistentPtr is an opaque identifier for one such
+//   store slot; it never contains a raw copying-collector location.
 // - Scheduler-native code may still store Pointer values directly, but only in
 //   frame/task state that implements Collection.
 // - The collector is copying: every traced Pointer must be rewritten after a
@@ -52,6 +52,7 @@ pub(crate) struct HeapState {
     root_slots: Vec<RootSlot>,
     temporary_roots: Vec<Pointer>,
     free_root_list: Vec<u64>,
+    next_persistent_store_id: u64,
     next_gc_slot_count: usize,
     collect_on_every_alloc: bool,
     collection_epoch: u64,
@@ -72,6 +73,7 @@ impl HeapState {
             root_slots: Vec::new(),
             temporary_roots: Vec::new(),
             free_root_list: Vec::new(),
+            next_persistent_store_id: 0,
             next_gc_slot_count: DEFAULT_GC_SLOT_THRESHOLD,
             collect_on_every_alloc: false,
             collection_epoch: 0,
@@ -603,6 +605,21 @@ impl HeapState {
 
         f(&mut scope)
     }
+
+    pub(crate) fn persistent_root_store(&mut self) -> Result<PersistentRootStore, EngineError> {
+        let store_id = self.next_persistent_store_id;
+        self.next_persistent_store_id = self
+            .next_persistent_store_id
+            .checked_add(1)
+            .ok_or_else(|| EngineError::Internal("persistent root store id exhausted".into()))?;
+        Ok(PersistentRootStore {
+            heap_id: self.id,
+            store_id,
+            slots: Vec::new(),
+            free_slots: Vec::new(),
+            live_count: 0,
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -622,6 +639,41 @@ struct RootId {
     heap_id: u64,
     index: u64,
     generation: u64,
+}
+
+/// Opaque evaluator-owned reference to a registered heap root.
+///
+/// The token contains no raw heap location and no capability for acquiring the
+/// heap mutex. It is resolved only through its owning [`PersistentRootStore`]
+/// while a [`RootScope`] proves exclusive `HeapState` access.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(crate) struct PersistentPtr {
+    heap_id: u64,
+    store_id: u64,
+    index: u64,
+    generation: u64,
+}
+
+#[derive(Debug)]
+struct PersistentRootSlot {
+    generation: u64,
+    root_id: Option<RootId>,
+}
+
+/// Evaluator-owned arena for values that survive between synchronous cycles.
+///
+/// Every live slot owns one ordinary heap root. Collection rewrites that root
+/// slot, so `PersistentPtr` tokens remain stable without pointer refreshes.
+/// Registration, duplication, replacement, and removal are explicit and must
+/// happen through an active [`RootScope`]. The store deliberately has no
+/// destructor-based cleanup because cleanup must not re-enter the heap mutex.
+#[derive(Debug)]
+pub(crate) struct PersistentRootStore {
+    heap_id: u64,
+    store_id: u64,
+    slots: Vec<PersistentRootSlot>,
+    free_slots: Vec<u64>,
+    live_count: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -1064,6 +1116,211 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
     }
 }
 
+impl PersistentRootStore {
+    fn validate_heap(&self, heap: &HeapState) -> Result<(), EngineError> {
+        if self.heap_id != heap.id {
+            return Err(EngineError::Internal(format!(
+                "persistent root store belongs to heap {}, not heap {}",
+                self.heap_id, heap.id
+            )));
+        }
+        Ok(())
+    }
+
+    fn root_id(
+        &self,
+        heap: &HeapState,
+        value: &PersistentPtr,
+    ) -> Result<(usize, RootId), EngineError> {
+        self.validate_heap(heap)?;
+        if value.heap_id != self.heap_id || value.store_id != self.store_id {
+            return Err(invalid_persistent_ptr(value));
+        }
+        let index = usize::try_from(value.index)
+            .map_err(|_| EngineError::Internal("persistent root index overflow".into()))?;
+        let slot = self
+            .slots
+            .get(index)
+            .ok_or_else(|| invalid_persistent_ptr(value))?;
+        if slot.generation != value.generation {
+            return Err(invalid_persistent_ptr(value));
+        }
+        let root_id = slot.root_id.ok_or_else(|| invalid_persistent_ptr(value))?;
+        Ok((index, root_id))
+    }
+
+    fn install_root_id(&mut self, root_id: RootId) -> Result<PersistentPtr, EngineError> {
+        let next_live_count = self
+            .live_count
+            .checked_add(1)
+            .ok_or_else(|| EngineError::Internal("persistent root count exhausted".into()))?;
+
+        let (index, generation) = if let Some(index) = self.free_slots.last().copied() {
+            let slot_index = usize::try_from(index)
+                .map_err(|_| EngineError::Internal("persistent root index overflow".into()))?;
+            let slot = self.slots.get(slot_index).ok_or_else(|| {
+                EngineError::Internal("persistent root free-list corruption".into())
+            })?;
+            if slot.root_id.is_some() {
+                return Err(EngineError::Internal(
+                    "persistent root free-list referenced a live slot".into(),
+                ));
+            }
+            let generation = slot.generation;
+            self.free_slots.pop();
+            self.slots[slot_index].root_id = Some(root_id);
+            (index, generation)
+        } else {
+            let index = u64::try_from(self.slots.len())
+                .map_err(|_| EngineError::Internal("persistent root arena exhausted".into()))?;
+            self.slots.push(PersistentRootSlot {
+                generation: 0,
+                root_id: Some(root_id),
+            });
+            (index, 0)
+        };
+
+        self.live_count = next_live_count;
+        Ok(PersistentPtr {
+            heap_id: self.heap_id,
+            store_id: self.store_id,
+            index,
+            generation,
+        })
+    }
+
+    fn cleanup_failed_install(
+        heap: &mut HeapState,
+        root_id: RootId,
+        error: EngineError,
+    ) -> EngineError {
+        match heap.unregister_root(root_id) {
+            Ok(()) => error,
+            Err(cleanup_error) => EngineError::Internal(format!(
+                "failed to install persistent root: {error}; cleanup also failed: {cleanup_error}"
+            )),
+        }
+    }
+
+    /// Register a rooted synchronous value for use after the current scope.
+    pub(crate) fn insert<'heap, 'scope>(
+        &mut self,
+        scope: &mut RootScope<'heap, 'scope>,
+        value: RootedPtr<'scope>,
+    ) -> Result<PersistentPtr, EngineError> {
+        self.validate_heap(scope.heap)?;
+        let pointer = scope.pointer(value);
+        let root_id = scope.heap.register_root(pointer)?;
+        self.install_root_id(root_id)
+            .map_err(|error| Self::cleanup_failed_install(scope.heap, root_id, error))
+    }
+
+    /// Resolve a persistent value into the active scope's shadow-root stack.
+    pub(crate) fn resolve<'heap, 'scope>(
+        &self,
+        scope: &mut RootScope<'heap, 'scope>,
+        value: &PersistentPtr,
+    ) -> Result<RootedPtr<'scope>, EngineError> {
+        let (_, root_id) = self.root_id(scope.heap, value)?;
+        let pointer = scope.heap.resolve_root(root_id)?;
+        Ok(scope.root(pointer))
+    }
+
+    /// Create an independently owned persistent root for the same value.
+    #[allow(dead_code)] // Part of the arena API; the cycle migration currently rebuilds arenas.
+    pub(crate) fn duplicate<'heap, 'scope>(
+        &mut self,
+        scope: &mut RootScope<'heap, 'scope>,
+        value: &PersistentPtr,
+    ) -> Result<PersistentPtr, EngineError> {
+        let rooted = self.resolve(scope, value)?;
+        self.insert(scope, rooted)
+    }
+
+    /// Replace one persistent value, rooting the replacement before release.
+    #[allow(dead_code)] // Part of the arena API; the cycle migration currently rebuilds arenas.
+    pub(crate) fn replace<'heap, 'scope>(
+        &mut self,
+        scope: &mut RootScope<'heap, 'scope>,
+        old: PersistentPtr,
+        new: RootedPtr<'scope>,
+    ) -> Result<PersistentPtr, EngineError> {
+        let (index, old_root_id) = self.root_id(scope.heap, &old)?;
+        let next_generation = old
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| EngineError::Internal("persistent root generation exhausted".into()))?;
+        let new_root_id = scope.heap.register_root(scope.pointer(new))?;
+        if let Err(error) = scope.heap.unregister_root(old_root_id) {
+            return Err(Self::cleanup_failed_install(scope.heap, new_root_id, error));
+        }
+
+        // `root_id` validated this index before either heap-root mutation, and
+        // no arena operation above can resize `slots`.
+        let slot = &mut self.slots[index];
+        slot.generation = next_generation;
+        slot.root_id = Some(new_root_id);
+        Ok(PersistentPtr {
+            heap_id: self.heap_id,
+            store_id: self.store_id,
+            index: old.index,
+            generation: next_generation,
+        })
+    }
+
+    /// Explicitly unregister one persistent root while the heap is locked.
+    pub(crate) fn remove<'heap, 'scope>(
+        &mut self,
+        scope: &mut RootScope<'heap, 'scope>,
+        value: PersistentPtr,
+    ) -> Result<(), EngineError> {
+        let (index, root_id) = self.root_id(scope.heap, &value)?;
+        let next_generation = value
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| EngineError::Internal("persistent root generation exhausted".into()))?;
+        let next_live_count = self
+            .live_count
+            .checked_sub(1)
+            .ok_or_else(|| EngineError::Internal("persistent root count underflow".into()))?;
+
+        scope.heap.unregister_root(root_id)?;
+        // `root_id` validated this index before unregistering the heap root,
+        // and no arena operation above can resize `slots`.
+        let slot = &mut self.slots[index];
+        slot.generation = next_generation;
+        slot.root_id = None;
+        self.free_slots.push(value.index);
+        self.live_count = next_live_count;
+        Ok(())
+    }
+
+    /// Explicitly unregister every root owned by this evaluator arena.
+    pub(crate) fn clear<'heap, 'scope>(
+        &mut self,
+        scope: &mut RootScope<'heap, 'scope>,
+    ) -> Result<(), EngineError> {
+        self.validate_heap(scope.heap)?;
+        let mut live = Vec::with_capacity(self.live_count);
+        for (index, slot) in self.slots.iter().enumerate() {
+            if slot.root_id.is_some() {
+                live.push(PersistentPtr {
+                    heap_id: self.heap_id,
+                    store_id: self.store_id,
+                    index: u64::try_from(index).map_err(|_| {
+                        EngineError::Internal("persistent root index overflow".into())
+                    })?,
+                    generation: slot.generation,
+                });
+            }
+        }
+        for value in live {
+            self.remove(scope, value)?;
+        }
+        Ok(())
+    }
+}
+
 /// Rex heap and allocation API.
 ///
 /// Public allocation methods return [`Handle`] values. A handle is a GC root, so
@@ -1083,12 +1340,6 @@ pub struct Heap {
 /// This type is deliberately crate-private. Public API and host callbacks should
 /// use [`Handle`] instead.
 pub(crate) struct TempRoots {
-    root_ids: Vec<RootId>,
-    collection_count: u64,
-}
-
-pub(crate) struct PersistentRoots {
-    heap: Heap,
     root_ids: Vec<RootId>,
     collection_count: u64,
 }
@@ -1188,55 +1439,6 @@ impl TempRoots {
             .get(index)
             .ok_or_else(|| EngineError::Internal("temporary root index out of bounds".into()))?;
         heap.resolve_root(root_id)
-    }
-
-    pub(crate) fn to_handles(&self, heap: &Heap) -> Result<Vec<Handle>, EngineError> {
-        let root_ids = {
-            let mut state = heap
-                .state
-                .lock()
-                .map_err(|_| EngineError::HeapStatePoisoned)?;
-            let pointers = self
-                .root_ids
-                .iter()
-                .map(|root_id| state.resolve_root(*root_id))
-                .collect::<Result<Vec<_>, _>>()?;
-            state.register_roots(pointers)?
-        };
-        Ok(heap.handles_from_root_ids(root_ids))
-    }
-}
-
-impl Drop for PersistentRoots {
-    fn drop(&mut self) {
-        let _ = self
-            .heap
-            .with_locked(|heap| heap.unregister_roots(std::mem::take(&mut self.root_ids)));
-    }
-}
-
-impl PersistentRoots {
-    // `update` runs while the heap-state mutex is held so its rewritten
-    // pointers cannot immediately become stale. It must not access `Heap` or
-    // drop heap-rooting values, either of which would try to lock the heap.
-    pub(crate) fn with_updated_pointers(
-        &mut self,
-        update: impl FnOnce(&[Pointer]) -> Result<(), EngineError>,
-    ) -> Result<bool, EngineError> {
-        let state = Arc::clone(&self.heap.state);
-        let state = state.lock().map_err(|_| EngineError::HeapStatePoisoned)?;
-        let collection_count = state.collection_count();
-        if collection_count == self.collection_count {
-            return Ok(false);
-        }
-        let pointers = self
-            .root_ids
-            .iter()
-            .map(|root_id| state.resolve_root(*root_id))
-            .collect::<Result<Vec<_>, _>>()?;
-        update(&pointers)?;
-        self.collection_count = collection_count;
-        Ok(true)
     }
 }
 
@@ -1563,6 +1765,7 @@ impl Heap {
         Ok(f(&mut state))
     }
 
+    #[cfg(test)]
     pub(crate) fn with_temp_roots<R>(
         &self,
         pointers: Vec<Pointer>,
@@ -1572,23 +1775,6 @@ impl Heap {
         let res = f(&tr);
         self.with_locked(|heap| heap.unregister_roots(std::mem::take(&mut tr.root_ids)))?;
         res
-    }
-
-    pub(crate) fn persistent_roots(
-        &self,
-        pointers: Vec<Pointer>,
-    ) -> Result<PersistentRoots, EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::HeapStatePoisoned)?;
-        let root_ids = state.register_roots(pointers)?;
-        let collection_count = state.collection_count();
-        Ok(PersistentRoots {
-            heap: self.clone(),
-            root_ids,
-            collection_count,
-        })
     }
 
     pub(crate) fn handle(&self, pointer: Pointer) -> Result<Handle, EngineError> {
@@ -1604,6 +1790,47 @@ impl Heap {
                 root_id,
             }),
         })
+    }
+
+    /// Promote a scope-branded value to a public handle without reacquiring
+    /// the heap mutex. The caller must already own this heap's `RootScope`.
+    pub(crate) fn handle_rooted<'heap, 'scope>(
+        &self,
+        scope: &mut RootScope<'heap, 'scope>,
+        value: RootedPtr<'scope>,
+    ) -> Result<Handle, EngineError> {
+        if scope.heap.id != self.id {
+            return Err(EngineError::Internal(format!(
+                "root scope belongs to heap {}, not heap {}",
+                scope.heap.id, self.id
+            )));
+        }
+        let root_id = scope.heap.register_root(scope.pointer(value))?;
+        Ok(Handle {
+            root: Arc::new(HandleRoot {
+                heap: self.clone(),
+                root_id,
+            }),
+        })
+    }
+
+    pub(crate) fn handles_rooted<'heap, 'scope>(
+        &self,
+        scope: &mut RootScope<'heap, 'scope>,
+        values: &[RootedPtr<'scope>],
+    ) -> Result<Vec<Handle>, EngineError> {
+        if scope.heap.id != self.id {
+            return Err(EngineError::Internal(format!(
+                "root scope belongs to heap {}, not heap {}",
+                scope.heap.id, self.id
+            )));
+        }
+        let pointers = values
+            .iter()
+            .map(|value| scope.pointer(*value))
+            .collect::<Vec<_>>();
+        let root_ids = scope.heap.register_roots(pointers)?;
+        Ok(self.handles_from_root_ids(root_ids))
     }
 
     pub fn set_collect_on_every_alloc(&self, enabled: bool) -> Result<(), EngineError> {
@@ -2684,6 +2911,13 @@ fn invalid_root(root_id: RootId) -> EngineError {
     ))
 }
 
+fn invalid_persistent_ptr(value: &PersistentPtr) -> EngineError {
+    EngineError::Internal(format!(
+        "invalid persistent root (heap_id={}, store_id={}, index={}, generation={})",
+        value.heap_id, value.store_id, value.index, value.generation
+    ))
+}
+
 fn randomized_gc_destinations(old_indices: &[u32], completed_collections: u64) -> Vec<usize> {
     let len = old_indices.len();
     let mut destinations = (0..len).collect::<Vec<_>>();
@@ -2737,6 +2971,237 @@ fn randomized_gc_destinations(old_indices: &[u32], completed_collections: u64) -
 mod tests {
     use super::*;
     use crate::memory::traits::{FromRex, IntoRex};
+
+    fn new_persistent_store(heap: &Heap) -> PersistentRootStore {
+        heap.with_locked(HeapState::persistent_root_store)
+            .expect("persistent root store should be created")
+    }
+
+    fn persist_handle(
+        heap: &Heap,
+        store: &mut PersistentRootStore,
+        handle: &Handle,
+    ) -> PersistentPtr {
+        heap.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let pointer = handle.pointer(scope.heap)?;
+                let rooted = scope.root(pointer);
+                store.insert(scope, rooted)
+            })
+        })
+        .expect("handle should become persistent")
+    }
+
+    fn remove_persistent(heap: &Heap, store: &mut PersistentRootStore, value: PersistentPtr) {
+        heap.with_locked(|heap| heap.root_scope(|scope| store.remove(scope, value)))
+            .expect("persistent root should be removed");
+    }
+
+    fn persistent_i32(heap: &Heap, store: &PersistentRootStore, value: &PersistentPtr) -> i32 {
+        heap.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                let rooted = store.resolve(scope, value)?;
+                scope.root_as_i32(rooted)
+            })
+        })
+        .expect("persistent i32 should resolve")
+    }
+
+    fn copy_persistent_ptr(value: &PersistentPtr) -> PersistentPtr {
+        PersistentPtr {
+            heap_id: value.heap_id,
+            store_id: value.store_id,
+            index: value.index,
+            generation: value.generation,
+        }
+    }
+
+    #[test]
+    fn persistent_store_reuses_slots_with_generation_bump() {
+        let heap = Heap::new();
+        let first = heap.alloc_i32(1).expect("first value should allocate");
+        let second = heap.alloc_i32(2).expect("second value should allocate");
+        let mut store = new_persistent_store(&heap);
+
+        let first_ptr = persist_handle(&heap, &mut store, &first);
+        let stale = copy_persistent_ptr(&first_ptr);
+        let stale_for_remove = copy_persistent_ptr(&first_ptr);
+        let first_index = first_ptr.index;
+        let first_generation = first_ptr.generation;
+        remove_persistent(&heap, &mut store, first_ptr);
+
+        let second_ptr = persist_handle(&heap, &mut store, &second);
+        assert_eq!(second_ptr.index, first_index);
+        assert_eq!(second_ptr.generation, first_generation + 1);
+        heap.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                assert!(
+                    store.resolve(scope, &stale).is_err(),
+                    "a token from the previous slot generation must be rejected"
+                );
+                assert!(
+                    store.remove(scope, stale_for_remove).is_err(),
+                    "a stale token must not unregister the reused slot"
+                );
+                Ok(())
+            })
+        })
+        .unwrap();
+
+        remove_persistent(&heap, &mut store, second_ptr);
+    }
+
+    #[test]
+    fn persistent_store_duplicate_has_independent_ownership() {
+        let heap = Heap::new();
+        let handle = heap.alloc_i32(42).expect("value should allocate");
+        let mut store = new_persistent_store(&heap);
+        let original = persist_handle(&heap, &mut store, &handle);
+        let duplicate = heap
+            .with_locked(|heap| heap.root_scope(|scope| store.duplicate(scope, &original)))
+            .expect("persistent root should duplicate");
+        drop(handle);
+
+        assert_eq!(
+            heap.with_locked(|heap| Ok(heap.root_count())).unwrap(),
+            2,
+            "each persistent owner should have its own registered root"
+        );
+        remove_persistent(&heap, &mut store, original);
+        heap.with_locked(|heap| heap.collect())
+            .expect("collection should succeed");
+        assert_eq!(persistent_i32(&heap, &store, &duplicate), 42);
+
+        remove_persistent(&heap, &mut store, duplicate);
+        assert_eq!(heap.with_locked(|heap| Ok(heap.root_count())).unwrap(), 0);
+    }
+
+    #[test]
+    fn persistent_store_root_is_rewritten_by_collection() {
+        let heap = Heap::new();
+        let handle = heap.alloc_i32(42).expect("value should allocate");
+        let mut store = new_persistent_store(&heap);
+        let value = persist_handle(&heap, &mut store, &handle);
+        drop(handle);
+
+        let generation_before = heap
+            .with_locked(|heap| {
+                let (_, root_id) = store.root_id(heap, &value)?;
+                Ok(heap.resolve_root(root_id)?.generation)
+            })
+            .unwrap();
+        for _ in 0..3 {
+            heap.with_locked(|heap| heap.collect())
+                .expect("collection should succeed");
+        }
+        let generation_after = heap
+            .with_locked(|heap| {
+                let (_, root_id) = store.root_id(heap, &value)?;
+                Ok(heap.resolve_root(root_id)?.generation)
+            })
+            .unwrap();
+
+        assert!(generation_after > generation_before);
+        assert_eq!(persistent_i32(&heap, &store, &value), 42);
+        remove_persistent(&heap, &mut store, value);
+    }
+
+    #[test]
+    fn persistent_store_replace_invalidates_old_token() {
+        let heap = Heap::new();
+        let old_handle = heap.alloc_i32(1).expect("old value should allocate");
+        let new_handle = heap.alloc_i32(2).expect("new value should allocate");
+        let mut store = new_persistent_store(&heap);
+        let old = persist_handle(&heap, &mut store, &old_handle);
+        let stale = copy_persistent_ptr(&old);
+        drop(old_handle);
+
+        let replacement = heap
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    let pointer = new_handle.pointer(scope.heap)?;
+                    let rooted = scope.root(pointer);
+                    store.replace(scope, old, rooted)
+                })
+            })
+            .expect("persistent root should be replaced");
+        assert_eq!(
+            heap.with_locked(|heap| Ok(heap.root_count())).unwrap(),
+            2,
+            "replacement should exchange roots without retaining the old value"
+        );
+        drop(new_handle);
+
+        heap.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                assert!(store.resolve(scope, &stale).is_err());
+                Ok(())
+            })
+        })
+        .unwrap();
+        assert_eq!(persistent_i32(&heap, &store, &replacement), 2);
+        remove_persistent(&heap, &mut store, replacement);
+        assert_eq!(heap.with_locked(|heap| Ok(heap.root_count())).unwrap(), 0);
+    }
+
+    #[test]
+    fn persistent_store_clear_unregisters_every_root() {
+        let heap = Heap::new();
+        let handles = (0..3)
+            .map(|value| heap.alloc_i32(value).expect("value should allocate"))
+            .collect::<Vec<_>>();
+        let mut store = new_persistent_store(&heap);
+        let stale = handles
+            .iter()
+            .map(|handle| persist_handle(&heap, &mut store, handle))
+            .collect::<Vec<_>>();
+        drop(handles);
+
+        assert_eq!(heap.with_locked(|heap| Ok(heap.root_count())).unwrap(), 3);
+        heap.with_locked(|heap| heap.root_scope(|scope| store.clear(scope)))
+            .expect("persistent arena teardown should succeed");
+        assert_eq!(store.live_count, 0);
+        assert!(store.slots.iter().all(|slot| slot.root_id.is_none()));
+        assert_eq!(heap.with_locked(|heap| Ok(heap.root_count())).unwrap(), 0);
+        heap.with_locked(|heap| {
+            heap.root_scope(|scope| {
+                for value in &stale {
+                    assert!(store.resolve(scope, value).is_err());
+                }
+                Ok(())
+            })
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn persistent_store_rejects_foreign_heap_and_store() {
+        let first_heap = Heap::new();
+        let second_heap = Heap::new();
+        let handle = first_heap.alloc_i32(42).expect("value should allocate");
+        let mut first_store = new_persistent_store(&first_heap);
+        let second_store = new_persistent_store(&first_heap);
+        let value = persist_handle(&first_heap, &mut first_store, &handle);
+
+        first_heap
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    assert!(second_store.resolve(scope, &value).is_err());
+                    Ok(())
+                })
+            })
+            .unwrap();
+        second_heap
+            .with_locked(|heap| {
+                heap.root_scope(|scope| {
+                    assert!(first_store.resolve(scope, &value).is_err());
+                    Ok(())
+                })
+            })
+            .unwrap();
+
+        remove_persistent(&first_heap, &mut first_store, value);
+    }
 
     #[test]
     fn handle_roots_value_until_last_clone_drops() {
@@ -3030,57 +3495,6 @@ mod tests {
             Ok(())
         })
         .expect("temporary root should register");
-    }
-
-    #[test]
-    fn persistent_roots_advance_across_multiple_collections() {
-        let heap = Heap::new();
-        let initial = heap
-            .with_locked(|heap| {
-                heap.root_scope(|scope| {
-                    let root = scope.alloc_root_i32(42)?;
-                    Ok(scope.pointer(root))
-                })
-            })
-            .expect("alloc_i32 should succeed");
-        let mut roots = heap
-            .persistent_roots(vec![initial])
-            .expect("persistent root should register");
-        let mut current = initial;
-
-        for _ in 0..3 {
-            heap.with_locked(|heap| heap.collect())
-                .expect("collection should succeed");
-            let mut updated = None;
-            assert!(
-                roots
-                    .with_updated_pointers(|pointers| {
-                        updated = pointers.first().copied();
-                        Ok(())
-                    })
-                    .expect("persistent root refresh should succeed")
-            );
-            let next = updated.expect("persistent root should have one pointer");
-            assert_ne!(next.generation, current.generation);
-            assert_eq!(
-                heap.with_locked(|heap| {
-                    heap.root_scope(|scope| {
-                        let next = scope.root(next);
-                        scope.root_as_i32(next)
-                    })
-                })
-                .expect("refreshed pointer should resolve"),
-                42
-            );
-            assert!(
-                !roots
-                    .with_updated_pointers(|_| {
-                        panic!("unchanged epoch should not invoke the refresh closure")
-                    })
-                    .expect("unchanged persistent roots should be reported")
-            );
-            current = next;
-        }
     }
 
     #[test]

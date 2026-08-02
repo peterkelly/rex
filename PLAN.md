@@ -46,12 +46,24 @@ The existing transition has established much of the synchronous API:
   `Handle` values through the unified immediate/deferred host path.
 - Control frames live outside the GC heap.
 
-The transition is not complete. The outer evaluator loop still traces raw
-`Pointer` values, registers temporary or persistent roots, releases and
-reacquires the mutex, and refreshes copied pointers manually. Frames,
-environments, scheduler work, native tasks, and runtime caches still contain
-raw pointers outside the heap implementation. Those are correctness gaps, not
-just cleanup work.
+The evaluator now owns a generational `PersistentRootStore`. Frames, evaluator
+environments, scheduler work items, native tasks, and the typeclass cache use
+`PersistentPtr` while the heap is unlocked. Host completions remain `Handle`
+values until the next locked evaluator cycle, and host-call arguments are
+promoted to handles before that cycle releases the mutex.
+
+One synchronous evaluator cycle now resolves persistent state under a single
+`RootScope`, executes a work item, and rebuilds the persistent arena before
+unlocking. Raw `Pointer` frames and native tasks are transient generic
+instantiations used only inside that locked cycle. The old bulk
+`PersistentRoots` scheduler snapshot and its cross-lock refresh pass have been
+removed.
+
+The transition is still not complete. Synchronous evaluation helpers retain
+raw-pointer APIs and local temporary-root refreshes for collections initiated
+inside a locked cycle. `InternalPtr` has not yet been confined to the heap
+implementation, and the remaining temporary-root compatibility APIs still
+need the later cleanup steps below.
 
 ## Step 1: Add deterministic concurrency regressions
 
@@ -229,9 +241,9 @@ epoch check, and post-allocation rewrite logic. Finish by deleting `TempRoots`,
 `Heap::with_temp_roots`, `RootScope::with_temp_roots`, and the evaluator refresh
 helpers once no caller remains.
 
-`PersistentRoots` in its current bulk-snapshot form should also disappear once
-all long-lived state uses the persistent root arena and host work is
-handle-only.
+The former bulk-snapshot `PersistentRoots` type has already been removed now
+that long-lived evaluator state uses the persistent root arena and queued host
+work is handle-only.
 
 ## Step 7: Confine `InternalPtr` to the heap implementation
 

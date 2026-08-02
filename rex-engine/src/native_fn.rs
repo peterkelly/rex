@@ -24,7 +24,7 @@ use rex_typesystem::{
 
 pub(crate) enum NativeApplyResult<'scope, State: Clone + Send + Sync + 'static> {
     Value(RootedPtr<'scope>),
-    Task(NativeTask),
+    Task(NativeTask<Pointer>),
     Pending(NativeCallRequest<State>),
 }
 

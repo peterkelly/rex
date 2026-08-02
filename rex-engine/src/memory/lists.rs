@@ -27,22 +27,55 @@ pub(super) enum ListRootElement<'scope> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum ListItems {
+pub(crate) enum ListItems<P> {
     Slice {
-        elements: Pointer,
+        elements: P,
         start: usize,
         end: usize,
     },
     BinarySlice {
-        elements: Pointer,
+        elements: P,
         start: usize,
         end: usize,
         bytes: Arc<[u8]>,
     },
-    Pointers(Vec<Pointer>),
+    Pointers(Vec<P>),
 }
 
-impl ListItems {
+impl<P> ListItems<P> {
+    pub(crate) fn map_values<Q, E>(
+        self,
+        map: &mut impl FnMut(P) -> Result<Q, E>,
+    ) -> Result<ListItems<Q>, E> {
+        match self {
+            Self::Slice {
+                elements,
+                start,
+                end,
+            } => Ok(ListItems::Slice {
+                elements: map(elements)?,
+                start,
+                end,
+            }),
+            Self::BinarySlice {
+                elements,
+                start,
+                end,
+                bytes,
+            } => Ok(ListItems::BinarySlice {
+                elements: map(elements)?,
+                start,
+                end,
+                bytes,
+            }),
+            Self::Pointers(values) => Ok(ListItems::Pointers(
+                values.into_iter().map(map).collect::<Result<Vec<_>, _>>()?,
+            )),
+        }
+    }
+}
+
+impl ListItems<Pointer> {
     pub(crate) fn into_list_rooted_items<'scope>(
         self,
         scope: &mut RootScope<'_, 'scope>,
@@ -142,11 +175,11 @@ impl ListItems {
 }
 
 pub(super) enum ListItemsSeed {
-    Ready(ListItems),
+    Ready(ListItems<Pointer>),
     Elements(Vec<ListElement>),
 }
 
-impl Collection for ListItems {
+impl Collection for ListItems<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -551,7 +584,7 @@ pub(crate) enum ListRootedItems<'scope> {
 }
 
 impl<'scope> ListRootedItems<'scope> {
-    pub(crate) fn into_list_items(self, scope: &RootScope<'_, 'scope>) -> ListItems {
+    pub(crate) fn into_list_items(self, scope: &RootScope<'_, 'scope>) -> ListItems<Pointer> {
         match self {
             Self::Slice {
                 elements,

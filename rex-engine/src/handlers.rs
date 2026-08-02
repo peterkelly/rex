@@ -11,7 +11,7 @@ use crate::{
         runtime_core::RuntimeCore,
     },
     memory::{
-        heap::{Handle, Heap, Pointer},
+        heap::{Handle, Heap, Pointer, RootScope},
         traits::{FromRex, IntoRex},
     },
     modules::ROOT_MODULE_NAME,
@@ -390,7 +390,11 @@ where
         }
     }
 
-    pub(crate) fn root(self, heap: &Heap) -> Result<NativeCall<State>, EngineError> {
+    pub(crate) fn root_in_scope<'heap, 'scope>(
+        self,
+        heap: &Heap,
+        scope: &mut RootScope<'heap, 'scope>,
+    ) -> Result<NativeCall<State>, EngineError> {
         let Self {
             callable,
             scheduling,
@@ -398,14 +402,17 @@ where
             typ,
             args,
         } = self;
-        heap.with_temp_roots(args, |roots| {
-            Ok(NativeCall {
-                callable,
-                scheduling,
-                call_site,
-                typ,
-                args: roots.to_handles(heap)?,
-            })
+        let args = args
+            .into_iter()
+            .map(|value| scope.root(value))
+            .collect::<Vec<_>>();
+        let args = heap.handles_rooted(scope, &args)?;
+        Ok(NativeCall {
+            callable,
+            scheduling,
+            call_site,
+            typ,
+            args,
         })
     }
 }

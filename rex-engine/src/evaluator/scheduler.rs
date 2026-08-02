@@ -3,29 +3,26 @@ use crate::{
     error::EngineError,
     evaluator::{native_callable::NativeCallScheduling, runtime_core::RuntimeCore},
     handlers::{NativeCall, NativeHandleFuture},
-    memory::{
-        heap::{Handle, Heap, PersistentRoots, Pointer},
-        traits::Collection,
-    },
-    stack::{FrameId, FrameStore},
+    memory::heap::{Handle, Heap, Pointer},
+    stack::FrameId,
 };
 use futures::future::poll_fn;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     sync::Arc,
     task::{Context as TaskContext, Poll},
 };
 
-pub(crate) struct EvalScheduler<State: Clone + Send + Sync + 'static> {
-    ready: VecDeque<EvalWorkItem>,
-    deferred_ready: VecDeque<EvalWorkItem>,
+pub(crate) struct EvalScheduler<State: Clone + Send + Sync + 'static, P> {
+    ready: VecDeque<EvalWorkItem<P>>,
+    deferred_ready: VecDeque<EvalWorkItem<P>>,
     pending_native: Vec<PendingNative>,
     immediate_native: VecDeque<QueuedNative<State>>,
     deferred_native: VecDeque<QueuedNative<State>>,
     parallelism_controller: Arc<dyn ParallelismController>,
 }
 
-impl<State> EvalScheduler<State>
+impl<State, P> EvalScheduler<State, P>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -45,7 +42,7 @@ where
         }
     }
 
-    pub(crate) fn schedule_next(&mut self, item: EvalWorkItem) {
+    pub(crate) fn schedule_next(&mut self, item: EvalWorkItem<P>) {
         self.ready.push_front(item);
         self.enforce_ready_limit();
     }
@@ -58,11 +55,15 @@ where
         }
     }
 
-    pub(crate) fn pop_next(&mut self) -> Option<EvalWorkItem> {
+    pub(crate) fn pop_next(&mut self) -> Option<EvalWorkItem<P>> {
         self.admit_deferred_ready();
         let item = self.ready.pop_front();
         self.admit_deferred_ready();
         item
+    }
+
+    pub(crate) fn has_ready_work(&self) -> bool {
+        !self.ready.is_empty() || !self.deferred_ready.is_empty()
     }
 
     fn has_pending_native(&self) -> bool {
@@ -75,16 +76,6 @@ where
 
     fn has_deferred_native(&self) -> bool {
         !self.deferred_native.is_empty()
-    }
-
-    fn refresh_rooted_values(&mut self, heap: &Heap) -> Result<(), EngineError> {
-        for item in &mut self.ready {
-            item.refresh_rooted_value(heap)?;
-        }
-        for item in &mut self.deferred_ready {
-            item.refresh_rooted_value(heap)?;
-        }
-        Ok(())
     }
 
     fn enforce_ready_limit(&mut self) {
@@ -201,6 +192,33 @@ where
         self.pending_native.remove(index).into_completion()
     }
 
+    pub(crate) fn map_values<Q, E>(
+        self,
+        map: &mut impl FnMut(P) -> Result<Q, E>,
+    ) -> Result<EvalScheduler<State, Q>, E> {
+        Ok(EvalScheduler {
+            ready: self
+                .ready
+                .into_iter()
+                .map(|item| item.map_value(map))
+                .collect::<Result<_, _>>()?,
+            deferred_ready: self
+                .deferred_ready
+                .into_iter()
+                .map(|item| item.map_value(map))
+                .collect::<Result<_, _>>()?,
+            pending_native: self.pending_native,
+            immediate_native: self.immediate_native,
+            deferred_native: self.deferred_native,
+            parallelism_controller: self.parallelism_controller,
+        })
+    }
+}
+
+impl<State> EvalScheduler<State, Pointer>
+where
+    State: Clone + Send + Sync + 'static,
+{
     pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         for item in &self.ready {
             item.trace_pointers(out);
@@ -224,13 +242,18 @@ where
     }
 }
 
-pub(crate) async fn poll_pending_native<State>(
-    runtime: &mut RuntimeCore<State>,
+pub(crate) enum NativePoll {
+    Idle,
+    Progress,
+    Completed { frame: FrameId, handle: Handle },
+}
+
+pub(crate) async fn poll_pending_native<State, P>(
+    runtime: &RuntimeCore<State>,
     heap: &Heap,
-    frames: &mut FrameStore,
-    scheduler: &mut EvalScheduler<State>,
+    scheduler: &mut EvalScheduler<State, P>,
     wait: bool,
-) -> Result<bool, EngineError>
+) -> Result<NativePoll, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -238,23 +261,20 @@ where
         && !scheduler.has_immediate_native()
         && !scheduler.has_deferred_native()
     {
-        return Ok(false);
+        return Ok(NativePoll::Idle);
     }
 
-    scheduler.refresh_rooted_values(heap)?;
-    let mut protected = Vec::new();
-    frames.trace_pointers(&mut protected);
-    scheduler.trace_pointers(&mut protected);
-    runtime.trace_pointers(&mut protected)?;
-    let mut roots = heap.persistent_roots(protected.clone())?;
-
-    scheduler.activate_next_immediate_native(runtime, heap);
-    refresh_scheduler_roots(runtime, frames, scheduler, &mut roots, &mut protected)?;
-    poll_fn(|cx| Poll::Ready(scheduler.admit_available_deferred_native(cx, runtime, heap))).await?;
-    refresh_scheduler_roots(runtime, frames, scheduler, &mut roots, &mut protected)?;
+    let mut progressed = scheduler.activate_next_immediate_native(runtime, heap);
+    progressed |=
+        poll_fn(|cx| Poll::Ready(scheduler.admit_available_deferred_native(cx, runtime, heap)))
+            .await?;
     if !scheduler.has_pending_native() {
         if !wait || (!scheduler.has_immediate_native() && !scheduler.has_deferred_native()) {
-            return Ok(false);
+            return Ok(if progressed {
+                NativePoll::Progress
+            } else {
+                NativePoll::Idle
+            });
         }
         poll_fn(|cx| match scheduler.try_acquire_next_native_permit(cx) {
             Poll::Ready(Ok(true)) => Poll::Ready(Ok(())),
@@ -264,8 +284,11 @@ where
         })
         .await?;
         let activated = scheduler.activate_next_permitted_deferred_native(runtime, heap);
-        refresh_scheduler_roots(runtime, frames, scheduler, &mut roots, &mut protected)?;
-        return Ok(activated);
+        return Ok(if activated {
+            NativePoll::Progress
+        } else {
+            NativePoll::Idle
+        });
     }
 
     enum NativeWaitEvent {
@@ -310,51 +333,23 @@ where
         .await?
     };
 
-    refresh_scheduler_roots(runtime, frames, scheduler, &mut roots, &mut protected)?;
-
     let Some(event) = event else {
-        return Ok(false);
+        return Ok(if progressed {
+            NativePoll::Progress
+        } else {
+            NativePoll::Idle
+        });
     };
     let NativeWaitEvent::Completion(index) = event else {
         let activated = scheduler.activate_next_permitted_deferred_native(runtime, heap);
-        refresh_scheduler_roots(runtime, frames, scheduler, &mut roots, &mut protected)?;
-        return Ok(activated);
+        return Ok(if activated {
+            NativePoll::Progress
+        } else {
+            NativePoll::Idle
+        });
     };
     let (frame, handle) = scheduler.take_pending_native_completion(index)?;
-    let value = handle.pointer_for_heap(heap)?;
-    scheduler.schedule_next(EvalWorkItem::receive_rooted(frame, frame, value, handle));
-    Ok(true)
-}
-
-fn refresh_scheduler_roots<State>(
-    runtime: &mut RuntimeCore<State>,
-    frames: &mut FrameStore,
-    scheduler: &mut EvalScheduler<State>,
-    roots: &mut PersistentRoots,
-    originals: &mut [Pointer],
-) -> Result<(), EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    roots.with_updated_pointers(|updated| {
-        if updated.len() != originals.len() {
-            return Err(EngineError::Internal(
-                "persistent root snapshot length changed".into(),
-            ));
-        }
-
-        let mut rewrites = HashMap::with_capacity(originals.len());
-        for (original, updated) in originals.iter_mut().zip(updated.iter().copied()) {
-            rewrites.insert(*original, updated);
-            *original = updated;
-        }
-        let mut rewrite =
-            |pointer| Ok::<_, EngineError>(rewrites.get(&pointer).copied().unwrap_or(pointer));
-        frames.map_pointers(&mut rewrite)?;
-        scheduler.map_pointers(&mut rewrite)?;
-        runtime.map_pointers(&mut rewrite)
-    })?;
-    Ok(())
+    Ok(NativePoll::Completed { frame, handle })
 }
 
 enum PendingNativeState {
@@ -443,18 +438,17 @@ where
     }
 }
 
-pub(crate) struct EvalWorkItem {
+pub(crate) struct EvalWorkItem<P> {
     pub(crate) frame: FrameId,
-    pub(crate) returned: Option<EvalReturned>,
+    pub(crate) returned: Option<EvalReturned<P>>,
 }
 
-pub(crate) struct EvalReturned {
+pub(crate) struct EvalReturned<P> {
     pub(crate) child: FrameId,
-    pub(crate) value: Pointer,
-    handle: Option<Handle>,
+    pub(crate) value: P,
 }
 
-impl EvalWorkItem {
+impl<P> EvalWorkItem<P> {
     pub(crate) fn enter(frame: FrameId) -> Self {
         Self {
             frame,
@@ -462,48 +456,33 @@ impl EvalWorkItem {
         }
     }
 
-    pub(crate) fn receive(frame: FrameId, child: FrameId, value: Pointer) -> Self {
+    pub(crate) fn receive(frame: FrameId, child: FrameId, value: P) -> Self {
         Self {
             frame,
-            returned: Some(EvalReturned {
-                child,
-                value,
-                handle: None,
-            }),
+            returned: Some(EvalReturned { child, value }),
         }
     }
 
-    pub(crate) fn receive_rooted(
-        frame: FrameId,
-        child: FrameId,
-        value: Pointer,
-        handle: Handle,
-    ) -> Self {
-        Self {
-            frame,
-            returned: Some(EvalReturned {
-                child,
-                value,
-                handle: Some(handle),
-            }),
-        }
+    pub(crate) fn map_value<Q, E>(
+        self,
+        map: &mut impl FnMut(P) -> Result<Q, E>,
+    ) -> Result<EvalWorkItem<Q>, E> {
+        Ok(EvalWorkItem {
+            frame: self.frame,
+            returned: self
+                .returned
+                .map(|returned| {
+                    Ok(EvalReturned {
+                        child: returned.child,
+                        value: map(returned.value)?,
+                    })
+                })
+                .transpose()?,
+        })
     }
+}
 
-    pub(crate) fn refresh_rooted_value(&mut self, heap: &Heap) -> Result<(), EngineError> {
-        if let Some(returned) = self.returned.as_mut()
-            && let Some(handle) = returned.handle.as_ref()
-        {
-            returned.value = handle.pointer_for_heap(heap)?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn take_returned_handle(&mut self) -> Option<Handle> {
-        self.returned
-            .as_mut()
-            .and_then(|returned| returned.handle.take())
-    }
-
+impl EvalWorkItem<Pointer> {
     pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         if let Some(returned) = self.returned.as_ref() {
             out.push(returned.value);

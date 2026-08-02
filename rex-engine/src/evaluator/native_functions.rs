@@ -40,9 +40,9 @@ struct NativeChildSpec {
 
 fn native_step_to_control<'scope, State>(
     scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore,
+    frames: &mut FrameStore<Frame<Pointer, Environment>>,
     frame_id: FrameId,
-    mut frame: FrNativeCall,
+    mut frame: FrNativeCall<Pointer>,
     step: NativeStep,
 ) -> Result<EvalControl<State>, EngineError>
 where
@@ -92,9 +92,9 @@ where
 
 pub(crate) fn eval_native_enter<'scope, State>(
     scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore,
+    frames: &mut FrameStore<Frame<Pointer, Environment>>,
     frame_id: FrameId,
-    mut frame: FrNativeCall,
+    mut frame: FrNativeCall<Pointer>,
 ) -> Result<EvalControl<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -113,9 +113,9 @@ where
 
 pub(crate) fn eval_native_receive<'scope, State>(
     scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore,
+    frames: &mut FrameStore<Frame<Pointer, Environment>>,
     frame_id: FrameId,
-    mut frame: FrNativeCall,
+    mut frame: FrNativeCall<Pointer>,
     child: FrameId,
     value: Pointer,
 ) -> Result<EvalControl<State>, EngineError>
@@ -125,7 +125,7 @@ where
     if frame.state != FrNativeCallState::Waiting {
         return unexpected_child_result("native call");
     }
-    if !<NativeTask as Coroutine>::receive_may_allocate(&frame.task) {
+    if !<NativeTask<Pointer> as Coroutine>::receive_may_allocate(&frame.task) {
         let step = frame.task.receive(scope, child, value)?;
         return native_step_to_control(scope, frames, frame_id, frame, step);
     }
@@ -140,25 +140,228 @@ where
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum NativeTask {
-    ApplyUnary(NativeApplyUnary),
-    SequenceMap(NativeSequenceMap),
-    SequenceFilter(NativeSequenceFilter),
-    SequenceFilterMap(NativeSequenceFilterMap),
-    SequenceFlatMap(NativeSequenceFlatMap),
-    UnaryMap(NativeUnaryMap),
-    UnaryFilter(NativeUnaryFilter),
-    UnaryFilterMap(NativeUnaryFilterMap),
-    UnaryFlatMap(NativeUnaryFlatMap),
-    Fold(NativeFold),
-    DictMap(NativeDictMap),
-    DictTraverse(NativeDictTraverse),
-    ArrayEq(NativeArrayEq),
-    Sum(NativeSum),
-    Mean(NativeMean),
+pub enum NativeTask<P> {
+    ApplyUnary(NativeApplyUnary<P>),
+    SequenceMap(NativeSequenceMap<P>),
+    SequenceFilter(NativeSequenceFilter<P>),
+    SequenceFilterMap(NativeSequenceFilterMap<P>),
+    SequenceFlatMap(NativeSequenceFlatMap<P>),
+    UnaryMap(NativeUnaryMap<P>),
+    UnaryFilter(NativeUnaryFilter<P>),
+    UnaryFilterMap(NativeUnaryFilterMap<P>),
+    UnaryFlatMap(NativeUnaryFlatMap<P>),
+    Fold(NativeFold<P>),
+    DictMap(NativeDictMap<P>),
+    DictTraverse(NativeDictTraverse<P>),
+    ArrayEq(NativeArrayEq<P>),
+    Sum(NativeSum<P>),
+    Mean(NativeMean<P>),
 }
 
-impl Collection for NativeTask {
+fn map_option_value<P, Q, E>(
+    value: Option<P>,
+    map: &mut impl FnMut(P) -> Result<Q, E>,
+) -> Result<Option<Q>, E> {
+    value.map(map).transpose()
+}
+
+fn map_option_values<P, Q, E>(
+    values: Vec<Option<P>>,
+    map: &mut impl FnMut(P) -> Result<Q, E>,
+) -> Result<Vec<Option<Q>>, E> {
+    values
+        .into_iter()
+        .map(|value| map_option_value(value, map))
+        .collect()
+}
+
+fn map_nested_option_values<P, Q, E>(
+    values: Vec<Option<Option<P>>>,
+    map: &mut impl FnMut(P) -> Result<Q, E>,
+) -> Result<Vec<Option<Option<Q>>>, E> {
+    values
+        .into_iter()
+        .map(|value| value.map(|inner| map_option_value(inner, map)).transpose())
+        .collect()
+}
+
+fn map_option_value_vecs<P, Q, E>(
+    values: Vec<Option<Vec<P>>>,
+    map: &mut impl FnMut(P) -> Result<Q, E>,
+) -> Result<Vec<Option<Vec<Q>>>, E> {
+    values
+        .into_iter()
+        .map(|value| {
+            value
+                .map(|items| items.into_iter().map(&mut *map).collect())
+                .transpose()
+        })
+        .collect()
+}
+
+fn map_entries_into<P, Q, E>(
+    entries: Vec<(Symbol, P)>,
+    map: &mut impl FnMut(P) -> Result<Q, E>,
+) -> Result<Vec<(Symbol, Q)>, E> {
+    entries
+        .into_iter()
+        .map(|(name, value)| Ok((name, map(value)?)))
+        .collect()
+}
+
+fn map_values_into<P, Q, E>(
+    values: BTreeMap<Symbol, P>,
+    map: &mut impl FnMut(P) -> Result<Q, E>,
+) -> Result<BTreeMap<Symbol, Q>, E> {
+    values
+        .into_iter()
+        .map(|(name, value)| Ok((name, map(value)?)))
+        .collect()
+}
+
+impl<P> NativeTask<P> {
+    pub(crate) fn map_values<Q, E>(
+        self,
+        map: &mut impl FnMut(P) -> Result<Q, E>,
+    ) -> Result<NativeTask<Q>, E> {
+        Ok(match self {
+            Self::ApplyUnary(task) => NativeTask::ApplyUnary(NativeApplyUnary {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                arg: map(task.arg)?,
+                arg_type: task.arg_type,
+            }),
+            Self::SequenceMap(task) => NativeTask::SequenceMap(NativeSequenceMap {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                elem_type: task.elem_type,
+                values: task.values.map_values(map)?,
+                shape: task.shape,
+                children: task.children,
+                output: map_option_values(task.output, map)?,
+                remaining: task.remaining,
+            }),
+            Self::SequenceFilter(task) => NativeTask::SequenceFilter(NativeSequenceFilter {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                elem_type: task.elem_type,
+                values: task.values.map_values(map)?,
+                shape: task.shape,
+                children: task.children,
+                keep: task.keep,
+                remaining: task.remaining,
+            }),
+            Self::SequenceFilterMap(task) => {
+                NativeTask::SequenceFilterMap(NativeSequenceFilterMap {
+                    func: map(task.func)?,
+                    func_type: task.func_type,
+                    elem_type: task.elem_type,
+                    values: task.values.map_values(map)?,
+                    shape: task.shape,
+                    children: task.children,
+                    output: map_nested_option_values(task.output, map)?,
+                    remaining: task.remaining,
+                })
+            }
+            Self::SequenceFlatMap(task) => NativeTask::SequenceFlatMap(NativeSequenceFlatMap {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                elem_type: task.elem_type,
+                values: task.values.map_values(map)?,
+                shape: task.shape,
+                children: task.children,
+                output: map_option_value_vecs(task.output, map)?,
+                remaining: task.remaining,
+            }),
+            Self::UnaryMap(task) => NativeTask::UnaryMap(NativeUnaryMap {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                elem_type: task.elem_type,
+                value: map(task.value)?,
+                shape: task.shape,
+            }),
+            Self::UnaryFilter(task) => NativeTask::UnaryFilter(NativeUnaryFilter {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                elem_type: task.elem_type,
+                value: map(task.value)?,
+                original: map(task.original)?,
+            }),
+            Self::UnaryFilterMap(task) => NativeTask::UnaryFilterMap(NativeUnaryFilterMap {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                elem_type: task.elem_type,
+                value: map(task.value)?,
+            }),
+            Self::UnaryFlatMap(task) => NativeTask::UnaryFlatMap(NativeUnaryFlatMap {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                elem_type: task.elem_type,
+                value: map(task.value)?,
+                shape: task.shape,
+            }),
+            Self::Fold(task) => NativeTask::Fold(NativeFold {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                acc_type: task.acc_type,
+                elem_type: task.elem_type,
+                values: task.values.map_values(map)?,
+                acc: map(task.acc)?,
+                order: task.order,
+                state: task.state,
+                next_index: task.next_index,
+                step: map_option_value(task.step, map)?,
+            }),
+            Self::DictMap(task) => NativeTask::DictMap(NativeDictMap {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                elem_type: task.elem_type,
+                entries: map_entries_into(task.entries, map)?,
+                children: task.children,
+                output: map_values_into(task.output, map)?,
+                remaining: task.remaining,
+            }),
+            Self::DictTraverse(task) => NativeTask::DictTraverse(NativeDictTraverse {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                elem_type: task.elem_type,
+                entries: map_entries_into(task.entries, map)?,
+                next_index: task.next_index,
+                output: map_values_into(task.output, map)?,
+            }),
+            Self::ArrayEq(task) => NativeTask::ArrayEq(NativeArrayEq {
+                elem_type: task.elem_type,
+                xs: task.xs.map_values(map)?,
+                ys: task.ys.map_values(map)?,
+                state: task.state,
+                next_index: task.next_index,
+                step: map_option_value(task.step, map)?,
+                negate: task.negate,
+            }),
+            Self::Sum(task) => NativeTask::Sum(NativeSum {
+                elem_type: task.elem_type,
+                values: task.values.map_values(map)?,
+                acc: map_option_value(task.acc, map)?,
+                plus: map_option_value(task.plus, map)?,
+                state: task.state,
+                next_index: task.next_index,
+                step: map_option_value(task.step, map)?,
+            }),
+            Self::Mean(task) => NativeTask::Mean(NativeMean {
+                elem_type: task.elem_type,
+                values: task.values.map_values(map)?,
+                len: task.len,
+                acc: map_option_value(task.acc, map)?,
+                state: task.state,
+                next_index: task.next_index,
+                step: map_option_value(task.step, map)?,
+                len_value: map_option_value(task.len_value, map)?,
+            }),
+        })
+    }
+}
+
+impl Collection for NativeTask<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -183,7 +386,7 @@ impl Collection for NativeTask {
     }
 }
 
-impl NativeTask {
+impl NativeTask<Pointer> {
     fn push_scheduled_child(&mut self, child: FrameId) -> Result<(), EngineError> {
         match self {
             NativeTask::SequenceMap(task) => {
@@ -243,7 +446,7 @@ impl NativeTask {
     }
 }
 
-impl Coroutine for NativeTask {
+impl Coroutine for NativeTask<Pointer> {
     fn enter<'scope>(
         &mut self,
         scope: &mut RootScope<'_, 'scope>,
@@ -295,38 +498,48 @@ impl Coroutine for NativeTask {
     fn receive_may_allocate(&self) -> bool {
         match self {
             NativeTask::ApplyUnary(task) => {
-                <NativeApplyUnary as Coroutine>::receive_may_allocate(task)
+                <NativeApplyUnary<Pointer> as Coroutine>::receive_may_allocate(task)
             }
             NativeTask::SequenceMap(task) => {
-                <NativeSequenceMap as Coroutine>::receive_may_allocate(task)
+                <NativeSequenceMap<Pointer> as Coroutine>::receive_may_allocate(task)
             }
             NativeTask::SequenceFilter(task) => {
-                <NativeSequenceFilter as Coroutine>::receive_may_allocate(task)
+                <NativeSequenceFilter<Pointer> as Coroutine>::receive_may_allocate(task)
             }
             NativeTask::SequenceFilterMap(task) => {
-                <NativeSequenceFilterMap as Coroutine>::receive_may_allocate(task)
+                <NativeSequenceFilterMap<Pointer> as Coroutine>::receive_may_allocate(task)
             }
             NativeTask::SequenceFlatMap(task) => {
-                <NativeSequenceFlatMap as Coroutine>::receive_may_allocate(task)
+                <NativeSequenceFlatMap<Pointer> as Coroutine>::receive_may_allocate(task)
             }
-            NativeTask::UnaryMap(task) => <NativeUnaryMap as Coroutine>::receive_may_allocate(task),
+            NativeTask::UnaryMap(task) => {
+                <NativeUnaryMap<Pointer> as Coroutine>::receive_may_allocate(task)
+            }
             NativeTask::UnaryFilter(task) => {
-                <NativeUnaryFilter as Coroutine>::receive_may_allocate(task)
+                <NativeUnaryFilter<Pointer> as Coroutine>::receive_may_allocate(task)
             }
             NativeTask::UnaryFilterMap(task) => {
-                <NativeUnaryFilterMap as Coroutine>::receive_may_allocate(task)
+                <NativeUnaryFilterMap<Pointer> as Coroutine>::receive_may_allocate(task)
             }
             NativeTask::UnaryFlatMap(task) => {
-                <NativeUnaryFlatMap as Coroutine>::receive_may_allocate(task)
+                <NativeUnaryFlatMap<Pointer> as Coroutine>::receive_may_allocate(task)
             }
-            NativeTask::Fold(task) => <NativeFold as Coroutine>::receive_may_allocate(task),
-            NativeTask::DictMap(task) => <NativeDictMap as Coroutine>::receive_may_allocate(task),
+            NativeTask::Fold(task) => {
+                <NativeFold<Pointer> as Coroutine>::receive_may_allocate(task)
+            }
+            NativeTask::DictMap(task) => {
+                <NativeDictMap<Pointer> as Coroutine>::receive_may_allocate(task)
+            }
             NativeTask::DictTraverse(task) => {
-                <NativeDictTraverse as Coroutine>::receive_may_allocate(task)
+                <NativeDictTraverse<Pointer> as Coroutine>::receive_may_allocate(task)
             }
-            NativeTask::ArrayEq(task) => <NativeArrayEq as Coroutine>::receive_may_allocate(task),
-            NativeTask::Sum(task) => <NativeSum as Coroutine>::receive_may_allocate(task),
-            NativeTask::Mean(task) => <NativeMean as Coroutine>::receive_may_allocate(task),
+            NativeTask::ArrayEq(task) => {
+                <NativeArrayEq<Pointer> as Coroutine>::receive_may_allocate(task)
+            }
+            NativeTask::Sum(task) => <NativeSum<Pointer> as Coroutine>::receive_may_allocate(task),
+            NativeTask::Mean(task) => {
+                <NativeMean<Pointer> as Coroutine>::receive_may_allocate(task)
+            }
         }
     }
 }
@@ -410,14 +623,14 @@ pub(crate) trait Coroutine {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct NativeApplyUnary {
-    pub func: Pointer,
+pub struct NativeApplyUnary<P> {
+    pub func: P,
     pub func_type: Type,
-    pub arg: Pointer,
+    pub arg: P,
     pub arg_type: Type,
 }
 
-impl Collection for NativeApplyUnary {
+impl Collection for NativeApplyUnary<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -427,7 +640,7 @@ impl Collection for NativeApplyUnary {
     }
 }
 
-impl Coroutine for NativeApplyUnary {
+impl Coroutine for NativeApplyUnary<Pointer> {
     fn enter<'scope>(
         &mut self,
         _scope: &mut RootScope<'_, 'scope>,
@@ -455,18 +668,18 @@ impl Coroutine for NativeApplyUnary {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeSequenceMap {
-    pub func: Pointer,
+pub(crate) struct NativeSequenceMap<P> {
+    pub func: P,
     pub func_type: Type,
     pub elem_type: Type,
-    pub values: ListItems,
+    pub values: ListItems<P>,
     pub shape: NativeSequenceShape,
     pub children: Vec<FrameId>,
-    pub output: Vec<Option<Pointer>>,
+    pub output: Vec<Option<P>>,
     pub remaining: usize,
 }
 
-impl Collection for NativeSequenceMap {
+impl Collection for NativeSequenceMap<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -476,7 +689,7 @@ impl Collection for NativeSequenceMap {
         rewrite_options(&mut self.output, map)
     }
 }
-impl Coroutine for NativeSequenceMap {
+impl Coroutine for NativeSequenceMap<Pointer> {
     fn enter<'scope>(
         &mut self,
         scope: &mut RootScope<'_, 'scope>,
@@ -541,7 +754,7 @@ impl Coroutine for NativeSequenceMap {
     }
 }
 
-impl NativeSequenceMap {
+impl NativeSequenceMap<Pointer> {
     fn child_spec<'scope>(
         &self,
         scope: &mut RootScope<'_, 'scope>,
@@ -559,18 +772,18 @@ impl NativeSequenceMap {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeSequenceFilter {
-    pub func: Pointer,
+pub(crate) struct NativeSequenceFilter<P> {
+    pub func: P,
     pub func_type: Type,
     pub elem_type: Type,
-    pub values: ListItems,
+    pub values: ListItems<P>,
     pub shape: NativeSequenceShape,
     pub children: Vec<FrameId>,
     pub keep: Vec<Option<bool>>,
     pub remaining: usize,
 }
 
-impl Collection for NativeSequenceFilter {
+impl Collection for NativeSequenceFilter<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -581,7 +794,7 @@ impl Collection for NativeSequenceFilter {
     }
 }
 
-impl Coroutine for NativeSequenceFilter {
+impl Coroutine for NativeSequenceFilter<Pointer> {
     fn enter<'scope>(
         &mut self,
         scope: &mut RootScope<'_, 'scope>,
@@ -652,7 +865,7 @@ impl Coroutine for NativeSequenceFilter {
     }
 }
 
-impl NativeSequenceFilter {
+impl NativeSequenceFilter<Pointer> {
     fn child_spec<'scope>(
         &self,
         scope: &mut RootScope<'_, 'scope>,
@@ -670,18 +883,18 @@ impl NativeSequenceFilter {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeSequenceFilterMap {
-    pub func: Pointer,
+pub(crate) struct NativeSequenceFilterMap<P> {
+    pub func: P,
     pub func_type: Type,
     pub elem_type: Type,
-    pub values: ListItems,
+    pub values: ListItems<P>,
     pub shape: NativeSequenceShape,
     pub children: Vec<FrameId>,
-    pub output: Vec<Option<Option<Pointer>>>,
+    pub output: Vec<Option<Option<P>>>,
     pub remaining: usize,
 }
 
-impl Collection for NativeSequenceFilterMap {
+impl Collection for NativeSequenceFilterMap<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -692,7 +905,7 @@ impl Collection for NativeSequenceFilterMap {
     }
 }
 
-impl Coroutine for NativeSequenceFilterMap {
+impl Coroutine for NativeSequenceFilterMap<Pointer> {
     fn enter<'scope>(
         &mut self,
         scope: &mut RootScope<'_, 'scope>,
@@ -760,7 +973,7 @@ impl Coroutine for NativeSequenceFilterMap {
     }
 }
 
-impl NativeSequenceFilterMap {
+impl NativeSequenceFilterMap<Pointer> {
     fn child_spec<'scope>(
         &self,
         scope: &mut RootScope<'_, 'scope>,
@@ -778,18 +991,18 @@ impl NativeSequenceFilterMap {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeSequenceFlatMap {
-    pub func: Pointer,
+pub(crate) struct NativeSequenceFlatMap<P> {
+    pub func: P,
     pub func_type: Type,
     pub elem_type: Type,
-    pub values: ListItems,
+    pub values: ListItems<P>,
     pub shape: NativeSequenceShape,
     pub children: Vec<FrameId>,
-    pub output: Vec<Option<Vec<Pointer>>>,
+    pub output: Vec<Option<Vec<P>>>,
     pub remaining: usize,
 }
 
-impl Collection for NativeSequenceFlatMap {
+impl Collection for NativeSequenceFlatMap<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -800,7 +1013,7 @@ impl Collection for NativeSequenceFlatMap {
     }
 }
 
-impl Coroutine for NativeSequenceFlatMap {
+impl Coroutine for NativeSequenceFlatMap<Pointer> {
     fn enter<'scope>(
         &mut self,
         scope: &mut RootScope<'_, 'scope>,
@@ -873,7 +1086,7 @@ impl Coroutine for NativeSequenceFlatMap {
     }
 }
 
-impl NativeSequenceFlatMap {
+impl NativeSequenceFlatMap<Pointer> {
     fn child_spec<'scope>(
         &self,
         scope: &mut RootScope<'_, 'scope>,
@@ -891,15 +1104,15 @@ impl NativeSequenceFlatMap {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeUnaryMap {
-    pub func: Pointer,
+pub(crate) struct NativeUnaryMap<P> {
+    pub func: P,
     pub func_type: Type,
     pub elem_type: Type,
-    pub value: Pointer,
+    pub value: P,
     pub shape: NativeUnaryShape,
 }
 
-impl Collection for NativeUnaryMap {
+impl Collection for NativeUnaryMap<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -909,7 +1122,7 @@ impl Collection for NativeUnaryMap {
     }
 }
 
-impl Coroutine for NativeUnaryMap {
+impl Coroutine for NativeUnaryMap<Pointer> {
     fn enter<'scope>(
         &mut self,
         _scope: &mut RootScope<'_, 'scope>,
@@ -949,15 +1162,15 @@ impl Coroutine for NativeUnaryMap {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeUnaryFilter {
-    pub func: Pointer,
+pub(crate) struct NativeUnaryFilter<P> {
+    pub func: P,
     pub func_type: Type,
     pub elem_type: Type,
-    pub value: Pointer,
-    pub original: Pointer,
+    pub value: P,
+    pub original: P,
 }
 
-impl Collection for NativeUnaryFilter {
+impl Collection for NativeUnaryFilter<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -968,7 +1181,7 @@ impl Collection for NativeUnaryFilter {
     }
 }
 
-impl Coroutine for NativeUnaryFilter {
+impl Coroutine for NativeUnaryFilter<Pointer> {
     fn enter<'scope>(
         &mut self,
         _scope: &mut RootScope<'_, 'scope>,
@@ -1002,14 +1215,14 @@ impl Coroutine for NativeUnaryFilter {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct NativeUnaryFilterMap {
-    pub func: Pointer,
+pub struct NativeUnaryFilterMap<P> {
+    pub func: P,
     pub func_type: Type,
     pub elem_type: Type,
-    pub value: Pointer,
+    pub value: P,
 }
 
-impl Collection for NativeUnaryFilterMap {
+impl Collection for NativeUnaryFilterMap<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -1019,7 +1232,7 @@ impl Collection for NativeUnaryFilterMap {
     }
 }
 
-impl Coroutine for NativeUnaryFilterMap {
+impl Coroutine for NativeUnaryFilterMap<Pointer> {
     fn enter<'scope>(
         &mut self,
         _scope: &mut RootScope<'_, 'scope>,
@@ -1047,15 +1260,15 @@ impl Coroutine for NativeUnaryFilterMap {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeUnaryFlatMap {
-    pub func: Pointer,
+pub(crate) struct NativeUnaryFlatMap<P> {
+    pub func: P,
     pub func_type: Type,
     pub elem_type: Type,
-    pub value: Pointer,
+    pub value: P,
     pub shape: NativeUnaryShape,
 }
 
-impl Collection for NativeUnaryFlatMap {
+impl Collection for NativeUnaryFlatMap<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -1065,7 +1278,7 @@ impl Collection for NativeUnaryFlatMap {
     }
 }
 
-impl Coroutine for NativeUnaryFlatMap {
+impl Coroutine for NativeUnaryFlatMap<Pointer> {
     fn enter<'scope>(
         &mut self,
         _scope: &mut RootScope<'_, 'scope>,
@@ -1110,20 +1323,20 @@ pub(crate) enum NativeFoldState {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeFold {
-    pub func: Pointer,
+pub(crate) struct NativeFold<P> {
+    pub func: P,
     pub func_type: Type,
     pub acc_type: Type,
     pub elem_type: Type,
-    pub values: ListItems,
-    pub acc: Pointer,
+    pub values: ListItems<P>,
+    pub acc: P,
     pub order: NativeFoldOrder,
     pub state: NativeFoldState,
     pub next_index: usize,
-    pub step: Option<Pointer>,
+    pub step: Option<P>,
 }
 
-impl Collection for NativeFold {
+impl Collection for NativeFold<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -1135,7 +1348,7 @@ impl Collection for NativeFold {
     }
 }
 
-impl Coroutine for NativeFold {
+impl Coroutine for NativeFold<Pointer> {
     fn enter<'scope>(
         &mut self,
         scope: &mut RootScope<'_, 'scope>,
@@ -1179,7 +1392,7 @@ impl Coroutine for NativeFold {
     }
 }
 
-impl NativeFold {
+impl NativeFold<Pointer> {
     fn apply_first<'scope>(
         &self,
         scope: &mut RootScope<'_, 'scope>,
@@ -1233,17 +1446,17 @@ impl NativeFold {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct NativeDictMap {
-    pub func: Pointer,
+pub struct NativeDictMap<P> {
+    pub func: P,
     pub func_type: Type,
     pub elem_type: Type,
-    pub entries: Vec<(Symbol, Pointer)>,
+    pub entries: Vec<(Symbol, P)>,
     pub children: Vec<FrameId>,
-    pub output: BTreeMap<Symbol, Pointer>,
+    pub output: BTreeMap<Symbol, P>,
     pub remaining: usize,
 }
 
-impl Collection for NativeDictMap {
+impl Collection for NativeDictMap<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -1254,7 +1467,7 @@ impl Collection for NativeDictMap {
     }
 }
 
-impl Coroutine for NativeDictMap {
+impl Coroutine for NativeDictMap<Pointer> {
     fn enter<'scope>(
         &mut self,
         scope: &mut RootScope<'_, 'scope>,
@@ -1309,7 +1522,7 @@ impl Coroutine for NativeDictMap {
     }
 }
 
-impl NativeDictMap {
+impl NativeDictMap<Pointer> {
     fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
         let (_, value) = self.entries.get(index).ok_or_else(|| {
             EngineError::Internal("native dict map child index out of bounds".into())
@@ -1324,16 +1537,16 @@ impl NativeDictMap {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct NativeDictTraverse {
-    pub func: Pointer,
+pub struct NativeDictTraverse<P> {
+    pub func: P,
     pub func_type: Type,
     pub elem_type: Type,
-    pub entries: Vec<(Symbol, Pointer)>,
+    pub entries: Vec<(Symbol, P)>,
     pub next_index: usize,
-    pub output: BTreeMap<Symbol, Pointer>,
+    pub output: BTreeMap<Symbol, P>,
 }
 
-impl Collection for NativeDictTraverse {
+impl Collection for NativeDictTraverse<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -1344,7 +1557,7 @@ impl Collection for NativeDictTraverse {
     }
 }
 
-impl Coroutine for NativeDictTraverse {
+impl Coroutine for NativeDictTraverse<Pointer> {
     fn enter<'scope>(
         &mut self,
         scope: &mut RootScope<'_, 'scope>,
@@ -1418,17 +1631,17 @@ pub enum NativeArrayEqState {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct NativeArrayEq {
+pub struct NativeArrayEq<P> {
     pub elem_type: Type,
-    pub xs: ListItems,
-    pub ys: ListItems,
+    pub xs: ListItems<P>,
+    pub ys: ListItems<P>,
     pub state: NativeArrayEqState,
     pub next_index: usize,
-    pub step: Option<Pointer>,
+    pub step: Option<P>,
     pub negate: bool,
 }
 
-impl Collection for NativeArrayEq {
+impl Collection for NativeArrayEq<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -1439,7 +1652,7 @@ impl Collection for NativeArrayEq {
     }
 }
 
-impl Coroutine for NativeArrayEq {
+impl Coroutine for NativeArrayEq<Pointer> {
     fn enter<'scope>(
         &mut self,
         scope: &mut RootScope<'_, 'scope>,
@@ -1492,7 +1705,7 @@ impl Coroutine for NativeArrayEq {
     }
 }
 
-impl NativeArrayEq {
+impl NativeArrayEq<Pointer> {
     fn apply_first<'scope>(
         &self,
         scope: &mut RootScope<'_, 'scope>,
@@ -1538,17 +1751,17 @@ impl NativeArrayEq {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct NativeSum {
+pub struct NativeSum<P> {
     pub elem_type: Type,
-    pub values: ListItems,
-    pub acc: Option<Pointer>,
-    pub plus: Option<Pointer>,
+    pub values: ListItems<P>,
+    pub acc: Option<P>,
+    pub plus: Option<P>,
     pub state: NativeFoldState,
     pub next_index: usize,
-    pub step: Option<Pointer>,
+    pub step: Option<P>,
 }
 
-impl Collection for NativeSum {
+impl Collection for NativeSum<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -1560,7 +1773,7 @@ impl Collection for NativeSum {
     }
 }
 
-impl Coroutine for NativeSum {
+impl Coroutine for NativeSum<Pointer> {
     fn enter<'scope>(
         &mut self,
         scope: &mut RootScope<'_, 'scope>,
@@ -1619,7 +1832,7 @@ impl Coroutine for NativeSum {
     }
 }
 
-impl NativeSum {
+impl NativeSum<Pointer> {
     fn apply_first_may_allocate<'scope>(
         &mut self,
         scope: &mut RootScope<'_, 'scope>,
@@ -1672,18 +1885,18 @@ pub enum NativeMeanState {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct NativeMean {
+pub struct NativeMean<P> {
     pub elem_type: Type,
-    pub values: ListItems,
+    pub values: ListItems<P>,
     pub len: usize,
-    pub acc: Option<Pointer>,
+    pub acc: Option<P>,
     pub state: NativeMeanState,
     pub next_index: usize,
-    pub step: Option<Pointer>,
-    pub len_value: Option<Pointer>,
+    pub step: Option<P>,
+    pub len_value: Option<P>,
 }
 
-impl Collection for NativeMean {
+impl Collection for NativeMean<Pointer> {
     fn map_pointers<E>(
         &mut self,
         map: &mut impl FnMut(Pointer) -> Result<Pointer, E>,
@@ -1695,7 +1908,7 @@ impl Collection for NativeMean {
     }
 }
 
-impl Coroutine for NativeMean {
+impl Coroutine for NativeMean<Pointer> {
     fn enter<'scope>(
         &mut self,
         scope: &mut RootScope<'_, 'scope>,
@@ -1758,7 +1971,7 @@ impl Coroutine for NativeMean {
     }
 }
 
-impl NativeMean {
+impl NativeMean<Pointer> {
     fn apply_plus_first<'scope>(
         &self,
         scope: &mut RootScope<'_, 'scope>,
@@ -1948,7 +2161,7 @@ fn len_value_for_native_type<'scope>(
 
 fn refresh_native_frame_from_roots(
     heap: &HeapState,
-    frame: &mut FrNativeCall,
+    frame: &mut FrNativeCall<Pointer>,
     originals: &[Pointer],
     roots: &TempRoots,
     start: usize,

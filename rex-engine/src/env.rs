@@ -5,7 +5,7 @@ use rex_ast::Symbol;
 
 use crate::EngineError;
 use crate::memory::{
-    heap::{Handle, HeapState, Pointer},
+    heap::{Handle, HeapState, PersistentPtr, PersistentRootStore, Pointer, RootScope},
     traits::Collection,
 };
 
@@ -91,6 +91,81 @@ impl Collection for Environment {
 impl Default for Environment {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Evaluator-owned environment whose bindings remain valid while the heap is
+/// unlocked. Heap closures continue to use `Environment`; only evaluator
+/// frames use this persistent form.
+#[derive(Debug, PartialEq)]
+struct PersistentEnvEntry {
+    parent: Option<PersistentEnvironment>,
+    bindings: BTreeMap<Symbol, PersistentPtr>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PersistentEnvironment(Arc<PersistentEnvEntry>);
+
+impl PersistentEnvironment {
+    pub(crate) fn persist<'heap, 'scope>(
+        env: Environment,
+        roots: &mut PersistentRootStore,
+        scope: &mut RootScope<'heap, 'scope>,
+    ) -> Result<Self, EngineError> {
+        let mut entries = Vec::new();
+        let mut current = Some(&env);
+        while let Some(entry) = current {
+            let mut bindings = BTreeMap::new();
+            for (name, pointer) in &entry.0.bindings {
+                let rooted = scope.root(*pointer);
+                bindings.insert(name.clone(), roots.insert(scope, rooted)?);
+            }
+            entries.push(bindings);
+            current = entry.0.parent.as_ref();
+        }
+
+        let mut rebuilt = None;
+        for bindings in entries.into_iter().rev() {
+            rebuilt = Some(PersistentEnvironment(Arc::new(PersistentEnvEntry {
+                parent: rebuilt,
+                bindings,
+            })));
+        }
+        Ok(rebuilt.unwrap_or_else(Self::new))
+    }
+
+    pub(crate) fn resolve<'heap, 'scope>(
+        self,
+        roots: &PersistentRootStore,
+        scope: &mut RootScope<'heap, 'scope>,
+    ) -> Result<Environment, EngineError> {
+        let mut entries = Vec::new();
+        let mut current = Some(&self);
+        while let Some(entry) = current {
+            let mut bindings = BTreeMap::new();
+            for (name, value) in &entry.0.bindings {
+                let rooted = roots.resolve(scope, value)?;
+                bindings.insert(name.clone(), scope.pointer(rooted));
+            }
+            entries.push(bindings);
+            current = entry.0.parent.as_ref();
+        }
+
+        let mut rebuilt = None;
+        for bindings in entries.into_iter().rev() {
+            rebuilt = Some(Environment(Arc::new(EnvEntry {
+                parent: rebuilt,
+                bindings,
+            })));
+        }
+        Ok(rebuilt.unwrap_or_default())
+    }
+
+    fn new() -> Self {
+        Self(Arc::new(PersistentEnvEntry {
+            parent: None,
+            bindings: BTreeMap::new(),
+        }))
     }
 }
 

@@ -188,8 +188,8 @@ where
         if !typ.ftv().is_empty() {
             return None;
         }
-        let cache = self.runtime.typeclass_cache.lock().ok()?;
-        cache.get(&(name.clone(), typ.clone())).cloned()
+        let cache = self.runtime.cycle_typeclass_cache.lock().ok()?;
+        cache.as_ref()?.get(&(name.clone(), typ.clone())).copied()
     }
 
     pub(crate) fn resolve_class_method_plan<'scope>(

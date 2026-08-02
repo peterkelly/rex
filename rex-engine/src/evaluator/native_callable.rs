@@ -34,7 +34,7 @@ pub(crate) type SchedulerNativeCallable<State> = Arc<
 
 pub(crate) enum SchedulerNativeResult<'scope> {
     Ready(RootedPtr<'scope>),
-    Task(NativeTask),
+    Task(NativeTask<Pointer>),
 }
 
 #[derive(Clone)]

@@ -23,7 +23,7 @@ use crate::{
     },
     handlers::RexDefault,
     memory::{
-        heap::{Handle, Heap, Pointer, RootScope, RootedPtr},
+        heap::{Handle, Heap, RootScope, RootedPtr},
         traits::IntoRex,
     },
     modules::{
@@ -51,7 +51,7 @@ use rex_typesystem::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 pub struct Builder<State = ()>
@@ -88,7 +88,6 @@ where
             runtime: RuntimeRegistry {
                 natives: NativeRegistry::<State>::default(),
                 typeclasses: TypeclassRegistry::default(),
-                typeclass_cache: Arc::new(Mutex::new(BTreeMap::new())),
             },
             module_loader: ModuleLoaderState::new(Vec::new()),
             policy: RuntimePolicy::default(),
@@ -112,7 +111,6 @@ where
             runtime: RuntimeRegistry {
                 natives: NativeRegistry::<State>::default(),
                 typeclasses: TypeclassRegistry::default(),
-                typeclass_cache: Arc::new(Mutex::new(BTreeMap::new())),
             },
             module_loader: ModuleLoaderState::new(options.default_imports),
             policy: RuntimePolicy::default(),
@@ -377,7 +375,6 @@ where
 {
     pub(crate) natives: NativeRegistry<State>,
     pub(crate) typeclasses: TypeclassRegistry,
-    pub(crate) typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
 }
 
 pub(crate) struct ModuleLoaderState<State: Clone + Send + Sync + 'static> {
