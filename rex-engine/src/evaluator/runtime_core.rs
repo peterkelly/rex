@@ -27,10 +27,10 @@ where
     pub(crate) fn native_callable(
         &self,
         id: NativeId,
-    ) -> Result<NativeCallable<State>, EngineError> {
+    ) -> Result<&NativeCallable<State>, EngineError> {
         self.natives
             .by_id(id)
-            .map(|imp| imp.func.clone())
+            .map(|imp| &imp.func)
             .ok_or_else(|| EngineError::Internal(format!("unknown native id: {id}")))
     }
 }

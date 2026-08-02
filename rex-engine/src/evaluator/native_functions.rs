@@ -30,16 +30,13 @@ struct NativeChildSpec<'scope> {
     env: ScopedEnvironment<'scope>,
 }
 
-fn native_step_to_control<'scope, State>(
+fn native_step_to_control<'scope>(
     scope: &mut RootScope<'_, 'scope>,
     frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     frame_id: FrameId,
     mut frame: FrNativeCall<RootedPtr<'scope>>,
     step: NativeStep<'scope>,
-) -> Result<EvalControl<'scope, State>, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
+) -> Result<EvalControl<'scope>, EngineError> {
     match step {
         NativeStep::Wait => {
             frames.replace(frame_id, Frame::NativeCall(frame))?;
@@ -82,15 +79,12 @@ where
     }
 }
 
-pub(crate) fn eval_native_enter<'scope, State>(
+pub(crate) fn eval_native_enter<'scope>(
     scope: &mut RootScope<'_, 'scope>,
     frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     frame_id: FrameId,
     mut frame: FrNativeCall<RootedPtr<'scope>>,
-) -> Result<EvalControl<'scope, State>, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
+) -> Result<EvalControl<'scope>, EngineError> {
     if frame.state != FrNativeCallState::Enter {
         return unexpected_child_result("native call");
     }
@@ -98,17 +92,14 @@ where
     native_step_to_control(scope, frames, frame_id, frame, step)
 }
 
-pub(crate) fn eval_native_receive<'scope, State>(
+pub(crate) fn eval_native_receive<'scope>(
     scope: &mut RootScope<'_, 'scope>,
     frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     frame_id: FrameId,
     mut frame: FrNativeCall<RootedPtr<'scope>>,
     child: FrameId,
     value: RootedPtr<'scope>,
-) -> Result<EvalControl<'scope, State>, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
+) -> Result<EvalControl<'scope>, EngineError> {
     if frame.state != FrNativeCallState::Waiting {
         return unexpected_child_result("native call");
     }

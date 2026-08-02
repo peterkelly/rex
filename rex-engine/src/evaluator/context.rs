@@ -9,14 +9,13 @@ use rex_typesystem::{
 };
 
 use crate::{
-    builder::registry::NativeImpl,
+    builder::registry::{NativeId, NativeImpl},
     env::{RootedEnvironment, ScopedEnvironment},
     error::EngineError,
     evaluator::{
         CallSite, application_result_type, eval::eval_typed_expr, runtime_core::RuntimeCore,
     },
     memory::heap::{Handle, Heap, RootScope, RootedPtr},
-    stack::FrameId,
     util::{impl_matches_type, is_function_type},
 };
 
@@ -78,10 +77,6 @@ where
             runtime: runtime.clone(),
             call_site,
         }
-    }
-
-    pub(crate) fn new_with_parent(runtime: &RuntimeCore<State>, parent: FrameId) -> Self {
-        Self::new_at_call_site(runtime, CallSite::child(parent))
     }
 
     pub fn state(&self) -> &State {
@@ -158,14 +153,18 @@ where
 
         eval_typed_expr(self.runtime.clone(), heap, env, Arc::new(expr), Vec::new()).await
     }
+}
 
+impl<State> RuntimeCore<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
     fn resolve_typeclass_method_impl(
         &self,
         name: &Symbol,
         call_type: &Type,
-    ) -> Result<(RootedEnvironment, Arc<TypedExpr>, Subst), EngineError> {
+    ) -> Result<(&RootedEnvironment, &Arc<TypedExpr>, Subst), EngineError> {
         let info = self
-            .runtime
             .type_system
             .class_methods
             .get(name)
@@ -185,9 +184,7 @@ where
             return Err(EngineError::AmbiguousOverload { name: name.clone() });
         }
 
-        self.runtime
-            .typeclasses
-            .resolve(&info.class, name, &param_type)
+        self.typeclasses.resolve(&info.class, name, &param_type)
     }
 
     pub(crate) fn resolve_class_method_plan<'scope>(
@@ -216,28 +213,26 @@ where
         })
     }
 
-    pub(crate) fn resolve_native_impl(
+    pub(crate) fn resolve_native_parts(
         &self,
         name: &str,
         typ: &Type,
-    ) -> Result<NativeImpl<State>, EngineError> {
+    ) -> Result<(NativeId, Symbol, usize), EngineError> {
         let sym_name = Symbol::intern(name);
         let impls = self
-            .runtime
             .natives
             .get(&sym_name)
             .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
-        let matches: Vec<NativeImpl<State>> = impls
+        let matches: Vec<&NativeImpl<State>> = impls
             .iter()
             .filter(|imp| impl_matches_type(imp, typ))
-            .cloned()
             .collect();
         match matches.len() {
             0 => Err(EngineError::MissingImpl {
                 name: sym_name.clone(),
                 typ: typ.to_string(),
             }),
-            1 => Ok(matches[0].clone()),
+            1 => Ok(matches[0].runtime_parts()),
             _ => Err(EngineError::AmbiguousImpl {
                 name: sym_name,
                 typ: typ.to_string(),
@@ -253,14 +248,12 @@ where
     ) -> Result<RootedPtr<'scope>, EngineError> {
         let sym_name = Symbol::intern(name);
         let impls = self
-            .runtime
             .natives
             .get(&sym_name)
             .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
-        let matches: Vec<NativeImpl<State>> = impls
+        let matches: Vec<&NativeImpl<State>> = impls
             .iter()
             .filter(|imp| impl_matches_type(imp, typ))
-            .cloned()
             .collect();
         match matches.len() {
             0 => Err(EngineError::MissingImpl {
@@ -268,7 +261,7 @@ where
                 typ: typ.to_string(),
             }),
             1 => {
-                let imp = matches[0].clone();
+                let imp = matches[0];
                 let (native_id, name, arity) = imp.runtime_parts();
                 let root = scope.alloc_root_native(
                     native_id,

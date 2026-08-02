@@ -1,10 +1,7 @@
 use crate::{
+    builder::registry::NativeId,
     error::EngineError,
-    evaluator::{
-        CallSite,
-        context::{Context, InternalCtx},
-        native_functions::NativeTask,
-    },
+    evaluator::{CallSite, context::Context, native_functions::NativeTask},
     handlers::{NativeCallRequest, NativeHandleFuture},
     memory::heap::{Handle, RootScope, RootedPtr},
 };
@@ -20,9 +17,8 @@ pub(crate) enum NativeCallScheduling {
     Deferred,
 }
 
-pub(crate) type SchedulerNativeCallable<State> = Arc<
+pub(crate) type SchedulerNativeCallable = Arc<
     dyn for<'a, 'heap, 'scope> Fn(
-            InternalCtx<State>,
             &'a mut RootScope<'heap, 'scope>,
             Type,
             &'a [RootedPtr<'scope>],
@@ -43,7 +39,7 @@ pub(crate) enum NativeCallable<State: Clone + Send + Sync + 'static> {
         callable: NativeHandleCallable<State>,
         scheduling: NativeCallScheduling,
     },
-    Scheduler(SchedulerNativeCallable<State>),
+    Scheduler(SchedulerNativeCallable),
 }
 
 impl<State: Clone + Send + Sync + 'static> PartialEq for NativeCallable<State> {
@@ -66,16 +62,14 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
 impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
     pub(crate) fn call_at_site<'scope>(
         &self,
+        native_id: NativeId,
         typ: Type,
         args: &[RootedPtr<'scope>],
         call_site: CallSite,
-    ) -> Result<NativeCallRequest<'scope, State>, EngineError> {
+    ) -> Result<NativeCallRequest<'scope>, EngineError> {
         match self {
-            NativeCallable::Host {
-                callable,
-                scheduling,
-            } => Ok(NativeCallRequest::new(
-                Arc::clone(callable),
+            NativeCallable::Host { scheduling, .. } => Ok(NativeCallRequest::new(
+                native_id,
                 *scheduling,
                 call_site,
                 typ,

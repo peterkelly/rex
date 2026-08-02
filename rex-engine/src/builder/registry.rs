@@ -123,12 +123,12 @@ impl TypeclassRegistry {
         Ok(())
     }
 
-    pub(crate) fn resolve(
-        &self,
+    pub(crate) fn resolve<'a>(
+        &'a self,
         class: &Symbol,
         method: &Symbol,
         param_type: &Type,
-    ) -> Result<(RootedEnvironment, Arc<TypedExpr>, Subst), EngineError> {
+    ) -> Result<(&'a RootedEnvironment, &'a Arc<TypedExpr>, Subst), EngineError> {
         let instances =
             self.entries
                 .get(class)
@@ -157,7 +157,7 @@ impl TypeclassRegistry {
                             class: class.clone(),
                             typ: param_type.to_string(),
                         })?;
-                Ok((inst.def_env.clone(), typed.clone(), s))
+                Ok((&inst.def_env, typed, s))
             }
             _ => Err(EngineError::AmbiguousTypeclassImpl {
                 class: class.clone(),

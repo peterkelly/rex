@@ -87,10 +87,34 @@ environments have been split into heap-internal, scoped-rooted, persistent,
 and handle-rooted representations, so the collector is solely responsible for
 rewriting raw edges.
 
-The remaining transition starts at Step 8: audit the synchronous cycle for
-hidden heap re-entry through `Heap`, locking `Handle` operations, destructors,
-or host calls. Stress validation and final invariant documentation follow in
-Steps 9 and 10.
+The Step 8 audit has separated the two scheduling domains. `EvalScheduler`
+contains only rooted evaluator work and a plain queue limit, so it is safe to
+resolve, execute, and persist while the heap is locked. `HostScheduler` owns
+queued host calls, public handles, native futures, async permits, and the
+embedder-supplied parallelism controller; it exists only in the outer async
+coordinator. Queue limits are sampled from the controller before entering a
+locked cycle, and an adversarial test verifies that the callback observes an
+unlocked heap.
+
+The synchronous call graph no longer constructs an `InternalCtx`, clones a
+host callable, or retains a typeclass environment containing handles. Native
+and typeclass registries are borrowed under the cycle, host requests contain a
+stable native identifier plus rooted arguments, and scheduler-native callbacks
+receive only `RootScope`, types, and rooted arguments. Completed host handles
+are borrowed while the cycle roots them, and host-call arguments are promoted
+only after the new persistent evaluator state has been built. Handles, host
+futures, permits, and callable owners therefore cannot be destroyed while the
+heap mutex is held.
+
+Public heap allocation and value-view conversions were audited at the same
+boundary. Composite inputs are resolved and rooted under one guard, allocation
+results are registered before that guard is released, and composite value
+children are converted to stable root identifiers before public `Handle`
+owners are constructed outside the lock. The old internal conversions that
+carried raw pointers between separate lock acquisitions have been removed.
+
+The remaining transition starts at Step 9: stress and validate the completed
+boundary. Final invariant documentation follows in Step 10.
 
 ## Step 1: Add deterministic concurrency regressions
 

@@ -17,6 +17,7 @@ use crate::{
 };
 
 use super::{
+    handle_promotion::with_promotable_root_scope,
     lists::{
         ListElement, ListItemsSeed, ListRootElement, ListRootedItems, collect_list_u8,
         format_list_debug, format_list_display, list_cells_eq_inner, list_elements_from_pointer,
@@ -825,6 +826,16 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
         Ok(self.root(pointer))
     }
 
+    pub(crate) fn root_handles(
+        &mut self,
+        handles: &[Handle],
+    ) -> Result<Vec<RootedPtr<'scope>>, EngineError> {
+        handles
+            .iter()
+            .map(|handle| self.root_handle(handle))
+            .collect()
+    }
+
     pub(crate) fn persistent_root_store(&mut self) -> Result<PersistentRootStore, EngineError> {
         self.heap.persistent_root_store()
     }
@@ -1630,6 +1641,94 @@ pub enum Value {
     Overloaded,
 }
 
+/// A public value view whose child references are registered roots but have
+/// not yet been wrapped in handle owners.
+///
+/// This representation can safely leave the locked heap operation: dropping a
+/// `RootId` does not lock, while constructing the corresponding `Handle`
+/// values only happens after the mutex guard has been released.
+enum ValueSeed {
+    Bool(bool),
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
+    String(String),
+    Uuid(Uuid),
+    DateTime(DateTime<Utc>),
+    Tuple(Vec<RootId>),
+    Empty,
+    Cons(RootId, RootId),
+    ListSlice {
+        start: usize,
+        end: usize,
+        elements: RootId,
+    },
+    Data(Vec<RootId>),
+    BinaryData(Vec<u8>),
+    Dict(Vec<Symbol>, Vec<RootId>),
+    Adt(Symbol, Vec<RootId>),
+    Uninitialized(Symbol),
+    Closure,
+    Native,
+    Overloaded,
+}
+
+impl ValueSeed {
+    fn into_value(self, heap: &Heap) -> Value {
+        match self {
+            Self::Bool(value) => Value::Bool(value),
+            Self::U8(value) => Value::U8(value),
+            Self::U16(value) => Value::U16(value),
+            Self::U32(value) => Value::U32(value),
+            Self::U64(value) => Value::U64(value),
+            Self::I8(value) => Value::I8(value),
+            Self::I16(value) => Value::I16(value),
+            Self::I32(value) => Value::I32(value),
+            Self::I64(value) => Value::I64(value),
+            Self::F32(value) => Value::F32(value),
+            Self::F64(value) => Value::F64(value),
+            Self::String(value) => Value::String(value),
+            Self::Uuid(value) => Value::Uuid(value),
+            Self::DateTime(value) => Value::DateTime(value),
+            Self::Tuple(values) => Value::Tuple(heap.handles_from_root_ids(values)),
+            Self::Empty => Value::Empty,
+            Self::Cons(head, tail) => Value::Cons(
+                handle_from_registered_root(heap, head),
+                handle_from_registered_root(heap, tail),
+            ),
+            Self::ListSlice {
+                start,
+                end,
+                elements,
+            } => Value::ListSlice {
+                start,
+                end,
+                elements: handle_from_registered_root(heap, elements),
+            },
+            Self::Data(values) => Value::Data(heap.handles_from_root_ids(values)),
+            Self::BinaryData(values) => Value::BinaryData(values),
+            Self::Dict(names, roots) => Value::Dict(
+                names
+                    .into_iter()
+                    .zip(heap.handles_from_root_ids(roots))
+                    .collect(),
+            ),
+            Self::Adt(name, args) => Value::Adt(name, heap.handles_from_root_ids(args)),
+            Self::Uninitialized(name) => Value::Uninitialized(name),
+            Self::Closure => Value::Closure,
+            Self::Native => Value::Native,
+            Self::Overloaded => Value::Overloaded,
+        }
+    }
+}
+
 impl Value {
     pub fn value_type_name(&self) -> &'static str {
         match self {
@@ -1705,54 +1804,53 @@ impl Handle {
     }
 
     pub fn value(&self) -> Result<Value, EngineError> {
-        let cell = self
-            .root
-            .heap
-            .with_locked(|heap| Ok(heap.get_cell_from_root(self.root.root_id)?.clone()))?;
-
         let heap = &self.root.heap;
-        Ok(match cell {
-            Cell::Bool(value) => Value::Bool(value),
-            Cell::U8(value) => Value::U8(value),
-            Cell::U16(value) => Value::U16(value),
-            Cell::U32(value) => Value::U32(value),
-            Cell::U64(value) => Value::U64(value),
-            Cell::I8(value) => Value::I8(value),
-            Cell::I16(value) => Value::I16(value),
-            Cell::I32(value) => Value::I32(value),
-            Cell::I64(value) => Value::I64(value),
-            Cell::F32(value) => Value::F32(value),
-            Cell::F64(value) => Value::F64(value),
-            Cell::String(value) => Value::String(value),
-            Cell::Uuid(value) => Value::Uuid(value),
-            Cell::DateTime(value) => Value::DateTime(value),
-            Cell::Tuple(values) => Value::Tuple(heap.handles_from_pointers(&values)?),
-            Cell::Empty => Value::Empty,
-            Cell::Cons(head, tail) => Value::Cons(heap.handle(head)?, heap.handle(tail)?),
-            Cell::ListSlice {
-                start,
-                end,
-                elements,
-            } => Value::ListSlice {
-                start,
-                end,
-                elements: heap.handle(elements)?,
-            },
-            Cell::Data(values) => Value::Data(heap.handles_from_pointers(&values)?),
-            Cell::BinaryData(values) => Value::BinaryData(values),
-            Cell::Dict(values) => {
-                let mut out = BTreeMap::new();
-                for (name, pointer) in values {
-                    out.insert(name, heap.handle(pointer)?);
+        let seed = heap.with_locked(|state| {
+            let cell = state.get_cell_from_root(self.root.root_id)?.clone();
+            Ok(match cell {
+                Cell::Bool(value) => ValueSeed::Bool(value),
+                Cell::U8(value) => ValueSeed::U8(value),
+                Cell::U16(value) => ValueSeed::U16(value),
+                Cell::U32(value) => ValueSeed::U32(value),
+                Cell::U64(value) => ValueSeed::U64(value),
+                Cell::I8(value) => ValueSeed::I8(value),
+                Cell::I16(value) => ValueSeed::I16(value),
+                Cell::I32(value) => ValueSeed::I32(value),
+                Cell::I64(value) => ValueSeed::I64(value),
+                Cell::F32(value) => ValueSeed::F32(value),
+                Cell::F64(value) => ValueSeed::F64(value),
+                Cell::String(value) => ValueSeed::String(value),
+                Cell::Uuid(value) => ValueSeed::Uuid(value),
+                Cell::DateTime(value) => ValueSeed::DateTime(value),
+                Cell::Tuple(values) => ValueSeed::Tuple(state.register_roots(values)?),
+                Cell::Empty => ValueSeed::Empty,
+                Cell::Cons(head, tail) => {
+                    let roots = state.register_roots([head, tail])?;
+                    ValueSeed::Cons(roots[0], roots[1])
                 }
-                Value::Dict(out)
-            }
-            Cell::Adt(name, args) => Value::Adt(name, heap.handles_from_pointers(&args)?),
-            Cell::Uninitialized(name) => Value::Uninitialized(name),
-            Cell::Closure(_) => Value::Closure,
-            Cell::Native(_) => Value::Native,
-            Cell::Overloaded(_) => Value::Overloaded,
-        })
+                Cell::ListSlice {
+                    start,
+                    end,
+                    elements,
+                } => ValueSeed::ListSlice {
+                    start,
+                    end,
+                    elements: state.register_root(elements)?,
+                },
+                Cell::Data(values) => ValueSeed::Data(state.register_roots(values)?),
+                Cell::BinaryData(values) => ValueSeed::BinaryData(values),
+                Cell::Dict(values) => {
+                    let (names, pointers): (Vec<_>, Vec<_>) = values.into_iter().unzip();
+                    ValueSeed::Dict(names, state.register_roots(pointers)?)
+                }
+                Cell::Adt(name, args) => ValueSeed::Adt(name, state.register_roots(args)?),
+                Cell::Uninitialized(name) => ValueSeed::Uninitialized(name),
+                Cell::Closure(_) => ValueSeed::Closure,
+                Cell::Native(_) => ValueSeed::Native,
+                Cell::Overloaded(_) => ValueSeed::Overloaded,
+            })
+        })?;
+        Ok(seed.into_value(heap))
     }
 
     pub fn as_bool(&self) -> Result<bool, EngineError> {
@@ -1907,10 +2005,11 @@ impl Handle {
     }
 
     pub fn value_eq(&self, other: &Handle) -> Result<bool, EngineError> {
-        let self_pointer = self.heap().with_locked(|heap| self.pointer(heap))?;
-        let pointer = other.pointer_for_heap(self.heap())?;
-        self.heap()
-            .with_locked(|heap| pointer_eq(heap, &self_pointer, &pointer))
+        self.heap().with_locked(|heap| {
+            let self_pointer = self.pointer(heap)?;
+            let other_pointer = other.pointer(heap)?;
+            pointer_eq(heap, &self_pointer, &other_pointer)
+        })
     }
 
     fn type_error(heap: &HeapState, root_id: RootId, expected: &'static str) -> EngineError {
@@ -1927,24 +2026,19 @@ impl Handle {
     }
 
     fn pointer(&self, heap: &HeapState) -> Result<InternalPtr, EngineError> {
-        heap.resolve_root(self.root.root_id)
-    }
-
-    fn pointer_for_heap(&self, heap: &Heap) -> Result<InternalPtr, EngineError> {
-        let pointer = self.heap().with_locked(|heap| self.pointer(heap))?;
-        if pointer.heap_id != heap.id {
-            return Err(wrong_heap_pointer(
-                pointer.heap_id,
-                heap.id,
-                pointer.index,
-                pointer.generation,
-            ));
-        }
-        Ok(pointer)
+        let root_id = self.root_id_for_heap(heap.id())?;
+        heap.resolve_root(root_id)
     }
 
     pub(crate) fn ensure_heap(&self, heap: &Heap) -> Result<(), EngineError> {
-        self.pointer_for_heap(heap).map(|_| ())
+        self.root_id_for_heap(heap.id).map(|_| ())
+    }
+
+    fn root_id_for_heap(&self, heap_id: u64) -> Result<RootId, EngineError> {
+        if self.root.root_id.heap_id != heap_id {
+            return Err(wrong_heap_handle(self.root.root_id, heap_id));
+        }
+        Ok(self.root.root_id)
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, HeapState>, EngineError> {
@@ -2011,6 +2105,7 @@ impl Heap {
         Ok(f(&mut state))
     }
 
+    #[cfg(test)]
     fn handle(&self, pointer: InternalPtr) -> Result<Handle, EngineError> {
         let mut state = self
             .state
@@ -2040,234 +2135,168 @@ impl Heap {
         self.with_locked_ok(|heap| heap.collection_count())
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_unlocked_for_test(&self) -> bool {
+        self.state.try_lock().is_ok()
+    }
+
     pub fn alloc_bool(&self, value: bool) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_bool(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_bool(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_u8(&self, value: u8) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_u8(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_u8(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_u16(&self, value: u16) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_u16(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_u16(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_u32(&self, value: u32) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_u32(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_u32(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_u64(&self, value: u64) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_u64(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_u64(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_i8(&self, value: i8) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_i8(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_i8(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_i16(&self, value: i16) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_i16(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_i16(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_i32(&self, value: i32) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_i32(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_i32(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_i64(&self, value: i64) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_i64(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_i64(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_f32(&self, value: f32) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_f32(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_f32(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_f64(&self, value: f64) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_f64(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_f64(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_string(&self, value: String) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_string(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_string(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_uuid(&self, value: Uuid) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_uuid(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_uuid(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_datetime(&self, value: DateTime<Utc>) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_datetime(value)?;
-                Ok::<InternalPtr, EngineError>(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_datetime(value)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub(crate) fn alloc_uninitialized(&self, name: Symbol) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_uninitialized(name)?;
-                Ok(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_uninitialized(name)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_tuple(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
-        let values = self.pointers_from_handles(values)?;
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let values = values.into_iter().map(|x| scope.root(x)).collect();
-                let root = scope.alloc_root_tuple(values)?;
-                Ok(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let values = scope.root_handles(&values)?;
+            let root = scope.alloc_root_tuple(values)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_list(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
-        let pointers = self.pointers_from_handles(values)?;
-        let list = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let pointers = pointers.into_iter().map(|x| scope.root(x)).collect();
-                let root = scope.alloc_root_list(pointers)?;
-                Ok(scope.pointer(root))
-            })
-        })?;
-        self.handle(list)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let values = scope.root_handles(&values)?;
+            let root = scope.alloc_root_list(values)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_binary_list(&self, values: Vec<u8>) -> Result<Handle, EngineError> {
-        let pointer: InternalPtr = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_binary_list(values)?;
-                Ok(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_binary_list(values)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_empty(&self) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_empty()?;
-                Ok(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_empty()?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_cons(&self, head: Handle, tail: Handle) -> Result<Handle, EngineError> {
-        let head = head.pointer_for_heap(self)?;
-        let tail = tail.pointer_for_heap(self)?;
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let head = scope.root(head);
-                let tail = scope.root(tail);
-                let root = scope.alloc_root_cons(head, tail)?;
-                Ok(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let head = scope.root_handle(&head)?;
+            let tail = scope.root_handle(&tail)?;
+            let root = scope.alloc_root_cons(head, tail)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_data(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
-        let values = self.pointers_from_handles(values)?;
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let values = values.into_iter().map(|x| scope.root(x)).collect();
-                let root = scope.alloc_root_data(values)?;
-                Ok(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let values = scope.root_handles(&values)?;
+            let root = scope.alloc_root_data(values)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_binary_data(&self, values: Vec<u8>) -> Result<Handle, EngineError> {
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let root = scope.alloc_root_binary_data(values)?;
-                Ok(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let root = scope.alloc_root_binary_data(values)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_list_slice(
@@ -2276,67 +2305,35 @@ impl Heap {
         end: usize,
         elements: Handle,
     ) -> Result<Handle, EngineError> {
-        let elements = elements.pointer_for_heap(self)?;
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let elements = scope.root(elements);
-                let root = scope.alloc_root_list_slice(start, end, elements)?;
-                Ok(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let elements = scope.root_handle(&elements)?;
+            let root = scope.alloc_root_list_slice(start, end, elements)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_dict(&self, values: BTreeMap<Symbol, Handle>) -> Result<Handle, EngineError> {
-        let mut pointers: BTreeMap<Symbol, InternalPtr> = BTreeMap::new();
-        for (name, handle) in values {
-            pointers.insert(name, handle.pointer_for_heap(self)?);
-        }
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let values =
-                    BTreeMap::from_iter(pointers.into_iter().map(|(k, v)| (k, scope.root(v))));
-                let root = scope.alloc_root_dict(values)?;
-                Ok(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
+        with_promotable_root_scope(self, |scope, promoter| {
+            let values = values
+                .iter()
+                .map(|(name, handle)| Ok((name.clone(), scope.root_handle(handle)?)))
+                .collect::<Result<_, EngineError>>()?;
+            let root = scope.alloc_root_dict(values)?;
+            promoter.promote(scope, root)
+        })
     }
 
     pub fn alloc_adt(&self, name: Symbol, args: Vec<Handle>) -> Result<Handle, EngineError> {
-        let args = self.pointers_from_handles(args)?;
-        let pointer = self.with_locked(|heap| {
-            heap.root_scope(|scope| {
-                let args = args.into_iter().map(|x| scope.root(x)).collect();
-                let root = scope.alloc_root_adt(name, args)?;
-                Ok(scope.pointer(root))
-            })
-        })?;
-        self.handle(pointer)
-    }
-
-    fn pointers_from_handles(&self, values: Vec<Handle>) -> Result<Vec<InternalPtr>, EngineError> {
-        values
-            .iter()
-            .map(|handle| handle.pointer_for_heap(self))
-            .collect()
+        with_promotable_root_scope(self, |scope, promoter| {
+            let args = scope.root_handles(&args)?;
+            let root = scope.alloc_root_adt(name, args)?;
+            promoter.promote(scope, root)
+        })
     }
 
     #[cfg(test)]
     fn clone_cell(&self, pointer: &InternalPtr) -> Result<Cell, EngineError> {
         self.with_locked(|heap| Ok(heap.get_cell_from_pointer(pointer)?.clone()))
-    }
-
-    fn handles_from_pointers(&self, values: &[InternalPtr]) -> Result<Vec<Handle>, EngineError> {
-        let root_ids = {
-            let mut state = self
-                .state
-                .lock()
-                .map_err(|_| EngineError::HeapStatePoisoned)?;
-            state.register_roots(values.iter().copied())?
-        };
-
-        Ok(self.handles_from_root_ids(root_ids))
     }
 
     fn handles_from_root_ids(&self, root_ids: Vec<RootId>) -> Vec<Handle> {
@@ -3246,6 +3243,13 @@ pub(super) fn wrong_heap_pointer(
     EngineError::Internal(format!(
         "heap pointer belongs to different heap (pointer_heap_id={}, heap_id={}, index={}, generation={})",
         pointer_heap_id, heap_id, index, generation
+    ))
+}
+
+fn wrong_heap_handle(root_id: RootId, heap_id: u64) -> EngineError {
+    EngineError::Internal(format!(
+        "heap handle belongs to different heap (handle_heap_id={}, heap_id={}, root_index={}, root_generation={})",
+        root_id.heap_id, heap_id, root_id.index, root_id.generation
     ))
 }
 

@@ -2,6 +2,7 @@ use crate::{
     builder::{
         core::NativeRegistration,
         export::{ExportTarget, HostFnAsync, HostFnSync, NativeFuture},
+        registry::NativeId,
     },
     error::EngineError,
     evaluator::{
@@ -363,27 +364,24 @@ where
 // A short-lived request produced inside evaluator code. Its scope-rooted
 // arguments cannot cross the synchronous cycle boundary; `promote` is the
 // only conversion into the scheduler-owned form below.
-pub(crate) struct NativeCallRequest<'scope, State: Clone + Send + Sync + 'static> {
-    callable: NativeHandleCallable<State>,
+pub(crate) struct NativeCallRequest<'scope> {
+    native_id: NativeId,
     scheduling: NativeCallScheduling,
     call_site: CallSite,
     typ: Type,
     args: Vec<RootedPtr<'scope>>,
 }
 
-impl<'scope, State> NativeCallRequest<'scope, State>
-where
-    State: Clone + Send + Sync + 'static,
-{
+impl<'scope> NativeCallRequest<'scope> {
     pub(crate) fn new(
-        callable: NativeHandleCallable<State>,
+        native_id: NativeId,
         scheduling: NativeCallScheduling,
         call_site: CallSite,
         typ: Type,
         args: Vec<RootedPtr<'scope>>,
     ) -> Self {
         Self {
-            callable,
+            native_id,
             scheduling,
             call_site,
             typ,
@@ -395,9 +393,9 @@ where
         self,
         scope: &mut RootScope<'heap, 'scope>,
         promoter: &HandlePromoter<'_>,
-    ) -> Result<NativeCall<State>, EngineError> {
+    ) -> Result<NativeCall, EngineError> {
         let Self {
-            callable,
+            native_id,
             scheduling,
             call_site,
             typ,
@@ -405,7 +403,7 @@ where
         } = self;
         let args = promoter.promote_all(scope, &args)?;
         Ok(NativeCall {
-            callable,
+            native_id,
             scheduling,
             call_site,
             typ,
@@ -416,26 +414,38 @@ where
 
 // A host call that is safe to queue or suspend because every argument is a
 // persistent heap root.
-pub(crate) struct NativeCall<State: Clone + Send + Sync + 'static> {
-    callable: NativeHandleCallable<State>,
+pub(crate) struct NativeCall {
+    native_id: NativeId,
     scheduling: NativeCallScheduling,
     call_site: CallSite,
     typ: Type,
     args: Vec<Handle>,
 }
 
-impl<State> NativeCall<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
+impl NativeCall {
     pub(crate) fn scheduling(&self) -> NativeCallScheduling {
         self.scheduling
     }
 
-    pub(crate) fn invoke(self, runtime: &RuntimeCore<State>, heap: &Heap) -> NativeHandleFuture {
+    pub(crate) fn invoke<State>(
+        self,
+        runtime: &RuntimeCore<State>,
+        heap: &Heap,
+    ) -> Result<NativeHandleFuture, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
+        let callable = match runtime.native_callable(self.native_id)? {
+            crate::evaluator::native_callable::NativeCallable::Host { callable, .. } => callable,
+            crate::evaluator::native_callable::NativeCallable::Scheduler(_) => {
+                return Err(EngineError::Internal(
+                    "scheduler native queued through host native ABI".into(),
+                ));
+            }
+        };
         let ctx = InternalCtx::new_at_call_site(runtime, self.call_site);
         let wrapped = Context::new(ctx, heap.clone());
-        let future = (self.callable)(wrapped, self.typ, self.args);
+        let future = (callable)(wrapped, self.typ, self.args);
         let result_heap = heap.clone();
         let future = async move {
             let value = future.await?;
@@ -443,10 +453,10 @@ where
             Ok(value)
         }
         .boxed();
-        match self.scheduling {
+        Ok(match self.scheduling {
             NativeCallScheduling::Immediate => future,
             NativeCallScheduling::Deferred => runtime.async_call_policy.prepare(future),
-        }
+        })
     }
 }
 

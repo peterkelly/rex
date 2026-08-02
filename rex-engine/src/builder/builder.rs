@@ -15,7 +15,7 @@ use crate::{
     env::RootedEnvironment,
     error::EngineError,
     evaluator::{
-        context::{Context, InternalCtx},
+        context::Context,
         native_callable::{
             NativeCallScheduling, NativeCallable, NativeHandleCallable, SchedulerNativeCallable,
             SchedulerNativeResult,
@@ -653,7 +653,6 @@ where
     ) -> Result<(), EngineError>
     where
         F: for<'a, 'heap, 'scope> Fn(
-                InternalCtx<State>,
                 &'a mut RootScope<'heap, 'scope>,
                 Type,
                 Vec<RootedPtr<'scope>>,
@@ -666,10 +665,8 @@ where
         validate_native_export_scheme(&scheme, arity)?;
         let name = name.into();
         let handler = Arc::new(handler);
-        let func: SchedulerNativeCallable<State> = Arc::new(move |engine, scope, typ, args| {
-            let handler = Arc::clone(&handler);
-            handler(engine, scope, typ, args.to_vec())
-        });
+        let func: SchedulerNativeCallable =
+            Arc::new(move |scope, typ, args| handler(scope, typ, args.to_vec()));
         let registration = NativeRegistration::scheduler(scheme, arity, func);
         self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
@@ -929,11 +926,7 @@ impl<State: Clone + Send + Sync + 'static> NativeRegistration<State> {
         }
     }
 
-    pub(crate) fn scheduler(
-        scheme: Scheme,
-        arity: usize,
-        func: SchedulerNativeCallable<State>,
-    ) -> Self {
+    pub(crate) fn scheduler(scheme: Scheme, arity: usize, func: SchedulerNativeCallable) -> Self {
         Self {
             scheme,
             arity,

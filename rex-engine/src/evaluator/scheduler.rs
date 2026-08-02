@@ -13,46 +13,43 @@ use std::{
     task::{Context as TaskContext, Poll},
 };
 
-pub(crate) struct EvalScheduler<State: Clone + Send + Sync + 'static, P> {
+pub(crate) struct EvalScheduler<P> {
     ready: VecDeque<EvalWorkItem<P>>,
     deferred_ready: VecDeque<EvalWorkItem<P>>,
+    ready_work_limit: usize,
+}
+
+/// Host-owned scheduling state that never enters a locked evaluator cycle.
+///
+/// Queued calls, running futures, permits, and completed handles can all run
+/// arbitrary destructors. Keeping them here ensures those destructors run only
+/// after the heap mutex has been released.
+pub(crate) struct HostScheduler {
     pending_native: Vec<PendingNative>,
-    immediate_native: VecDeque<QueuedNative<State>>,
-    deferred_native: VecDeque<QueuedNative<State>>,
+    immediate_native: VecDeque<QueuedNative>,
+    deferred_native: VecDeque<QueuedNative>,
     parallelism_controller: Arc<dyn ParallelismController>,
 }
 
-impl<State, P> EvalScheduler<State, P>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub(crate) fn new(
-        root: FrameId,
-        parallelism_controller: Arc<dyn ParallelismController>,
-    ) -> Self {
+impl<P> EvalScheduler<P> {
+    pub(crate) fn new(root: FrameId, ready_work_limit: usize) -> Self {
         let mut ready = VecDeque::new();
         ready.push_front(EvalWorkItem::enter(root));
         Self {
             ready,
             deferred_ready: VecDeque::new(),
-            pending_native: Vec::new(),
-            immediate_native: VecDeque::new(),
-            deferred_native: VecDeque::new(),
-            parallelism_controller,
+            ready_work_limit: ready_work_limit.max(1),
         }
+    }
+
+    pub(crate) fn set_ready_work_limit(&mut self, ready_work_limit: usize) {
+        self.ready_work_limit = ready_work_limit.max(1);
+        self.enforce_ready_limit();
     }
 
     pub(crate) fn schedule_next(&mut self, item: EvalWorkItem<P>) {
         self.ready.push_front(item);
         self.enforce_ready_limit();
-    }
-
-    pub(crate) fn schedule_native(&mut self, frame: FrameId, call: NativeCall<State>) {
-        let queued = QueuedNative::new(frame, call);
-        match queued.call.scheduling() {
-            NativeCallScheduling::Immediate => self.immediate_native.push_back(queued),
-            NativeCallScheduling::Deferred => self.deferred_native.push_back(queued),
-        }
     }
 
     pub(crate) fn pop_next(&mut self) -> Option<EvalWorkItem<P>> {
@@ -64,6 +61,70 @@ where
 
     pub(crate) fn has_ready_work(&self) -> bool {
         !self.ready.is_empty() || !self.deferred_ready.is_empty()
+    }
+
+    fn enforce_ready_limit(&mut self) {
+        // ready_work_limit is only an internal evaluator queue-pressure
+        // control. It does not reserve external compute capacity and should
+        // not be used as backpressure for host jobs; native async permits do
+        // that at the point where host callbacks are actually invoked.
+        let limit = self.ready_work_limit;
+        while self.ready.len() > limit {
+            if let Some(item) = self.ready.pop_back() {
+                self.deferred_ready.push_front(item);
+            }
+        }
+    }
+
+    fn admit_deferred_ready(&mut self) {
+        // This moves already-created Rex frames between internal queues. It
+        // intentionally remains separate from native async admission, which
+        // is where embedders can reserve scarce cluster or executor capacity.
+        let limit = self.ready_work_limit;
+        while self.ready.len() < limit {
+            let Some(item) = self.deferred_ready.pop_front() else {
+                break;
+            };
+            self.ready.push_back(item);
+        }
+    }
+
+    pub(crate) fn map_values<Q, E>(
+        self,
+        map: &mut impl FnMut(P) -> Result<Q, E>,
+    ) -> Result<EvalScheduler<Q>, E> {
+        Ok(EvalScheduler {
+            ready: self
+                .ready
+                .into_iter()
+                .map(|item| item.map_value(map))
+                .collect::<Result<_, _>>()?,
+            deferred_ready: self
+                .deferred_ready
+                .into_iter()
+                .map(|item| item.map_value(map))
+                .collect::<Result<_, _>>()?,
+            ready_work_limit: self.ready_work_limit,
+        })
+    }
+}
+
+impl HostScheduler {
+    pub(crate) fn new(parallelism_controller: Arc<dyn ParallelismController>) -> Self {
+        Self {
+            pending_native: Vec::new(),
+            immediate_native: VecDeque::new(),
+            deferred_native: VecDeque::new(),
+            parallelism_controller,
+        }
+    }
+
+    pub(crate) fn schedule_native(&mut self, frame: FrameId, call: NativeCall) {
+        let queued = QueuedNative::new(frame, call);
+        match queued.call.scheduling() {
+            NativeCallScheduling::Immediate => self.immediate_native.push_back(queued),
+            NativeCallScheduling::Deferred => self.deferred_native.push_back(queued),
+        }
     }
 
     pub(crate) fn has_queued_native_work(&self) -> bool {
@@ -86,32 +147,6 @@ where
         !self.deferred_native.is_empty()
     }
 
-    fn enforce_ready_limit(&mut self) {
-        // ready_work_limit is only an internal evaluator queue-pressure
-        // control. It does not reserve external compute capacity and should
-        // not be used as backpressure for host jobs; native async permits do
-        // that at the point where host callbacks are actually invoked.
-        let limit = self.parallelism_controller.ready_work_limit().max(1);
-        while self.ready.len() > limit {
-            if let Some(item) = self.ready.pop_back() {
-                self.deferred_ready.push_front(item);
-            }
-        }
-    }
-
-    fn admit_deferred_ready(&mut self) {
-        // This moves already-created Rex frames between internal queues. It
-        // intentionally remains separate from native async admission, which
-        // is where embedders can reserve scarce cluster or executor capacity.
-        let limit = self.parallelism_controller.ready_work_limit().max(1);
-        while self.ready.len() < limit {
-            let Some(item) = self.deferred_ready.pop_front() else {
-                break;
-            };
-            self.ready.push_back(item);
-        }
-    }
-
     fn try_acquire_next_native_permit(
         &mut self,
         cx: &mut TaskContext<'_>,
@@ -132,11 +167,14 @@ where
         }
     }
 
-    fn activate_next_immediate_native(
+    fn activate_next_immediate_native<State>(
         &mut self,
         runtime: &RuntimeCore<State>,
         heap: &Heap,
-    ) -> bool {
+    ) -> bool
+    where
+        State: Clone + Send + Sync + 'static,
+    {
         let Some(queued) = self.immediate_native.pop_front() else {
             return false;
         };
@@ -145,11 +183,14 @@ where
         true
     }
 
-    fn activate_next_permitted_deferred_native(
+    fn activate_next_permitted_deferred_native<State>(
         &mut self,
         runtime: &RuntimeCore<State>,
         heap: &Heap,
-    ) -> bool {
+    ) -> bool
+    where
+        State: Clone + Send + Sync + 'static,
+    {
         let Some(next) = self.deferred_native.front() else {
             return false;
         };
@@ -164,12 +205,15 @@ where
         true
     }
 
-    fn admit_available_deferred_native(
+    fn admit_available_deferred_native<State>(
         &mut self,
         cx: &mut TaskContext<'_>,
         runtime: &RuntimeCore<State>,
         heap: &Heap,
-    ) -> Result<bool, EngineError> {
+    ) -> Result<bool, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
         match self.try_acquire_next_native_permit(cx) {
             Poll::Ready(Ok(true)) => {
                 Ok(self.activate_next_permitted_deferred_native(runtime, heap))
@@ -199,28 +243,6 @@ where
         }
         self.pending_native.remove(index).into_completion()
     }
-
-    pub(crate) fn map_values<Q, E>(
-        self,
-        map: &mut impl FnMut(P) -> Result<Q, E>,
-    ) -> Result<EvalScheduler<State, Q>, E> {
-        Ok(EvalScheduler {
-            ready: self
-                .ready
-                .into_iter()
-                .map(|item| item.map_value(map))
-                .collect::<Result<_, _>>()?,
-            deferred_ready: self
-                .deferred_ready
-                .into_iter()
-                .map(|item| item.map_value(map))
-                .collect::<Result<_, _>>()?,
-            pending_native: self.pending_native,
-            immediate_native: self.immediate_native,
-            deferred_native: self.deferred_native,
-            parallelism_controller: self.parallelism_controller,
-        })
-    }
 }
 
 pub(crate) enum NativePoll {
@@ -229,10 +251,10 @@ pub(crate) enum NativePoll {
     Completed { frame: FrameId, handle: Handle },
 }
 
-pub(crate) async fn poll_pending_native<State, P>(
+pub(crate) async fn poll_pending_native<State>(
     runtime: &RuntimeCore<State>,
     heap: &Heap,
-    scheduler: &mut EvalScheduler<State, P>,
+    scheduler: &mut HostScheduler,
     wait: bool,
 ) -> Result<NativePoll, EngineError>
 where
@@ -344,9 +366,9 @@ struct PendingNative {
     _permit: Option<NativeAsyncPermit>,
 }
 
-struct QueuedNative<State: Clone + Send + Sync + 'static> {
+struct QueuedNative {
     frame: FrameId,
-    call: NativeCall<State>,
+    call: NativeCall,
     permit: Option<NativeAsyncPermit>,
 }
 
@@ -390,11 +412,8 @@ impl PendingNative {
     }
 }
 
-impl<State> QueuedNative<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    fn new(frame: FrameId, call: NativeCall<State>) -> Self {
+impl QueuedNative {
+    fn new(frame: FrameId, call: NativeCall) -> Self {
         Self {
             frame,
             call,
@@ -402,11 +421,20 @@ where
         }
     }
 
-    fn activate_immediate(self, runtime: &RuntimeCore<State>, heap: &Heap) -> PendingNative {
-        PendingNative::new(self.frame, self.call.invoke(runtime, heap), None)
+    fn activate_immediate<State>(self, runtime: &RuntimeCore<State>, heap: &Heap) -> PendingNative
+    where
+        State: Clone + Send + Sync + 'static,
+    {
+        match self.call.invoke(runtime, heap) {
+            Ok(future) => PendingNative::new(self.frame, future, None),
+            Err(error) => PendingNative::ready(self.frame, Err(error)),
+        }
     }
 
-    fn activate_deferred(self, runtime: &RuntimeCore<State>, heap: &Heap) -> PendingNative {
+    fn activate_deferred<State>(self, runtime: &RuntimeCore<State>, heap: &Heap) -> PendingNative
+    where
+        State: Clone + Send + Sync + 'static,
+    {
         let Some(permit) = self.permit else {
             return PendingNative::ready(
                 self.frame,
@@ -415,7 +443,10 @@ where
                 )),
             );
         };
-        PendingNative::new(self.frame, self.call.invoke(runtime, heap), Some(permit))
+        match self.call.invoke(runtime, heap) {
+            Ok(future) => PendingNative::new(self.frame, future, Some(permit)),
+            Err(error) => PendingNative::ready(self.frame, Err(error)),
+        }
     }
 }
 

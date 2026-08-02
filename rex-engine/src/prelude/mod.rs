@@ -741,7 +741,7 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
             "prim_list_eq",
             scheme.clone(),
             2,
-            |_engine, scope, call_type, args| {
+            |scope, call_type, args| {
                 let (lhs_ty, rhs_ty) = binary_arg_types(&call_type)?;
                 let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
                     expected: lhs_ty.to_string(),
@@ -765,33 +765,28 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
             },
         )?;
 
-        engine.export_native_scheduler(
-            "prim_list_ne",
-            scheme,
-            2,
-            |_engine, scope, call_type, args| {
-                let (lhs_ty, rhs_ty) = binary_arg_types(&call_type)?;
-                let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
-                    expected: lhs_ty.to_string(),
-                    got: rhs_ty.to_string(),
-                })?;
-                let list_ty = lhs_ty.apply(&subst);
-                let elem_ty = list_elem_type(&list_ty)?;
-                let xs = scope.list_items(args[0])?.into_rooted_list_items();
-                let ys = scope.list_items(args[1])?.into_rooted_list_items();
-                Ok(SchedulerNativeResult::Task(NativeTask::ArrayEq(
-                    NativeArrayEq {
-                        elem_type: elem_ty,
-                        xs,
-                        ys,
-                        state: NativeArrayEqState::Enter,
-                        next_index: 0,
-                        step: None,
-                        negate: true,
-                    },
-                )))
-            },
-        )?;
+        engine.export_native_scheduler("prim_list_ne", scheme, 2, |scope, call_type, args| {
+            let (lhs_ty, rhs_ty) = binary_arg_types(&call_type)?;
+            let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
+                expected: lhs_ty.to_string(),
+                got: rhs_ty.to_string(),
+            })?;
+            let list_ty = lhs_ty.apply(&subst);
+            let elem_ty = list_elem_type(&list_ty)?;
+            let xs = scope.list_items(args[0])?.into_rooted_list_items();
+            let ys = scope.list_items(args[1])?.into_rooted_list_items();
+            Ok(SchedulerNativeResult::Task(NativeTask::ArrayEq(
+                NativeArrayEq {
+                    elem_type: elem_ty,
+                    xs,
+                    ys,
+                    state: NativeArrayEqState::Enter,
+                    next_index: 0,
+                    step: None,
+                    negate: true,
+                },
+            )))
+        })?;
     }
 
     Ok(())
@@ -1361,29 +1356,24 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::dict(a), Type::dict(b)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_dict_map",
-            scheme,
-            2,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let dict_ty = arg_tys[1].clone();
-                let elem_ty = dict_elem_type(&dict_ty)?;
-                let map = scope.root_as_dict(args[1])?;
-                Ok(SchedulerNativeResult::Task(NativeTask::DictMap(
-                    NativeDictMap {
-                        func: args[0],
-                        func_type: func_ty,
-                        elem_type: elem_ty,
-                        entries: map.into_iter().collect(),
-                        children: Vec::new(),
-                        output: BTreeMap::new(),
-                        remaining: 0,
-                    },
-                )))
-            },
-        )?;
+        engine.export_native_scheduler("prim_dict_map", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let dict_ty = arg_tys[1].clone();
+            let elem_ty = dict_elem_type(&dict_ty)?;
+            let map = scope.root_as_dict(args[1])?;
+            Ok(SchedulerNativeResult::Task(NativeTask::DictMap(
+                NativeDictMap {
+                    func: args[0],
+                    func_type: func_ty,
+                    elem_type: elem_ty,
+                    entries: map.into_iter().collect(),
+                    children: Vec::new(),
+                    output: BTreeMap::new(),
+                    remaining: 0,
+                },
+            )))
+        })?;
     }
 
     {
@@ -1397,7 +1387,7 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             "prim_dict_traverse_result",
             scheme,
             2,
-            |_engine, scope, call_type, args| {
+            |scope, call_type, args| {
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
                 let func_ty = arg_tys[0].clone();
                 let dict_ty = arg_tys[1].clone();
@@ -1646,30 +1636,25 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(a), Type::list(b)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_map",
-            scheme,
-            2,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let list_ty = arg_tys[1].clone();
-                let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[1])?.into_rooted_list_items();
-                Ok(SchedulerNativeResult::Task(NativeTask::SequenceMap(
-                    NativeSequenceMap {
-                        func: args[0],
-                        func_type: func_ty,
-                        elem_type: elem_ty,
-                        values,
-                        shape: NativeSequenceShape::List,
-                        children: Vec::new(),
-                        output: Vec::new(),
-                        remaining: 0,
-                    },
-                )))
-            },
-        )?;
+        engine.export_native_scheduler("prim_map", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let list_ty = arg_tys[1].clone();
+            let elem_ty = list_elem_type(&list_ty)?;
+            let values = scope.list_items(args[1])?.into_rooted_list_items();
+            Ok(SchedulerNativeResult::Task(NativeTask::SequenceMap(
+                NativeSequenceMap {
+                    func: args[0],
+                    func_type: func_ty,
+                    elem_type: elem_ty,
+                    values,
+                    shape: NativeSequenceShape::List,
+                    children: Vec::new(),
+                    output: Vec::new(),
+                    remaining: 0,
+                },
+            )))
+        })?;
     }
 
     {
@@ -1679,32 +1664,27 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::option(a), Type::option(b)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_map",
-            scheme,
-            2,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let opt_ty = arg_tys[1].clone();
-                let elem_ty = option_elem_type(&opt_ty)?;
-                match option_value(scope, args[1])? {
-                    Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryMap(
-                        NativeUnaryMap {
-                            func: args[0],
-                            func_type: func_ty,
-                            elem_type: elem_ty,
-                            value,
-                            shape: NativeUnaryShape::Option,
-                        },
-                    ))),
-                    None => {
-                        let root = option_from_root(scope, None)?;
-                        Ok(SchedulerNativeResult::Ready(root))
-                    }
+        engine.export_native_scheduler("prim_map", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let opt_ty = arg_tys[1].clone();
+            let elem_ty = option_elem_type(&opt_ty)?;
+            match option_value(scope, args[1])? {
+                Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryMap(
+                    NativeUnaryMap {
+                        func: args[0],
+                        func_type: func_ty,
+                        elem_type: elem_ty,
+                        value,
+                        shape: NativeUnaryShape::Option,
+                    },
+                ))),
+                None => {
+                    let root = option_from_root(scope, None)?;
+                    Ok(SchedulerNativeResult::Ready(root))
                 }
-            },
-        )?;
+            }
+        })?;
     }
 
     {
@@ -1714,32 +1694,27 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::result(a, e), Type::result(b, e)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_map",
-            scheme,
-            2,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let result_ty = arg_tys[1].clone();
-                let (ok_ty, _err_ty) = result_types(&result_ty)?;
-                match result_value(scope, args[1])? {
-                    Ok(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryMap(
-                        NativeUnaryMap {
-                            func: args[0],
-                            func_type: func_ty,
-                            elem_type: ok_ty,
-                            value,
-                            shape: NativeUnaryShape::Result,
-                        },
-                    ))),
-                    Err(err) => {
-                        let root = result_from_root(scope, Err(err))?;
-                        Ok(SchedulerNativeResult::Ready(root))
-                    }
+        engine.export_native_scheduler("prim_map", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let result_ty = arg_tys[1].clone();
+            let (ok_ty, _err_ty) = result_types(&result_ty)?;
+            match result_value(scope, args[1])? {
+                Ok(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryMap(
+                    NativeUnaryMap {
+                        func: args[0],
+                        func_type: func_ty,
+                        elem_type: ok_ty,
+                        value,
+                        shape: NativeUnaryShape::Result,
+                    },
+                ))),
+                Err(err) => {
+                    let root = result_from_root(scope, Err(err))?;
+                    Ok(SchedulerNativeResult::Ready(root))
                 }
-            },
-        )?;
+            }
+        })?;
     }
 
     {
@@ -1749,37 +1724,32 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(b, Type::fun(Type::list(a), b)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_foldl",
-            scheme,
-            3,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
-                let func_ty = arg_tys[0].clone();
-                let acc_ty = arg_tys[1].clone();
-                let list_ty = arg_tys[2].clone();
-                if acc_ty != res_ty {
-                    return Err(EngineError::NativeType {
-                        expected: acc_ty.to_string(),
-                        got: res_ty.to_string(),
-                    });
-                }
-                let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[2])?.into_rooted_list_items();
-                Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                    func: args[0],
-                    func_type: func_ty,
-                    acc_type: acc_ty,
-                    elem_type: elem_ty,
-                    values,
-                    acc: args[1],
-                    order: NativeFoldOrder::Left,
-                    state: NativeFoldState::Enter,
-                    next_index: 0,
-                    step: None,
-                })))
-            },
-        )?;
+        engine.export_native_scheduler("prim_foldl", scheme, 3, |scope, call_type, args| {
+            let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
+            let func_ty = arg_tys[0].clone();
+            let acc_ty = arg_tys[1].clone();
+            let list_ty = arg_tys[2].clone();
+            if acc_ty != res_ty {
+                return Err(EngineError::NativeType {
+                    expected: acc_ty.to_string(),
+                    got: res_ty.to_string(),
+                });
+            }
+            let elem_ty = list_elem_type(&list_ty)?;
+            let values = scope.list_items(args[2])?.into_rooted_list_items();
+            Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
+                func: args[0],
+                func_type: func_ty,
+                acc_type: acc_ty,
+                elem_type: elem_ty,
+                values,
+                acc: args[1],
+                order: NativeFoldOrder::Left,
+                state: NativeFoldState::Enter,
+                next_index: 0,
+                step: None,
+            })))
+        })?;
     }
 
     {
@@ -1789,38 +1759,32 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(b, Type::fun(Type::option(a), b)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_foldl",
-            scheme,
-            3,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
-                let func_ty = arg_tys[0].clone();
-                let acc_ty = arg_tys[1].clone();
-                let opt_ty = arg_tys[2].clone();
-                if acc_ty != res_ty {
-                    return Err(EngineError::NativeType {
-                        expected: acc_ty.to_string(),
-                        got: res_ty.to_string(),
-                    });
-                }
-                let elem_ty = option_elem_type(&opt_ty)?;
-                let values =
-                    ListItems::Pointers(option_value(scope, args[2])?.into_iter().collect());
-                Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                    func: args[0],
-                    func_type: func_ty,
-                    acc_type: acc_ty,
-                    elem_type: elem_ty,
-                    values,
-                    acc: args[1],
-                    order: NativeFoldOrder::Left,
-                    state: NativeFoldState::Enter,
-                    next_index: 0,
-                    step: None,
-                })))
-            },
-        )?;
+        engine.export_native_scheduler("prim_foldl", scheme, 3, |scope, call_type, args| {
+            let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
+            let func_ty = arg_tys[0].clone();
+            let acc_ty = arg_tys[1].clone();
+            let opt_ty = arg_tys[2].clone();
+            if acc_ty != res_ty {
+                return Err(EngineError::NativeType {
+                    expected: acc_ty.to_string(),
+                    got: res_ty.to_string(),
+                });
+            }
+            let elem_ty = option_elem_type(&opt_ty)?;
+            let values = ListItems::Pointers(option_value(scope, args[2])?.into_iter().collect());
+            Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
+                func: args[0],
+                func_type: func_ty,
+                acc_type: acc_ty,
+                elem_type: elem_ty,
+                values,
+                acc: args[1],
+                order: NativeFoldOrder::Left,
+                state: NativeFoldState::Enter,
+                next_index: 0,
+                step: None,
+            })))
+        })?;
     }
 
     {
@@ -1830,37 +1794,32 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(b, Type::fun(Type::list(a), b)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_foldr",
-            scheme,
-            3,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
-                let func_ty = arg_tys[0].clone();
-                let acc_ty = arg_tys[1].clone();
-                let list_ty = arg_tys[2].clone();
-                if acc_ty != res_ty {
-                    return Err(EngineError::NativeType {
-                        expected: acc_ty.to_string(),
-                        got: res_ty.to_string(),
-                    });
-                }
-                let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[2])?.into_rooted_list_items();
-                Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                    func: args[0],
-                    func_type: func_ty,
-                    acc_type: acc_ty,
-                    elem_type: elem_ty,
-                    values,
-                    acc: args[1],
-                    order: NativeFoldOrder::Right,
-                    state: NativeFoldState::Enter,
-                    next_index: 0,
-                    step: None,
-                })))
-            },
-        )?;
+        engine.export_native_scheduler("prim_foldr", scheme, 3, |scope, call_type, args| {
+            let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
+            let func_ty = arg_tys[0].clone();
+            let acc_ty = arg_tys[1].clone();
+            let list_ty = arg_tys[2].clone();
+            if acc_ty != res_ty {
+                return Err(EngineError::NativeType {
+                    expected: acc_ty.to_string(),
+                    got: res_ty.to_string(),
+                });
+            }
+            let elem_ty = list_elem_type(&list_ty)?;
+            let values = scope.list_items(args[2])?.into_rooted_list_items();
+            Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
+                func: args[0],
+                func_type: func_ty,
+                acc_type: acc_ty,
+                elem_type: elem_ty,
+                values,
+                acc: args[1],
+                order: NativeFoldOrder::Right,
+                state: NativeFoldState::Enter,
+                next_index: 0,
+                step: None,
+            })))
+        })?;
     }
 
     {
@@ -1870,38 +1829,32 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(b, Type::fun(Type::option(a), b)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_foldr",
-            scheme,
-            3,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
-                let func_ty = arg_tys[0].clone();
-                let acc_ty = arg_tys[1].clone();
-                let opt_ty = arg_tys[2].clone();
-                if acc_ty != res_ty {
-                    return Err(EngineError::NativeType {
-                        expected: acc_ty.to_string(),
-                        got: res_ty.to_string(),
-                    });
-                }
-                let elem_ty = option_elem_type(&opt_ty)?;
-                let values =
-                    ListItems::Pointers(option_value(scope, args[2])?.into_iter().collect());
-                Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                    func: args[0],
-                    func_type: func_ty,
-                    acc_type: acc_ty,
-                    elem_type: elem_ty,
-                    values,
-                    acc: args[1],
-                    order: NativeFoldOrder::Right,
-                    state: NativeFoldState::Enter,
-                    next_index: 0,
-                    step: None,
-                })))
-            },
-        )?;
+        engine.export_native_scheduler("prim_foldr", scheme, 3, |scope, call_type, args| {
+            let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
+            let func_ty = arg_tys[0].clone();
+            let acc_ty = arg_tys[1].clone();
+            let opt_ty = arg_tys[2].clone();
+            if acc_ty != res_ty {
+                return Err(EngineError::NativeType {
+                    expected: acc_ty.to_string(),
+                    got: res_ty.to_string(),
+                });
+            }
+            let elem_ty = option_elem_type(&opt_ty)?;
+            let values = ListItems::Pointers(option_value(scope, args[2])?.into_iter().collect());
+            Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
+                func: args[0],
+                func_type: func_ty,
+                acc_type: acc_ty,
+                elem_type: elem_ty,
+                values,
+                acc: args[1],
+                order: NativeFoldOrder::Right,
+                state: NativeFoldState::Enter,
+                next_index: 0,
+                step: None,
+            })))
+        })?;
     }
 
     {
@@ -1911,37 +1864,32 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(b, Type::fun(Type::list(a), b)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_fold",
-            scheme,
-            3,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
-                let func_ty = arg_tys[0].clone();
-                let acc_ty = arg_tys[1].clone();
-                let list_ty = arg_tys[2].clone();
-                if acc_ty != res_ty {
-                    return Err(EngineError::NativeType {
-                        expected: acc_ty.to_string(),
-                        got: res_ty.to_string(),
-                    });
-                }
-                let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[2])?.into_rooted_list_items();
-                Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                    func: args[0],
-                    func_type: func_ty,
-                    acc_type: acc_ty,
-                    elem_type: elem_ty,
-                    values,
-                    acc: args[1],
-                    order: NativeFoldOrder::Left,
-                    state: NativeFoldState::Enter,
-                    next_index: 0,
-                    step: None,
-                })))
-            },
-        )?;
+        engine.export_native_scheduler("prim_fold", scheme, 3, |scope, call_type, args| {
+            let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
+            let func_ty = arg_tys[0].clone();
+            let acc_ty = arg_tys[1].clone();
+            let list_ty = arg_tys[2].clone();
+            if acc_ty != res_ty {
+                return Err(EngineError::NativeType {
+                    expected: acc_ty.to_string(),
+                    got: res_ty.to_string(),
+                });
+            }
+            let elem_ty = list_elem_type(&list_ty)?;
+            let values = scope.list_items(args[2])?.into_rooted_list_items();
+            Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
+                func: args[0],
+                func_type: func_ty,
+                acc_type: acc_ty,
+                elem_type: elem_ty,
+                values,
+                acc: args[1],
+                order: NativeFoldOrder::Left,
+                state: NativeFoldState::Enter,
+                next_index: 0,
+                step: None,
+            })))
+        })?;
     }
 
     {
@@ -1951,38 +1899,32 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(b, Type::fun(Type::option(a), b)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_fold",
-            scheme,
-            3,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
-                let func_ty = arg_tys[0].clone();
-                let acc_ty = arg_tys[1].clone();
-                let opt_ty = arg_tys[2].clone();
-                if acc_ty != res_ty {
-                    return Err(EngineError::NativeType {
-                        expected: acc_ty.to_string(),
-                        got: res_ty.to_string(),
-                    });
-                }
-                let elem_ty = option_elem_type(&opt_ty)?;
-                let values =
-                    ListItems::Pointers(option_value(scope, args[2])?.into_iter().collect());
-                Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
-                    func: args[0],
-                    func_type: func_ty,
-                    acc_type: acc_ty,
-                    elem_type: elem_ty,
-                    values,
-                    acc: args[1],
-                    order: NativeFoldOrder::Left,
-                    state: NativeFoldState::Enter,
-                    next_index: 0,
-                    step: None,
-                })))
-            },
-        )?;
+        engine.export_native_scheduler("prim_fold", scheme, 3, |scope, call_type, args| {
+            let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
+            let func_ty = arg_tys[0].clone();
+            let acc_ty = arg_tys[1].clone();
+            let opt_ty = arg_tys[2].clone();
+            if acc_ty != res_ty {
+                return Err(EngineError::NativeType {
+                    expected: acc_ty.to_string(),
+                    got: res_ty.to_string(),
+                });
+            }
+            let elem_ty = option_elem_type(&opt_ty)?;
+            let values = ListItems::Pointers(option_value(scope, args[2])?.into_iter().collect());
+            Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
+                func: args[0],
+                func_type: func_ty,
+                acc_type: acc_ty,
+                elem_type: elem_ty,
+                values,
+                acc: args[1],
+                order: NativeFoldOrder::Left,
+                state: NativeFoldState::Enter,
+                next_index: 0,
+                step: None,
+            })))
+        })?;
     }
 
     {
@@ -1992,30 +1934,25 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(a), Type::list(a)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_filter",
-            scheme,
-            2,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let list_ty = arg_tys[1].clone();
-                let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[1])?.into_rooted_list_items();
-                Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilter(
-                    NativeSequenceFilter {
-                        func: args[0],
-                        func_type: func_ty,
-                        elem_type: elem_ty,
-                        values,
-                        shape: NativeSequenceShape::List,
-                        children: Vec::new(),
-                        keep: Vec::new(),
-                        remaining: 0,
-                    },
-                )))
-            },
-        )?;
+        engine.export_native_scheduler("prim_filter", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let list_ty = arg_tys[1].clone();
+            let elem_ty = list_elem_type(&list_ty)?;
+            let values = scope.list_items(args[1])?.into_rooted_list_items();
+            Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilter(
+                NativeSequenceFilter {
+                    func: args[0],
+                    func_type: func_ty,
+                    elem_type: elem_ty,
+                    values,
+                    shape: NativeSequenceShape::List,
+                    children: Vec::new(),
+                    keep: Vec::new(),
+                    remaining: 0,
+                },
+            )))
+        })?;
     }
 
     {
@@ -2025,32 +1962,27 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::option(a), Type::option(a)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_filter",
-            scheme,
-            2,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let opt_ty = arg_tys[1].clone();
-                let elem_ty = option_elem_type(&opt_ty)?;
-                match option_value(scope, args[1])? {
-                    Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFilter(
-                        NativeUnaryFilter {
-                            func: args[0],
-                            func_type: func_ty,
-                            elem_type: elem_ty,
-                            value,
-                            original: args[1],
-                        },
-                    ))),
-                    None => {
-                        let root = option_from_root(scope, None)?;
-                        Ok(SchedulerNativeResult::Ready(root))
-                    }
+        engine.export_native_scheduler("prim_filter", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let opt_ty = arg_tys[1].clone();
+            let elem_ty = option_elem_type(&opt_ty)?;
+            match option_value(scope, args[1])? {
+                Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFilter(
+                    NativeUnaryFilter {
+                        func: args[0],
+                        func_type: func_ty,
+                        elem_type: elem_ty,
+                        value,
+                        original: args[1],
+                    },
+                ))),
+                None => {
+                    let root = option_from_root(scope, None)?;
+                    Ok(SchedulerNativeResult::Ready(root))
                 }
-            },
-        )?;
+            }
+        })?;
     }
 
     {
@@ -2064,7 +1996,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             "prim_filter_map",
             scheme,
             2,
-            |_engine, scope, call_type, args| {
+            |scope, call_type, args| {
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
@@ -2097,7 +2029,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             "prim_filter_map",
             scheme,
             2,
-            |_engine, scope, call_type, args| {
+            |scope, call_type, args| {
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
                 let func_ty = arg_tys[0].clone();
                 let opt_ty = arg_tys[1].clone();
@@ -2127,30 +2059,25 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(a), Type::list(b)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_flat_map",
-            scheme,
-            2,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let list_ty = arg_tys[1].clone();
-                let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[1])?.into_rooted_list_items();
-                Ok(SchedulerNativeResult::Task(NativeTask::SequenceFlatMap(
-                    NativeSequenceFlatMap {
-                        func: args[0],
-                        func_type: func_ty,
-                        elem_type: elem_ty,
-                        values,
-                        shape: NativeSequenceShape::List,
-                        children: Vec::new(),
-                        output: Vec::new(),
-                        remaining: 0,
-                    },
-                )))
-            },
-        )?;
+        engine.export_native_scheduler("prim_flat_map", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let list_ty = arg_tys[1].clone();
+            let elem_ty = list_elem_type(&list_ty)?;
+            let values = scope.list_items(args[1])?.into_rooted_list_items();
+            Ok(SchedulerNativeResult::Task(NativeTask::SequenceFlatMap(
+                NativeSequenceFlatMap {
+                    func: args[0],
+                    func_type: func_ty,
+                    elem_type: elem_ty,
+                    values,
+                    shape: NativeSequenceShape::List,
+                    children: Vec::new(),
+                    output: Vec::new(),
+                    remaining: 0,
+                },
+            )))
+        })?;
     }
 
     {
@@ -2160,32 +2087,27 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::option(a), Type::option(b)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_flat_map",
-            scheme,
-            2,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let opt_ty = arg_tys[1].clone();
-                let elem_ty = option_elem_type(&opt_ty)?;
-                match option_value(scope, args[1])? {
-                    Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFlatMap(
-                        NativeUnaryFlatMap {
-                            func: args[0],
-                            func_type: func_ty,
-                            elem_type: elem_ty,
-                            value,
-                            shape: NativeUnaryShape::Option,
-                        },
-                    ))),
-                    None => {
-                        let root = option_from_root(scope, None)?;
-                        Ok(SchedulerNativeResult::Ready(root))
-                    }
+        engine.export_native_scheduler("prim_flat_map", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let opt_ty = arg_tys[1].clone();
+            let elem_ty = option_elem_type(&opt_ty)?;
+            match option_value(scope, args[1])? {
+                Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFlatMap(
+                    NativeUnaryFlatMap {
+                        func: args[0],
+                        func_type: func_ty,
+                        elem_type: elem_ty,
+                        value,
+                        shape: NativeUnaryShape::Option,
+                    },
+                ))),
+                None => {
+                    let root = option_from_root(scope, None)?;
+                    Ok(SchedulerNativeResult::Ready(root))
                 }
-            },
-        )?;
+            }
+        })?;
     }
 
     {
@@ -2195,32 +2117,27 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::result(a, e), Type::result(b, e)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_flat_map",
-            scheme,
-            2,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let result_ty = arg_tys[1].clone();
-                let (ok_ty, _err_ty) = result_types(&result_ty)?;
-                match result_value(scope, args[1])? {
-                    Ok(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFlatMap(
-                        NativeUnaryFlatMap {
-                            func: args[0],
-                            func_type: func_ty,
-                            elem_type: ok_ty,
-                            value,
-                            shape: NativeUnaryShape::Result,
-                        },
-                    ))),
-                    Err(err) => {
-                        let root = result_from_root(scope, Err(err))?;
-                        Ok(SchedulerNativeResult::Ready(root))
-                    }
+        engine.export_native_scheduler("prim_flat_map", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let result_ty = arg_tys[1].clone();
+            let (ok_ty, _err_ty) = result_types(&result_ty)?;
+            match result_value(scope, args[1])? {
+                Ok(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFlatMap(
+                    NativeUnaryFlatMap {
+                        func: args[0],
+                        func_type: func_ty,
+                        elem_type: ok_ty,
+                        value,
+                        shape: NativeUnaryShape::Result,
+                    },
+                ))),
+                Err(err) => {
+                    let root = result_from_root(scope, Err(err))?;
+                    Ok(SchedulerNativeResult::Ready(root))
                 }
-            },
-        )?;
+            }
+        })?;
     }
 
     {
@@ -2230,27 +2147,22 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(a), Type::list(a)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_or_else",
-            scheme,
-            2,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let list_ty = arg_tys[1].clone();
-                if !scope.list_items(args[1])?.is_empty() {
-                    return Ok(SchedulerNativeResult::Ready(args[1]));
-                }
-                Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
-                    NativeApplyUnary {
-                        func: args[0],
-                        func_type: func_ty,
-                        arg: args[1],
-                        arg_type: list_ty,
-                    },
-                )))
-            },
-        )?;
+        engine.export_native_scheduler("prim_or_else", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let list_ty = arg_tys[1].clone();
+            if !scope.list_items(args[1])?.is_empty() {
+                return Ok(SchedulerNativeResult::Ready(args[1]));
+            }
+            Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
+                NativeApplyUnary {
+                    func: args[0],
+                    func_type: func_ty,
+                    arg: args[1],
+                    arg_type: list_ty,
+                },
+            )))
+        })?;
     }
 
     {
@@ -2260,27 +2172,22 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::option(a), Type::option(a)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_or_else",
-            scheme,
-            2,
-            |_engine, scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let opt_ty = arg_tys[1].clone();
-                if option_value(scope, args[1])?.is_some() {
-                    return Ok(SchedulerNativeResult::Ready(args[1]));
-                }
-                Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
-                    NativeApplyUnary {
-                        func: args[0],
-                        func_type: func_ty,
-                        arg: args[1],
-                        arg_type: opt_ty,
-                    },
-                )))
-            },
-        )?;
+        engine.export_native_scheduler("prim_or_else", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let opt_ty = arg_tys[1].clone();
+            if option_value(scope, args[1])?.is_some() {
+                return Ok(SchedulerNativeResult::Ready(args[1]));
+            }
+            Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
+                NativeApplyUnary {
+                    func: args[0],
+                    func_type: func_ty,
+                    arg: args[1],
+                    arg_type: opt_ty,
+                },
+            )))
+        })?;
     }
 
     {
@@ -2290,34 +2197,29 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::result(a, e), Type::result(a, e)),
             )
         );
-        engine.export_native_scheduler(
-            "prim_or_else",
-            scheme,
-            2,
-            |_, scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let result_ty = arg_tys[1].clone();
-                if result_value(scope, args[1])?.is_ok() {
-                    return Ok(SchedulerNativeResult::Ready(args[1]));
-                }
-                Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
-                    NativeApplyUnary {
-                        func: args[0],
-                        func_type: func_ty,
-                        arg: args[1],
-                        arg_type: result_ty,
-                    },
-                )))
-            },
-        )?;
+        engine.export_native_scheduler("prim_or_else", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let result_ty = arg_tys[1].clone();
+            if result_value(scope, args[1])?.is_ok() {
+                return Ok(SchedulerNativeResult::Ready(args[1]));
+            }
+            Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
+                NativeApplyUnary {
+                    func: args[0],
+                    func_type: func_ty,
+                    arg: args[1],
+                    arg_type: result_ty,
+                },
+            )))
+        })?;
     }
 
     {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::list(a), a)
         );
-        engine.export_native_scheduler("sum", scheme, 1, |_engine, scope, call_type, args| {
+        engine.export_native_scheduler("sum", scheme, 1, |scope, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
@@ -2338,7 +2240,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::option(a), a)
         );
-        engine.export_native_scheduler("sum", scheme, 1, |_engine, scope, call_type, args| {
+        engine.export_native_scheduler("sum", scheme, 1, |scope, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
@@ -2359,7 +2261,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::list(a), a)
         );
-        engine.export_native_scheduler("mean", scheme, 1, |_engine, scope, call_type, args| {
+        engine.export_native_scheduler("mean", scheme, 1, |scope, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
@@ -2384,7 +2286,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::option(a), a)
         );
-        engine.export_native_scheduler("mean", scheme, 1, |_engine, scope, call_type, args| {
+        engine.export_native_scheduler("mean", scheme, 1, |scope, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
