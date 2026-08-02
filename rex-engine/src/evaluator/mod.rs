@@ -66,6 +66,9 @@ where
     }
 
     /// Heap used by this evaluator runtime.
+    ///
+    /// Allocate external `main` inputs in this heap before calling [`run`](Self::run).
+    /// Handles from another heap are rejected rather than copied implicitly.
     pub fn heap(&self) -> &Heap {
         &self.heap
     }
@@ -73,9 +76,11 @@ where
     /// Run one prepared program with runtime main inputs.
     ///
     /// The `inputs` map must contain one [`Handle`] for each parameter in the
-    /// program's main signature, keyed by parameter name. When using the
-    /// top-level `rex` crate and those inputs are available as JSON, callers
-    /// can build this map with `rex::json::json_to_main_inputs`.
+    /// program's main signature, keyed by parameter name, and every handle
+    /// must belong to this evaluator's [`Heap`]. Foreign-heap handles are
+    /// rejected. When using the top-level `rex` crate and those inputs are
+    /// available as JSON, callers can build this map with
+    /// `rex::json::json_to_main_inputs`.
     pub async fn run(
         self,
         program: CompiledProgram,
@@ -90,6 +95,11 @@ where
     ///
     /// This is used by embedders that treat the evaluated result as a host-managed action and
     /// need to resume Rex callbacks after the top-level expression has produced that action.
+    /// Runtime inputs have the same naming and same-heap requirements as [`run`](Self::run).
+    /// To construct a public [`Context`](crate::Context) for that follow-up work, pair the returned
+    /// internal context with the returned handle's heap (or with a clone of [`Self::heap`] taken
+    /// before this method consumes the evaluator). Do not substitute an independently created
+    /// heap.
     pub async fn run_with_context(
         self,
         program: CompiledProgram,

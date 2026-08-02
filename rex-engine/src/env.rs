@@ -84,14 +84,18 @@ impl<'scope> ScopedEnvironment<'scope> {
     }
 }
 
-/// Evaluator-owned environment whose bindings remain valid while the heap is
-/// unlocked.
 #[derive(Debug, PartialEq)]
 struct PersistentEnvEntry {
     parent: Option<PersistentEnvironment>,
     bindings: BTreeMap<Symbol, PersistentPtr>,
 }
 
+/// Evaluator-owned environment whose bindings remain valid while the heap is
+/// unlocked.
+///
+/// Each binding is an opaque token whose registered root is owned by the
+/// current [`PersistentRootStore`]. Entering a new locked cycle resolves the
+/// tokens into a [`ScopedEnvironment`].
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PersistentEnvironment(Arc<PersistentEnvEntry>);
 
@@ -162,6 +166,12 @@ struct RootedEnvEntry {
     bindings: BTreeMap<Symbol, Handle>,
 }
 
+/// Long-lived immutable environment rooted by registered public handles.
+///
+/// Compiler output and runtime registries use this representation outside a
+/// locked evaluator cycle. Entering a cycle resolves its handles into a
+/// [`ScopedEnvironment`]. Mutable frames and scheduler state instead use
+/// [`PersistentEnvironment`] while the heap is unlocked.
 #[derive(Clone)]
 pub(crate) struct RootedEnvironment(Arc<RootedEnvEntry>);
 

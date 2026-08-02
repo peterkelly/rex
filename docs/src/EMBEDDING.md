@@ -84,6 +84,23 @@ Phase-specific errors:
 - APIs that parse, compile, and run in one call return `ExecutionError` because they cross
   phase boundaries
 
+### Runtime Values and Heap Ownership
+
+Rex uses a moving copying collector, but embedders never receive a heap location. `Heap` is a
+cloneable, thread-safe allocation capability, and `Handle` is a registered root. A handle remains
+valid across later allocations, collections, thread transfers, and `await` points; callers do not
+refresh it manually.
+
+External `main` inputs must be handles from the evaluator's own heap. Use `Evaluator::heap()` to
+allocate them before consuming the evaluator with `run`; a handle from another heap is rejected
+with an engine error. Evaluation results and composite children returned by `Handle::value()` are
+also rooted handles.
+
+Public heap allocation and handle inspection operations acquire the heap mutex, and allocation may
+collect. This is safe at the embedding boundary. Internally, the evaluator does not expose `Heap`
+to its locked synchronous cycle and invokes host callbacks only after releasing that lock. See
+[Memory Management](MEMORY_MANAGEMENT.md) for the complete internal ownership model.
+
 Compile parsed Rex sources with `Compiler::compile_program` and pass the resulting
 `CompiledProgram` to `Evaluator::run`.
 
@@ -260,10 +277,11 @@ compiler.
 `export_async` handlers follow the same rule, but return
 `Future<Output = Result<T, EngineError>>`.
 
-Both forms execute outside evaluator-owned heap access and cross the native boundary using rooted
-handles internally. Synchronous handlers resume through an immediately-ready native completion;
-they do not consume async-native permits or pass through `AsyncCallPolicy`. They run on the
-evaluator task, so blocking or long-running work belongs in an asynchronous export.
+Both forms execute after the evaluator releases its heap mutex. Arguments are promoted to rooted
+handles before the call is queued, and the result remains a handle until a later locked evaluator
+cycle roots it. Synchronous handlers resume through an immediately-ready native completion; they
+do not consume async-native permits or pass through `AsyncCallPolicy`. They run on the evaluator
+task, so blocking or long-running work belongs in an asynchronous export.
 
 ```rust,ignore
 use rex::{
@@ -412,11 +430,16 @@ These callbacks receive `Context<State>` (not just `&State`), so they can:
 - allocate new values via `ctx.heap()`
 - inspect typed call information via the explicit `&Type` / `Type` callback parameter
 
-Async native callbacks receive owned argument vectors and return `Send + 'static` futures so the
-runtime can suspend them as explicit pending evaluation frames.
+Async native callbacks receive owned argument vectors and return `Send + 'static` futures. The
+host scheduler owns and polls those futures outside the heap lock while evaluator frames survive
+separately through evaluator-owned persistent roots.
 Synchronous native callbacks use the same `Context`/`Handle` boundary and completion machinery,
 but produce an immediately-ready result. They are not subject to async admission or executor
 policy and should remain short and nonblocking.
+
+A callback may return a clone of an argument or a value allocated through `ctx.heap()`. Any
+returned `Handle` must belong to that same heap; returning a handle from an independently created
+heap fails evaluation rather than copying the value implicitly.
 
 ```rust,ignore
 use futures::FutureExt;
@@ -823,6 +846,11 @@ By default, admitted async host futures are polled inline by the evaluator. This
 portable and avoids assuming a particular runtime, which is important for wasm embedders. Inline
 polling is fine for futures that are naturally non-blocking, but CPU-heavy or blocking work should
 be moved onto an executor supplied by the embedding application.
+
+Admission, callback invocation, and future polling all occur outside the locked evaluator cycle.
+Arguments and completed results remain registered `Handle` roots throughout suspension, so an
+async callback may retain its arguments or allocate through its `Context` without depending on a
+pre-collection heap location.
 
 Use `set_parallelism_controller` to decide when async host callbacks may be invoked. A
 `ParallelismController` grants a `NativeAsyncPermit` for each admitted

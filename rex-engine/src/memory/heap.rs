@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
 use std::marker::PhantomData;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -157,19 +158,28 @@ pub(crate) enum RootedCallable<'scope> {
     Overloaded(OverloadedFn<RootedPtr<'scope>>),
 }
 
-// GC invariants:
-//
-// - Any alloc_* call may run collection before it creates the requested object.
-//   Callers must not keep raw InternalPtr values across allocation unless those
-//   pointers are reachable from a Handle, RootedPtr, a registered root slot, a
-//   stack frame, or another traced runtime structure.
-// - Handle, RootedPtr, and PersistentRootStore slots
-//   are heap-managed roots. PersistentPtr is an opaque identifier for one such
-//   store slot; it never contains a raw copying-collector location.
-// - Synchronous evaluator frames, environments, and scheduler-native tasks use
-//   RootedPtr and are rewritten through the temporary root stack.
-// - The collector is copying: every traced InternalPtr must be rewritten after a
-//   collection. A raw InternalPtr from before collection is stale by design.
+/// Mutable storage and collector state for one Rex heap.
+///
+/// `HeapState` is accessible only while the owning [`Heap`] mutex is locked.
+/// Exclusive `&mut HeapState` access is the underlying proof that a synchronous
+/// operation has sole access to the collector; evaluator code receives that
+/// proof through [`RootScope`] rather than receiving `Heap` or locking again.
+/// A scope must never invoke host code, block, or cross an `await` boundary.
+///
+/// The collector recognizes three kinds of edges:
+///
+/// - [`InternalPtr`] values occur only in heap cells and short-lived locals.
+///   Collection traces and rewrites every reachable internal edge.
+/// - The temporary-root stack backs [`RootedPtr`] values used during one locked
+///   synchronous scope. Collection rewrites these stack entries.
+/// - Registered root slots back [`Handle`] values and the roots owned by
+///   [`PersistentRootStore`]. Handles are used at public, host, and outer
+///   runtime boundaries. Collection rewrites the slots, while their
+///   generational identifiers remain stable.
+///
+/// Any allocation can collect before creating its result. An `InternalPtr`
+/// local therefore cannot survive an allocation unless it has first been
+/// placed in a traced cell or converted to one of the rooted representations.
 pub(super) struct HeapState {
     id: u64,
     slots: Vec<HeapSlot>,
@@ -766,7 +776,11 @@ pub(super) struct RootId {
 ///
 /// The token contains no raw heap location and no capability for acquiring the
 /// heap mutex. It is resolved only through its owning [`PersistentRootStore`]
-/// while a [`RootScope`] proves exclusive `HeapState` access.
+/// while a [`RootScope`] proves exclusive `HeapState` access. Evaluator state
+/// may retain the token while the heap is unlocked, across `await` points, and
+/// while its future moves between executor threads. Heap, store, slot, and
+/// generation validation prevents a token from being resolved by the wrong
+/// arena or after its root has been removed.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PersistentPtr {
     heap_id: u64,
@@ -781,13 +795,16 @@ struct PersistentRootSlot {
     root_id: Option<RootId>,
 }
 
+/// Invariant lifetime brand that also keeps synchronous roots on one thread.
+type RootScopeBrand<'scope> = PhantomData<Rc<std::cell::Cell<&'scope ()>>>;
+
 /// Evaluator-owned arena for values that survive between synchronous cycles.
 ///
-/// Every live slot owns one ordinary heap root. Collection rewrites that root
-/// slot, so `PersistentPtr` tokens remain stable without pointer refreshes.
-/// Registration, duplication, replacement, and removal are explicit and must
-/// happen through an active [`RootScope`]. The store deliberately has no
-/// destructor-based cleanup because cleanup must not re-enter the heap mutex.
+/// Every live arena slot owns one registered heap root. Collection rewrites the
+/// root slot rather than the [`PersistentPtr`] token. Registration,
+/// duplication, replacement, and removal are explicit and must happen through
+/// an active [`RootScope`]. The store deliberately has no destructor-based
+/// cleanup because cleanup must not re-enter the heap mutex.
 #[derive(Debug)]
 pub(crate) struct PersistentRootStore {
     heap_id: u64,
@@ -797,20 +814,45 @@ pub(crate) struct PersistentRootStore {
     live_count: usize,
 }
 
+/// Temporary reference to a value during one locked synchronous operation.
+///
+/// A `RootedPtr` indexes the temporary-root stack owned by its [`RootScope`]; it
+/// does not contain an [`InternalPtr`]. The collector rewrites the stack entry
+/// whenever the value moves. The invariant lifetime brand prevents the token
+/// from escaping the higher-ranked scope closure or being mixed with another
+/// scope. It must not cross a mutex unlock, thread boundary, or `await` point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RootedPtr<'scope> {
     slot: usize,
-    _brand: PhantomData<std::cell::Cell<&'scope ()>>,
+    _brand: RootScopeBrand<'scope>,
 }
 
+/// Exclusive synchronous access to one locked [`HeapState`].
+///
+/// `RootScope` is the only general evaluator capability for inspecting and
+/// allocating Rex values during a locked cycle. Its `&mut HeapState` proves
+/// exclusive collector access, and its lifetime brand limits every
+/// [`RootedPtr`] it creates to this scope. Allocation may collect, but the
+/// collector rewrites the scope's temporary-root stack before control returns.
+/// Dropping the scope restores the stack to its entry depth.
+///
+/// A scope deliberately contains neither a public [`Heap`] capability nor a
+/// public handle owner. Locked code must not call host callbacks, block, await,
+/// or perform an operation whose destructor can reacquire the heap mutex.
 pub(crate) struct RootScope<'heap, 'scope> {
     pub(super) heap: &'heap mut HeapState,
     base: usize,
-    _brand: PhantomData<std::cell::Cell<&'scope ()>>,
+    _brand: RootScopeBrand<'scope>,
 }
 
 impl Drop for RootScope<'_, '_> {
     fn drop(&mut self) {
+        debug_assert!(
+            self.heap.temporary_roots.len() >= self.base,
+            "root scope shadow stack underflow: base {}, length {}",
+            self.base,
+            self.heap.temporary_roots.len()
+        );
         self.heap.temporary_roots.truncate(self.base);
     }
 }
@@ -850,6 +892,13 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
     }
 
     pub(super) fn pointer(&self, root: RootedPtr<'scope>) -> InternalPtr {
+        debug_assert!(
+            root.slot >= self.base && root.slot < self.heap.temporary_roots.len(),
+            "rooted pointer slot {} is outside active root scope {}..{}",
+            root.slot,
+            self.base,
+            self.heap.temporary_roots.len()
+        );
         self.heap.temporary_roots[root.slot]
     }
 
@@ -1583,11 +1632,16 @@ impl PersistentRootStore {
 
 /// Rex heap and allocation API.
 ///
-/// Public allocation methods return [`Handle`] values. A handle is a GC root, so
-/// host code may keep it across later allocations and `await` points. Every
-/// `alloc_*` call may run a copying collection before returning, which means
-/// raw internal pointers must not be kept across allocation unless they are
-/// protected by a handle, temporary root, or traced runtime frame.
+/// `Heap` is a cloneable, thread-safe capability for locking and allocating in
+/// shared `HeapState`. Embedders may retain it across threads and `await`
+/// points. Public allocation methods return [`Handle`] values and may run a
+/// copying collection before creating their result.
+///
+/// Because its allocation and inspection methods acquire the heap mutex, a
+/// `Heap` must not be used from code that already owns a `RootScope`. The
+/// synchronous evaluator receives only the scope; the outer async coordinator
+/// and public host
+/// [`Context`](crate::Context) retain the `Heap` capability.
 #[derive(Clone)]
 pub struct Heap {
     pub(super) id: u64,
@@ -1596,15 +1650,29 @@ pub struct Heap {
 
 /// A rooted reference to a Rex heap value.
 ///
-/// Cloning a handle clones the root, so the underlying value remains visible to
-/// the collector until the last clone is dropped. This is the public way for
-/// embedders and host functions to keep Rex values alive while allocating new
-/// values or suspending in async code.
+/// A handle owns a generational registered-root identifier rather than a raw
+/// heap location. Collection rewrites the registered slot, so embedders and
+/// host functions may clone and retain handles while allocating, crossing
+/// threads, or suspending in async code. The value remains visible to the
+/// collector until the last clone is dropped.
+///
+/// Public handle inspection and conversion operations acquire the heap mutex,
+/// and dropping the last owner unregisters its root under that mutex.
+/// Synchronous code that already owns a `RootScope` must use `RootedPtr`
+/// instead and must not destroy the last owner of a handle while the lock is
+/// held.
 #[derive(Clone)]
 pub struct Handle {
     root: Arc<HandleRoot>,
 }
 
+/// Public view of one Rex value.
+///
+/// Scalar payloads are copied out of the heap. Composite child references are
+/// returned as registered [`Handle`] roots, so the view remains valid after
+/// the heap lock is released and across later collections. Callable and
+/// uninitialized variants intentionally reveal only their broad runtime kind,
+/// never their moving internal representation.
 #[derive(Clone, Debug)]
 pub enum Value {
     Bool(bool),
@@ -2055,7 +2123,11 @@ impl Default for Heap {
 }
 
 impl Heap {
-    /// Create a heap for a lexical scope.
+    /// Create a new heap and pass it to one closure.
+    ///
+    /// A returned [`Handle`] may outlive the closure because each handle keeps
+    /// the heap alive. This helper scopes construction, not the lifetime of
+    /// values allocated in the heap.
     pub fn scoped<R>(f: impl FnOnce(&Heap) -> R) -> R {
         let heap = Heap::new();
         f(&heap)
@@ -2119,6 +2191,10 @@ impl Heap {
         })
     }
 
+    /// Enable or disable collection before every allocation on this heap.
+    ///
+    /// This is intended for collector stress tests. Normal execution uses the
+    /// heap-growth threshold and should retain the default setting.
     pub fn set_collect_on_every_alloc(&self, enabled: bool) -> Result<(), EngineError> {
         let mut state = self
             .state
@@ -2347,6 +2423,14 @@ impl Heap {
     }
 }
 
+/// Raw moving reference used only for edges owned by the collector.
+///
+/// An `InternalPtr` identifies a heap, slot, and heap-wide collection epoch. It
+/// may be stored in [`Cell`] or used as a short-lived local while `HeapState`
+/// is exclusively borrowed. It must never cross an allocation, heap unlock,
+/// thread boundary, or `await` point as an unrooted local. Copying collection
+/// rewrites every traced cell edge; epoch and heap checks reject stale or
+/// foreign pointers that escape that discipline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct InternalPtr {
     heap_id: u64,
@@ -3319,6 +3403,16 @@ mod tests {
     use super::*;
     use crate::memory::traits::{FromRex, IntoRex};
 
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn boundary_safe_references_are_send_and_sync() {
+        assert_send_sync::<Heap>();
+        assert_send_sync::<Handle>();
+        assert_send_sync::<PersistentPtr>();
+        assert_send_sync::<PersistentRootStore>();
+    }
+
     fn new_persistent_store(heap: &Heap) -> PersistentRootStore {
         heap.with_locked(HeapState::persistent_root_store)
             .expect("persistent root store should be created")
@@ -3776,6 +3870,21 @@ mod tests {
         .expect("collection should update the temporary root");
 
         assert!(heap.temporary_roots.is_empty());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "root scope shadow stack underflow")]
+    fn root_scope_detects_shadow_stack_underflow() {
+        let mut heap = HeapState::new();
+        heap.root_scope(|outer| {
+            let _rooted = outer
+                .alloc_root_i32(42)
+                .expect("rooted value should allocate");
+            outer.heap.root_scope(|inner| {
+                inner.heap.temporary_roots.clear();
+            });
+        });
     }
 
     #[test]

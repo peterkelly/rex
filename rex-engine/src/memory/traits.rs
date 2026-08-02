@@ -17,8 +17,8 @@ use super::heap::{Handle, Heap};
 /// native functions or tests.
 ///
 /// The implementation must allocate any runtime data in the supplied [`Heap`]
-/// and return a rooted [`Handle`] that remains valid across evaluator heap
-/// movement.
+/// and return a rooted [`Handle`] that remains valid across later allocations,
+/// collections, thread transfers, and async suspension.
 pub trait IntoRex {
     /// Allocate `self` into `heap` and return the resulting Rex value handle.
     fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError>;

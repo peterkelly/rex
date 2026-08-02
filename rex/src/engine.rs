@@ -75,10 +75,10 @@ pub use rex_engine::ExportTarget;
 /// Convert a Rex runtime value into a Rust value.
 pub use rex_engine::FromRex;
 
-/// A garbage-collected handle to a Rex runtime value.
+/// Thread-safe registered root for a Rex runtime value.
 pub use rex_engine::Handle;
 
-/// Allocation arena and ownership root for Rex runtime values.
+/// Shared allocation and inspection capability for Rex runtime values.
 pub use rex_engine::Heap;
 
 /// Trait implemented by typed asynchronous Rust functions that can be exported to Rex.

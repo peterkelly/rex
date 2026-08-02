@@ -2,7 +2,10 @@
 
 ## Problem
 
-`rex-engine/src/memory/heap.rs` combines heap implementation, GC roots, public handles, internal runtime cells, and public value views. The public `Value` enum includes variants that represent runtime implementation concepts rather than ordinary Rex values.
+`rex-engine/src/memory/heap.rs` combines heap implementation, GC roots, public
+handles, internal runtime cells, and public value views. The public `Value`
+enum still includes variants that represent runtime implementation concepts
+rather than ordinary Rex data.
 
 ## Evidence
 
@@ -13,14 +16,15 @@
 - `Heap`,
 - `Handle`,
 - public `Value`,
-- conversion traits such as `IntoRex` and `FromRex`,
-- tuple/container conversion implementations,
 - tests for rooting and GC behavior.
+
+Related concerns have already been separated: `IntoRex`/`FromRex` live in `memory/traits.rs`, list
+traversal lives in `memory/lists.rs`, handle promotion has its own narrow module, and evaluator
+frames no longer live in the heap.
 
 The public `Value` enum includes variants such as:
 
 - `Uninitialized`
-- `Frame`
 - `Closure`
 - `Native`
 - `Overloaded`
@@ -29,7 +33,8 @@ These are runtime/internal concepts, not values an embedder should normally trea
 
 ## Why This Smells
 
-Public APIs should expose stable semantic concepts. Runtime frames, closures, native callables, and overload sets are implementation details of the evaluator.
+Public APIs should expose stable semantic concepts. Closures, native callables, overload sets, and
+recursive-initialization placeholders are implementation details of the evaluator.
 
 When they appear in the public value enum:
 
@@ -42,6 +47,8 @@ The file-level structure reinforces the problem. Because heap internals and publ
 
 ## Impact
 
-This increases API coupling between embedders and the evaluator internals. It also makes future runtime refactors more expensive, especially if the evaluator changes how closures, frames, overloaded functions, or native values are represented.
+This increases API coupling between embedders and the evaluator internals. It
+also makes future runtime refactors more expensive, especially if the evaluator
+changes how closures, overloaded functions, or native values are represented.
 
 The smell is architectural: it does not mean the current GC/rooting design is wrong. It means the public value view and internal heap cell model need a clearer boundary.

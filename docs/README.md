@@ -59,7 +59,8 @@ The documentation is organized into:
 
 - **Introduction** — Overview and getting started
 - **Tutorial** — Three sections covering basics, advanced topics, and worked examples (36 chapters total)
-- **Reference** — Language reference, specification, architecture, and contribution guidelines
+- **Reference** — Language reference, specification, architecture, memory management, embedding,
+  LLM guidance, and contribution guidelines
 
 ## Syntax Highlighting
 

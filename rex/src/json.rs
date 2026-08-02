@@ -703,8 +703,10 @@ fn type_mismatch_handle(handle: &Handle, want: &Type) -> EngineError {
 /// Use this when an embedder receives entry-point inputs as JSON and wants to
 /// pass them to [`Evaluator::run`](crate::engine::Evaluator::run). The JSON
 /// value must be an object whose keys exactly match the compiled
-/// [`MainSignature`] input names. Pass the resulting map directly as the
-/// `inputs` argument to `Evaluator::run`.
+/// [`MainSignature`] input names. `heap` must be the heap borrowed from the
+/// evaluator that will run the program; handles allocated in another heap are
+/// rejected by `Evaluator::run`. Pass the resulting map directly as its
+/// `inputs` argument.
 pub fn json_to_main_inputs(
     heap: &Heap,
     value: Value,

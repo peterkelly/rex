@@ -6,7 +6,9 @@ Rex is designed first and foremost to be embedded inside Rust applications. In t
 
 Because Rex programs are pure and free of side effects in the language itself, the runtime can safely execute host-provided async functions in parallel when it is valid to do so. In practice, that means users can write straightforward functional code and still benefit from concurrency without directly managing threads, locks, or low-level async orchestration.
 
-All Rex code samples in this documentation are interactive. Edit them, run them, and use the output to learn by experimentation. A good place to start is the sample below.
+Rex examples marked as interactive can be edited and run directly in the documentation. Reference
+snippets and Rust embedding examples are displayed as static code. A good place to start is the
+interactive sample below.
 
 If you are using Rex as a code-generation target, read **[LLMs](LLMS.md)** early. It covers the
 LLM-first semantic workflow, syntax pitfalls, and validation steps that reduce iteration time.

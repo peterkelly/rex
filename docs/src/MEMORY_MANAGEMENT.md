@@ -1,174 +1,212 @@
 # Memory Management
 
-`rex-engine` uses a heap-based runtime: evaluated values live in a central heap, and the internal
-evaluator passes lightweight pointers to those heap entries. The heap now includes a copying
-collector, so internal pointers can move during allocation.
+`rex-engine` stores evaluated values in a shared moving heap. The copying collector may relocate
+every live value during allocation, so a heap location is never a stable runtime identity. Safety
+comes from using a reference representation whose lifetime and ownership match the boundary it
+crosses.
 
-This gives the runtime a clear separation between identity and storage without exposing raw heap
-pointers to embedders. Public API code works with rooted `Handle` values, while `Pointer` remains
-an internal representation detail.
+Embedders allocate through `Heap` and retain heap values through rooted `Handle` values;
+`Handle::value()` provides a public view when direct inspection is needed. During evaluation,
+mutable frame and scheduler state alternates between scope-rooted references while the heap is
+locked and opaque persistent roots while it is unlocked. Compiled environments and host work use
+handles at their outer boundaries. Raw moving pointers are confined to collector-owned cells and
+the heap implementation.
 
-## Design goals and rationale
+## Design goals
 
 - Support graph-shaped runtime data, including cycles.
-- Keep allocation and dereference rules explicit and centralized.
-- Make host integration predictable by using stable handles rather than implicit deep copies.
-- Preserve strong runtime safety checks for pointer validity and heap ownership.
-- Keep diagnostics (type names, debug/display output, equality) correct for heap graphs.
-- Allow unreachable runtime objects to be reclaimed without exposing raw moving pointers to embedders.
+- Make allocation, locking, and dereference authority explicit.
+- Keep values alive across concurrent host work without exposing moving locations.
+- Detect stale, cross-heap, and cross-arena references deterministically.
+- Keep equality, display, diagnostics, and Rust conversions correct for moving heap graphs.
+- Reclaim unreachable values without requiring evaluator code to rewrite its long-lived state.
 
-## Core runtime model
+## Heap ownership
 
-### `Pointer` is an internal stable pointer
+### `Heap` is the shared public capability
 
-A `Pointer` identifies a slot in a heap using:
+`Heap` is a cloneable, thread-safe owner of `Arc<Mutex<HeapState>>`. It may be retained across
+threads and `await` points. Public allocation and inspection methods acquire that mutex, and every
+allocation may collect before creating its result.
 
-- `heap_id`
-- `index`
-- `generation`
+This makes a `Heap` clone a broad capability: apparently small operations can lock shared state and
+move every live object. It belongs in the outer async evaluator coordinator, public host `Context`,
+and embedding APIs. Code that already owns the heap lock must not call back through `Heap`.
 
-Conceptually:
+### `HeapState` is the locked collector state
 
-- `index` selects a slot.
-- `generation` distinguishes different occupants of the same slot over time.
-- `heap_id` prevents accidental cross-heap usage.
+`HeapState` contains object slots, registered-root slots, the temporary-root stack, root free lists,
+and collection policy. It is available only while the `Heap` mutex is held. Exclusive
+`&mut HeapState` access is the underlying proof that one synchronous operation has sole access to
+the collector.
 
-`Pointer` is intentionally crate-private. The runtime validates it on access, so stale pointers and
-cross-heap usage fail deterministically inside the runtime. Because collection is copying, any raw
-pointer from before a collection is stale unless it has been rewritten through a traced runtime
-structure.
+Evaluator code receives that proof as `RootScope`, not as `HeapState` or `Heap`. A locked evaluator
+cycle cannot invoke host code, block, await, or call an operation whose destructor may reacquire the
+heap mutex.
 
-### `Handle` is the public rooted value reference
+## Reference categories
 
-A `Handle` owns a temporary external heap root for one value. Cloning the handle
-clones that root handle, and dropping the final clone unregisters it.
+| Reference | Purpose | Collector action | Permitted boundary |
+| --- | --- | --- | --- |
+| `InternalPtr` | Edge inside a GC-managed cell | Rewrites the pointer in the copied cell | Heap internals only; never across allocation, unlock, thread transfer, or `await` as an unrooted local |
+| `RootedPtr<'scope>` | Temporary value during one locked synchronous operation | Rewrites its temporary-root stack entry | Only inside the branded `RootScope`; deliberately neither `Send` nor `Sync`, and never across unlock or `await` |
+| `PersistentPtr` | Evaluator-owned value between locked cycles | Rewrites the registered heap root owned by its arena slot | May survive unlock, evaluator suspension, and task migration; resolvable only by its owning arena under a new `RootScope` |
+| `Handle` | Public, host, and outer-runtime rooted value | Rewrites its registered root slot | `Send + Sync`; may cross allocations, threads, callbacks, and `await` points |
 
-Host code can:
+### `InternalPtr` is a raw moving edge
 
-- inspect a value with `Handle::value()`, which returns a `Value`.
-- convert to Rust with `Handle::to_rust()` or `FromRex::from_rex(...)`.
-- display/debug/compare values through handle methods.
+An `InternalPtr` contains a heap identifier, slot index, and heap-wide collection epoch. The heap
+checks all three when dereferencing it. Every collection advances the epoch for all copied cells,
+so an old raw pointer fails even when its value happens to retain the same numeric slot index.
 
-Host code cannot extract or store a raw runtime pointer.
+`InternalPtr` is private to the heap and its private list-traversal module. GC-managed `Cell` values
+may contain it because the collector owns those edges and rewrites them during copying. A local raw
+pointer is valid only while the heap remains locked and no allocation can occur. It is not a frame,
+scheduler, environment, or host representation.
 
-### `Heap` stores all runtime values
+### `RootedPtr<'scope>` is a synchronous temporary root
 
-`Heap` owns an internal `HeapState` with object slots, external root slots, root-slot reuse state,
-and GC scheduling metadata.
+A `RootedPtr` is an index into the temporary-root stack, not a heap location. Its invariant lifetime
+brand ties it to the higher-ranked `RootScope` closure that created it. Collection updates the stack
+entry, so synchronous evaluator code can continue using the token after allocations in that same
+scope.
 
-- object slots store runtime cells
-- root slots store public `Handle` roots and temporary roots
-- GC metadata tracks the next collection threshold and collection count
+`RootScope` owns exclusive `&mut HeapState` access and restores the temporary-root stack to its entry
+depth on drop. Synchronous frames, environments, scheduler work, native tasks, and intermediate
+control results use `RootedPtr` while one evaluator cycle is executing. The scope brand makes both
+`RootScope` and `RootedPtr` neither `Send` nor `Sync`.
 
-Each `HeapSlot` stores:
+### `PersistentPtr` is evaluator-owned unlocked state
 
-- `generation: u64`
-- `cell: Option<Cell>`
+A `PersistentPtr` is a generational token for a slot in one `PersistentRootStore`. It contains no
+heap location and no `Heap` capability. Every live arena slot owns an ordinary registered heap root,
+which the collector updates when its value moves.
 
-Internal runtime reads/writes go through heap methods. Public construction uses
-`Heap::alloc_*`, which returns `Handle` values rather than raw pointers.
+Frames, environments, scheduler work items, and native-task state are converted to `PersistentPtr`
+before the evaluator releases the mutex. On the next cycle, the owning store resolves them into a
+new scope's `RootedPtr` values. Store identity, slot generation, and heap identity checks reject
+stale tokens and tokens from another heap or evaluator arena.
 
-### Runtime heap lifecycle
+The arena uses explicit insertion, replacement, removal, and teardown. It intentionally performs no
+destructor-based heap cleanup: dropping evaluator state while the heap is locked must not attempt to
+lock the same mutex again.
 
-`Builder` constructs the initial `Heap` during preparation (`Builder::new`, `Builder::with_prelude`).
-`Builder::build_compiler()` moves that heap handle into the `Compiler`, and
-`Compiler::compile_program()` then moves it into the evaluator runtime core returned with the
-compiled program.
+### `Handle` is the boundary-safe registered root
 
-- Evaluation returns `Handle`, not `Value`.
-- Callers can inspect via the returned handle or allocate more values from native callbacks through
-  `Context::heap()`.
+A `Handle` owns a generational registered-root identifier. It never exposes the current heap
+location. Clones share that root ownership, and the last owner unregisters the root. The registered
+slot is rewritten by collection, so the handle remains valid while host code allocates, suspends, or
+moves work between threads.
 
-This keeps allocation authority clear: the preparation phase creates the heap, and execution uses
-the evaluator runtime core's shared heap store.
+Handles are the public representation, but they are not restricted to embedder code. Immutable
+compiled/runtime environments and queued or completed host work also use handles when their values
+must remain valid outside a locked evaluator cycle. Mutable evaluator frames use `PersistentPtr`
+instead so their root lifecycle can be managed explicitly as one arena.
 
-### Copying collection and roots
+Public handle inspection and conversion methods lock the heap. Dropping the last clone also locks in
+order to unregister its root. For that reason, an active locked evaluator cycle uses `RootedPtr`
+instead of calling handle methods or owning values whose final `Handle` destructor could run there.
 
-Every public `Heap::alloc_*` call may run collection before allocating the requested object.
-Collection starts from registered roots, copies reachable objects into a new slot vector, rewrites
-roots and traced child pointers, and increments each moved object's generation. Old raw pointers
-are intentionally invalid after collection.
+## Allowed conversions
 
-Roots come from:
+Reference conversion is deliberately concentrated at boundary code:
 
-- public `Handle` values returned to host code
-- temporary roots used while constructing composite heap cells
-- evaluator frames and scheduler tasks that trace and rewrite their internal pointers
-- runtime environments, closures, native functions, and overloaded-function records stored in live heap cells
+- `Handle` to `RootedPtr`: `RootScope::root_handle` resolves the registered root while the heap is
+  already locked, then pushes the current pointer onto the temporary-root stack.
+- `PersistentPtr` to `RootedPtr`: `PersistentRootStore::resolve` validates the token and pushes the
+  resolved registered root into the active scope.
+- `RootedPtr` to `PersistentPtr`: `PersistentRootStore::insert` registers the current value before
+  the synchronous cycle releases the mutex.
+- `RootedPtr` to `Handle`: the sealed `HandlePromoter` registers the root without relocking. It is
+  available only from the explicitly named promotable-scope entry point used for final results and
+  host-call arguments.
+- `RootedPtr` to `InternalPtr`: private heap allocation and overwrite operations read current
+  pointers only while the scope protects every input. The resulting raw pointers become traced
+  `Cell` edges before the operation returns.
+- `InternalPtr` to `RootedPtr`: private heap inspection code roots a discovered child before any
+  subsequent allocation can occur.
 
-This is why public APIs return handles. A `Handle` owns an external heap root, remains valid across
-later allocations and `await` points, and resolves to the current post-GC pointer when the runtime
-needs to dereference it.
+There is no conversion that places `InternalPtr` in unlocked evaluator state or exposes it to an
+embedder. Scope branding also prevents a `RootedPtr` from being returned to the outer async loop.
 
-## Read/write semantics
+## Copying collection
 
-### Public reads return `Value`
+The single object-allocation path decides whether collection is needed. If a new cell already
+contains internal child edges, it registers those children before collecting and rewrites them to
+their new locations before installing the cell.
 
-`Handle::value()` returns `Value`, a safe public value of the runtime value. Composite values
-contain child `Handle` values rather than raw pointers.
+Collection starts from two root sets:
 
-Why:
+- registered roots owned by `Handle` values and evaluator `PersistentRootStore` slots;
+- the temporary-root stack owned by active `RootScope` values.
 
-- Avoid accidental deep clones in hot paths.
-- Keep internal runtime values and heap pointers out of the public API.
-- Root child values discovered during inspection.
+It traces `InternalPtr` edges in reachable cells, copies every reachable cell, builds forwarding
+locations, and rewrites registered roots, temporary roots, and cell edges. Old raw pointers then
+fail their collection-epoch checks by design.
 
-### Writes are controlled
+Evaluator frames and scheduler state do not participate in the collector's tracing interface. They
+contain either `RootedPtr` indices during a locked cycle or `PersistentPtr` tokens between cycles.
+The collector is solely responsible for rewriting raw cell edges and root slots.
 
-Public values are created through `Heap::alloc_*` methods, which return `Handle`.
+## Evaluator and host boundary
 
-There is also an internal `overwrite` operation used for recursive initialization patterns
-(placeholder first, then finalized value). Runtime code that holds crate-private pointers across
-allocation must protect them with handles, temporary roots, or traced frame/task state.
+One non-async evaluator cycle executes under a single `RootScope`. It resolves persistent state,
+runs one work item and its synchronous helpers, applies the control result, persists surviving
+state, and promotes any final result or host-call arguments before returning.
 
-## Equality, debug, and display are heap-aware
+The outer async coordinator releases the heap lock before it activates or polls host work. Queued
+and completed host calls contain public `Handle` values, types, and Rust-owned metadata only. A
+completed host result remains a handle until the next locked cycle roots it.
 
-Structural operations are provided as heap-aware helpers:
+Immediate and deferred callbacks use the same handle-only ABI. "Immediate" changes scheduling
+policy; it does not create a raw-pointer callback path.
 
-- `Handle::debug()`
-- `Handle::display()` / `Handle::display_with(...)`
-- `Handle::value_eq(...)`
+Internal scheduler-native helpers are not part of that host ABI. They run synchronously inside the
+locked cycle and receive only `RootScope`, type information, and `RootedPtr` arguments; they cannot
+call through public `Heap`/`Handle` operations. If a helper returns an evaluator-native task, its
+rooted values are converted to persistent roots before the cycle unlocks.
 
-These functions dereference through the heap and are cycle-safe (visited-set based), so recursive
-graphs can be inspected and compared without infinite recursion. They operate through handles, so
-they stay valid even if allocation has moved the underlying objects since the handle was created.
+## Public reads and construction
 
-## Handle-first host/native boundary
+`Handle::value()` returns a public `Value`. Composite `Value` variants contain child `Handle`
+values. The heap registers all child roots while locked, releases the guard, and only then constructs
+their public handle owners, avoiding both moving-pointer exposure and destructor re-entry.
 
-Runtime conversion traits are handle-centric:
+Public values are created through `Heap::alloc_*` methods. Composite inputs are resolved and rooted
+under one guard before allocation, and the result is registered before that guard is released.
+`IntoRex` and `FromRex` follow the same handle-centric boundary.
 
-- `IntoRex`
-- `FromRex`
+Heap-aware structural operations include:
 
-Public native injection paths pass handles, including module runtime exports
-(`export_native` / `export_native_async`). These callbacks receive
-`Context<State>`, so they can allocate public handles through
-`ctx.heap()` and inspect host state via `ctx.state()`. `Value` is used
-where direct payload inspection is required.
+- `Handle::debug()`;
+- `Handle::display()` and `Handle::display_with(...)`;
+- `Handle::value_eq(...)`.
 
-This keeps ownership/allocation behavior centralized in the heap while making it
-impossible for host code to store unrooted raw pointers.
+They resolve through registered roots and use cycle-safe graph traversal, so they remain correct
+after previous collections.
 
-## Safety and invariants
+## Runtime checks
 
-At runtime, the heap enforces:
+The heap enforces or verifies:
 
-- Wrong-heap pointer rejection (`heap_id` mismatch).
-- Invalid/stale pointer rejection (`index`/`generation` mismatch).
-- Type-aware errors via heap-driven `type_name`.
-- Root validation for public handles and temporary roots.
-- Debug-build verification that copied objects are rooted and all traced child pointers are valid
-  after collection.
+- heap identity on raw pointers, handles, root identifiers, stores, and persistent tokens;
+- the heap-wide collection epoch for raw pointers;
+- slot generations for stale registered-root and persistent-arena identifiers;
+- explicit persistent-root ownership and teardown;
+- temporary-root stack integrity when a `RootScope` exits;
+- complete forwarding of registered roots and temporary roots during collection;
+- valid rewritten child pointers in every copied cell;
+- absence of empty, wrong-epoch, or unreachable slots after debug-build collection.
 
 No `unsafe` code is used for this memory model.
 
-## Scope and limitations
+## Lifecycle and limitations
 
-- This is a moving, copying heap with automatic collection; embedders should treat object location
-  as completely opaque.
-- There is no public manual GC or heap-tuning API. Test-only hooks can force collection, but
-  production callers only observe stable `Handle` behavior.
-- `Pointer`, `Cell`, temporary roots, and trace/rewrite plumbing remain crate-private runtime machinery.
+`Builder` creates the heap, `Compiler` carries it through program preparation, and `Evaluator` uses
+it for execution. Evaluation returns a `Handle`, not an unrooted payload. Handle-based native
+callbacks receive the same heap through `Context` and can safely allocate additional handles;
+typed exports use that heap internally when converting Rust arguments and results.
 
-In short, memory management is centered on explicit heap ownership, rooted public handles,
-validated moving pointers, and cycle-safe graph traversal.
+There is no public operation that exposes a heap location or manually runs collection. The public
+collection-on-every-allocation setting exists for stress validation; production execution uses the
+heap-growth policy. Embedders must treat object location and collection epochs as entirely opaque.

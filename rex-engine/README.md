@@ -42,6 +42,18 @@ Phase-specific errors:
 - `Evaluator::run` returns `EngineError`
 - APIs that parse, compile, and run in one call return `ExecutionError`
 
+## Runtime Values and GC
+
+The runtime uses a moving copying collector. Public `Handle` values own registered roots rather
+than heap locations, so they remain valid across allocations, collections, thread transfers, and
+`await` points. `Evaluator::run` returns a `Handle`, and any handles supplied as external `main`
+inputs must have been allocated in that evaluator's `Evaluator::heap()`; foreign-heap inputs are
+rejected.
+
+Host callbacks are invoked only after the evaluator releases its locked heap cycle. Both
+synchronous and asynchronous callbacks cross that boundary with handles. See the
+[memory-management guide](../docs/src/MEMORY_MANAGEMENT.md) for the internal rooting model.
+
 ## Internal Layout
 
 The engine implementation is split by phase:
@@ -61,7 +73,8 @@ live beside those phase directories.
 - Use `Module::global()` for root-scope values/functions.
 - Use `Module::new("acme.math")` for importable modules.
 - Add typed exports with `export` / `export_async`.
-- Add pointer-level exports with `export_native` / `export_native_async`.
+- Add handle-based exports with runtime-defined signatures using `export_native` /
+  `export_native_async`.
 - Add constant values with `export_value`.
 - Add ADTs with `add_adt_decl` or `add_rex_adt::<T>()`.
 - Materialize the staged module with `Builder::inject_module(...)`.
@@ -79,7 +92,9 @@ Operator names can be injected with parentheses (e.g., `"(+)"`); the engine norm
 returning `Err(...)` fails evaluation.
 `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`;
 returning `Err(...)` fails evaluation.
-Pointer-level APIs (`export_native*`) receive `Context<State>` so they can access heap/runtime internals.
+Handle-based APIs (`export_native*`) receive `Context<State>` so they can read host state and type
+information and allocate rooted values through the public heap. They do not expose raw heap
+pointers or locked evaluator internals.
 `export_native*` validates `Scheme`/arity compatibility during registration.
 
 ## Prelude

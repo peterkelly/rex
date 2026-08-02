@@ -19,6 +19,12 @@ use crate::{
     util::{impl_matches_type, is_function_type},
 };
 
+/// Public context supplied to handle-based host callbacks.
+///
+/// The evaluator invokes those callbacks only after releasing its locked
+/// synchronous heap cycle. The context therefore exposes the shared [`Heap`]
+/// for allocating rooted [`Handle`] values, along with immutable runtime state
+/// and type information. It never exposes an internal moving pointer.
 #[derive(Clone)]
 pub struct Context<State = ()>
 where
@@ -32,10 +38,24 @@ impl<State> Context<State>
 where
     State: Clone + Send + Sync + 'static,
 {
+    /// Pair an internal evaluator context with its public heap capability.
+    ///
+    /// Host callbacks receive a `Context` from the evaluator and do not need
+    /// to call this constructor. It exists for follow-up host work after
+    /// [`Evaluator::run_with_context`](crate::Evaluator::run_with_context).
+    /// `heap` must be the heap from that same evaluator lineage; use the heap
+    /// of the returned [`Handle`] or clone [`Evaluator::heap`](crate::Evaluator::heap)
+    /// before consuming the evaluator. Pairing an internal context with an
+    /// unrelated heap causes later callback evaluation to reject foreign-heap
+    /// handles.
     pub fn new(inner: InternalCtx<State>, heap: Heap) -> Self {
         Self { inner, heap }
     }
 
+    /// Shared heap for allocating or inspecting public rooted values.
+    ///
+    /// Heap operations may lock and collect. They are safe in a host callback
+    /// because the evaluator releases its own heap guard before invoking it.
     pub fn heap(&self) -> &Heap {
         &self.heap
     }

@@ -6,7 +6,9 @@
 //! Embedders build a [`Builder`] with host modules and runtime policy, convert
 //! it into a [`Compiler`] to prepare Rex source or ASTs into a
 //! [`CompiledProgram`], then run that program with a single-shot [`Evaluator`]
-//! and a map of runtime inputs for `main`.
+//! and a map of runtime inputs for `main`. Runtime values cross the embedding
+//! boundary as registered [`Handle`] roots allocated in that evaluator's
+//! [`Heap`].
 
 mod builder;
 mod compiler;

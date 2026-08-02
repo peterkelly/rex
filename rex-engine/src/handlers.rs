@@ -413,7 +413,8 @@ impl<'scope> NativeCallRequest<'scope> {
 }
 
 // A host call that is safe to queue or suspend because every argument is a
-// persistent heap root.
+// registered `Handle` root. This is deliberately distinct from evaluator-owned
+// `PersistentPtr` state.
 pub(crate) struct NativeCall {
     native_id: NativeId,
     scheduling: NativeCallScheduling,

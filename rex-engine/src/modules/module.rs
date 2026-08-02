@@ -466,12 +466,13 @@ where
     /// `scheme` describes the Rex-visible type, and `arity` must match the number of arguments the
     /// handler expects.
     ///
-    /// The evaluator invokes the handler outside evaluator-owned heap access. Its arguments and
+    /// The evaluator invokes the handler after releasing its locked heap cycle. Its arguments and
     /// result cross that boundary as rooted [`Handle`] values, so the handler may allocate through
-    /// [`Context::heap`](crate::Context::heap). Synchronous handlers resume immediately through the
-    /// native completion path and do not consume asynchronous admission permits.
+    /// [`Context::heap`](crate::Context::heap). Synchronous handlers resume immediately through
+    /// the native completion path and do not consume asynchronous admission permits.
     /// They run on the evaluator task, so blocking or long-running work should use
-    /// [`Module::export_native_async`] instead.
+    /// [`Module::export_native_async`] instead. The returned handle must belong to the context's
+    /// heap; the evaluator rejects a handle from another heap.
     ///
     /// # Examples
     ///
@@ -487,7 +488,7 @@ where
     /// );
     ///
     /// module
-    ///     .export_native("id_ptr", scheme, 1, |_ctx: Context<()>, _typ: &Type, args: &[Handle]| {
+    ///     .export_native("id_handle", scheme, 1, |_ctx: Context<()>, _typ: &Type, args: &[Handle]| {
     ///         Ok(args[0].clone())
     ///     })
     ///     .unwrap();
@@ -514,7 +515,8 @@ where
     ///
     /// This is the deferred counterpart to [`Module::export_native`]. Both APIs use the same
     /// [`Context`] and rooted [`Handle`] heap boundary; this variant additionally participates in
-    /// asynchronous admission control and may remain suspended.
+    /// asynchronous admission control and may remain suspended. Its result is subject to the same
+    /// same-heap validation as the synchronous form.
     ///
     /// # Examples
     ///

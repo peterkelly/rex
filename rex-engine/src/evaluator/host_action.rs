@@ -89,6 +89,11 @@ enum HostRunnerStep {
 /// `lookup` maps the opaque Rex action handle to the next host action node.
 /// Rex callbacks inside `map`, `ap`, and `bind` are evaluated by the engine one
 /// step at a time; the runner never recursively awaits itself.
+///
+/// `ctx`, `action`, and every handle returned by `lookup` or a host effect must
+/// belong to the same evaluator heap. In particular, construct `ctx` from the
+/// internal context and heap associated with the evaluation that produced
+/// `action`; host-action evaluation does not copy values between heaps.
 pub async fn run_host_action<State, Lookup>(
     ctx: Context<State>,
     action: Handle,

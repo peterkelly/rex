@@ -27,8 +27,8 @@ The crates are designed so you can use them independently (e.g. parser-only tool
     point into `(CompiledProgram, Evaluator)`. `Compiler::infer_*` consumes the compiler for
     type-only checks.
   - `Evaluator::run(compiled, inputs).await` to execute one prepared program. `inputs` is a
-    `BTreeMap<String, Handle>` for the program's external `main` interface; `run` consumes the
-    evaluator, compiled program, and input map.
+    `BTreeMap<String, Handle>` for the program's external `main` interface. Every input handle must
+    belong to that evaluator's heap; `run` consumes the evaluator, compiled program, and input map.
   - `Builder` carries host state as `Builder<State>` (`State: Clone + Send + Sync + 'static`);
     typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed
     `export_async` callbacks receive `&State` and return
@@ -51,6 +51,29 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - `evaluator/` owns execution, scheduling, native dispatch, `Context`, and the runtime core.
 - `modules/`, `memory/`, and `config.rs` hold shared module identities, heap values/GC roots,
   and runtime options.
+
+## Runtime Ownership and GC Boundaries
+
+`rex-engine` uses a moving copying collector. A heap slot is not a stable identity, and any
+allocation may collect. The runtime separates references according to the boundary they cross:
+
+- heap cells contain private moving edges that the collector traces and rewrites;
+- one locked synchronous evaluator cycle uses branded temporary roots;
+- mutable frames, environments, and scheduler work use evaluator-owned persistent roots while the
+  heap is unlocked;
+- compiled/runtime environments and host work retain registered `Handle` roots;
+- the heap-value boundary exposed to embedders consists of `Heap`, `Handle`, and public `Value`
+  views; callback `Context` carries the same public heap capability.
+
+The async evaluator coordinator owns the shared `Heap`, but a locked evaluator cycle receives only
+exclusive scoped access. Before releasing the heap mutex, it converts surviving evaluator state to
+persistent roots and promotes host-call arguments or the final result to handles. Embedder-provided
+host callbacks and their futures are invoked or polled only after the lock is released, so they may
+allocate using their public `Context` without re-entering the same locked cycle. Internal
+scheduler-native helpers are separate and operate synchronously through scoped roots.
+
+See [Memory Management](MEMORY_MANAGEMENT.md) for the reference categories, allowed conversions,
+and collector invariants.
 
 ## Design Notes
 
