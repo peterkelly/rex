@@ -47,10 +47,11 @@ The existing transition has established much of the synchronous API:
 - Control frames live outside the GC heap.
 
 The evaluator now owns a generational `PersistentRootStore`. Frames, evaluator
-environments, scheduler work items, native tasks, and the typeclass cache use
-`PersistentPtr` while the heap is unlocked. Host completions remain `Handle`
-values until the next locked evaluator cycle, and host-call arguments are
-promoted to handles before that cycle releases the mutex.
+environments, scheduler work items, and native tasks use `PersistentPtr` while
+the heap is unlocked. Host completions remain `Handle` values until the next
+locked evaluator cycle, and host-call arguments are promoted to handles before
+that cycle releases the mutex. The obsolete typeclass value cache has been
+removed; the cactus evaluator had not populated it since its introduction.
 
 One synchronous evaluator cycle now resolves persistent state under a single
 `RootScope`, executes a work item, and rebuilds the persistent arena before

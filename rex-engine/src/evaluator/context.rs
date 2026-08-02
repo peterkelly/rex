@@ -184,14 +184,6 @@ where
             .resolve(&info.class, name, &param_type, heap)
     }
 
-    pub(crate) fn cached_class_method(&self, name: &Symbol, typ: &Type) -> Option<Pointer> {
-        if !typ.ftv().is_empty() {
-            return None;
-        }
-        let cache = self.runtime.cycle_typeclass_cache.lock().ok()?;
-        cache.as_ref()?.get(&(name.clone(), typ.clone())).copied()
-    }
-
     pub(crate) fn resolve_class_method_plan<'scope>(
         &self,
         scope: &mut RootScope<'_, 'scope>,

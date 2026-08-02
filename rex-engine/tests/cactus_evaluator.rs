@@ -1244,7 +1244,7 @@ async fn gc_every_alloc_handles_captured_closure_envs() {
 }
 
 #[tokio::test]
-async fn gc_every_alloc_handles_typeclass_cached_values() {
+async fn gc_every_alloc_handles_repeated_typeclass_resolution() {
     let result = eval_i32(
         r#"
         type Box = Box { value: i32 };

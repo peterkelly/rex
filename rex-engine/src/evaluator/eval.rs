@@ -61,7 +61,6 @@ where
     roots: PersistentRootStore,
     frames: PersistentFrameStore,
     scheduler: EvalScheduler<State, PersistentPtr>,
-    typeclass_cache: BTreeMap<(Symbol, Type), PersistentPtr>,
 }
 
 struct TransientEvalState<State>
@@ -147,41 +146,7 @@ where
     eval_typed_expr_inner(runtime, heap, env, expr).await
 }
 
-fn take_typeclass_cache<State>(
-    runtime: &RuntimeCore<State>,
-) -> Result<BTreeMap<(Symbol, Type), Pointer>, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    let mut cache = runtime
-        .cycle_typeclass_cache
-        .lock()
-        .map_err(|_| EngineError::Internal("typeclass cache poisoned".into()))?;
-    Ok(cache.take().unwrap_or_default())
-}
-
-fn install_typeclass_cache<State>(
-    runtime: &RuntimeCore<State>,
-    values: BTreeMap<(Symbol, Type), Pointer>,
-) -> Result<(), EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    let mut cache = runtime
-        .cycle_typeclass_cache
-        .lock()
-        .map_err(|_| EngineError::Internal("typeclass cache poisoned".into()))?;
-    if cache.is_some() {
-        return Err(EngineError::Internal(
-            "raw typeclass cache crossed an evaluator cycle boundary".into(),
-        ));
-    }
-    *cache = Some(values);
-    Ok(())
-}
-
 fn persist_eval_state<'heap, 'scope, State>(
-    runtime: &RuntimeCore<State>,
     scope: &mut RootScope<'heap, 'scope>,
     frames: FrameStore<Frame<Pointer, Environment>>,
     scheduler: EvalScheduler<State, Pointer>,
@@ -190,7 +155,6 @@ fn persist_eval_state<'heap, 'scope, State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let raw_cache = take_typeclass_cache(runtime)?;
     let mut roots = scope.heap.persistent_root_store()?;
 
     let converted = (|| {
@@ -205,17 +169,10 @@ where
             let rooted = scope.root(pointer);
             roots.insert(scope, rooted)
         })?;
-        let typeclass_cache = raw_cache
-            .into_iter()
-            .map(|(key, pointer)| {
-                let rooted = scope.root(pointer);
-                Ok((key, roots.insert(scope, rooted)?))
-            })
-            .collect::<Result<_, EngineError>>()?;
-        Ok::<_, EngineError>((frames, scheduler, typeclass_cache))
+        Ok::<_, EngineError>((frames, scheduler))
     })();
 
-    let (frames, scheduler, typeclass_cache) = match converted {
+    let (frames, scheduler) = match converted {
         Ok(converted) => converted,
         Err(error) => {
             let _ = roots.clear(scope);
@@ -233,12 +190,10 @@ where
         roots,
         frames,
         scheduler,
-        typeclass_cache,
     })
 }
 
 fn resolve_eval_state<'heap, 'scope, State>(
-    runtime: &RuntimeCore<State>,
     scope: &mut RootScope<'heap, 'scope>,
     state: PersistentEvalState<State>,
 ) -> Result<TransientEvalState<State>, EngineError>
@@ -249,7 +204,6 @@ where
         mut roots,
         frames,
         scheduler,
-        typeclass_cache,
     } = state;
 
     let converted = (|| {
@@ -264,24 +218,16 @@ where
             let rooted = roots.resolve(scope, &value)?;
             Ok::<_, EngineError>(scope.pointer(rooted))
         })?;
-        let typeclass_cache = typeclass_cache
-            .into_iter()
-            .map(|(key, value)| {
-                let rooted = roots.resolve(scope, &value)?;
-                Ok((key, scope.pointer(rooted)))
-            })
-            .collect::<Result<_, EngineError>>()?;
-        Ok::<_, EngineError>((frames, scheduler, typeclass_cache))
+        Ok::<_, EngineError>((frames, scheduler))
     })();
 
-    let (frames, scheduler, typeclass_cache) = match converted {
+    let (frames, scheduler) = match converted {
         Ok(converted) => converted,
         Err(error) => {
             let _ = roots.clear(scope);
             return Err(error);
         }
     };
-    install_typeclass_cache(runtime, typeclass_cache)?;
     Ok(TransientEvalState {
         previous_roots: roots,
         frames,
@@ -302,7 +248,7 @@ where
     let root_frame = frames.insert(frame_for_expr(None, expr, env));
     let scheduler = EvalScheduler::new(root_frame, runtime.parallelism_controller.clone());
     let mut state = Some(heap.with_locked(|heap_state| {
-        heap_state.root_scope(|scope| persist_eval_state(&runtime, scope, frames, scheduler, None))
+        heap_state.root_scope(|scope| persist_eval_state(scope, frames, scheduler, None))
     })?);
 
     let mut iteration = 0;
@@ -374,7 +320,7 @@ where
         mut previous_roots,
         mut frames,
         mut scheduler,
-    } = resolve_eval_state(runtime, scope, state)?;
+    } = resolve_eval_state(scope, state)?;
     let released_host_handle = if let Some((frame, handle)) = completed_native {
         let value = handle.pointer(scope.heap)?;
         scheduler.schedule_next(EvalWorkItem::receive(frame, frame, value));
@@ -390,11 +336,9 @@ where
     frames.trace_pointers(&mut protected);
     item.trace_pointers(&mut protected);
     scheduler.trace_pointers(&mut protected);
-    runtime.trace_pointers(&mut protected)?;
 
     let result = scope.with_temp_roots(protected.clone(), |scope, roots| {
         refresh_eval_roots(
-            runtime,
             scope.heap,
             &mut frames,
             &mut item,
@@ -415,7 +359,6 @@ where
             None => eval_enter(runtime, scope, &mut frames, item.frame, frame)?,
         };
         refresh_eval_roots(
-            runtime,
             scope.heap,
             &mut frames,
             &mut item,
@@ -462,7 +405,6 @@ where
 
     if let Some(result) = result {
         previous_roots.clear(scope)?;
-        let _ = take_typeclass_cache(runtime)?;
         let result = scope.root(result);
         let result = heap.handle_rooted(scope, result)?;
         return Ok(LockedCycleOutcome {
@@ -472,7 +414,7 @@ where
         });
     }
 
-    let state = persist_eval_state(runtime, scope, frames, scheduler, Some(previous_roots))?;
+    let state = persist_eval_state(scope, frames, scheduler, Some(previous_roots))?;
     Ok(LockedCycleOutcome {
         state: Some(state),
         result: None,
@@ -481,7 +423,6 @@ where
 }
 
 fn refresh_eval_roots<State>(
-    runtime: &mut RuntimeCore<State>,
     heap: &HeapState,
     frames: &mut FrameStore<Frame<Pointer, Environment>>,
     item: &mut EvalWorkItem<Pointer>,
@@ -504,8 +445,7 @@ where
         |pointer| Ok::<_, EngineError>(rewrites.get(&pointer).copied().unwrap_or(pointer));
     frames.map_pointers(&mut rewrite)?;
     item.map_pointers(&mut rewrite)?;
-    scheduler.map_pointers(&mut rewrite)?;
-    runtime.map_pointers(&mut rewrite)
+    scheduler.map_pointers(&mut rewrite)
 }
 
 pub(crate) fn frame_for_expr(
@@ -1782,9 +1722,6 @@ where
         }
     } else if runtime.type_system.class_methods.contains_key(name) {
         let ctx = InternalCtx::new_with_parent(runtime, parent);
-        if let Some(pointer) = ctx.cached_class_method(name, typ) {
-            return Ok(EvalVarResult::Value(pointer));
-        }
         match ctx.resolve_class_method_plan(scope, name, typ)? {
             Ok((env, specialized)) => Ok(EvalVarResult::Push {
                 expr: Arc::new(specialized),
