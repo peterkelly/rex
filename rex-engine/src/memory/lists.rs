@@ -85,16 +85,16 @@ impl<P> ListItems<P> {
 }
 
 impl ListItems<InternalPtr> {
-    pub(crate) fn into_list_rooted_items<'scope>(
+    pub(crate) fn into_rooted<'scope>(
         self,
         scope: &mut RootScope<'_, 'scope>,
-    ) -> ListRootedItems<'scope> {
+    ) -> ListItems<RootedPtr<'scope>> {
         match self {
             Self::Slice {
                 elements,
                 start,
                 end,
-            } => ListRootedItems::Slice {
+            } => ListItems::Slice {
                 elements: scope.root(elements),
                 start,
                 end,
@@ -104,14 +104,14 @@ impl ListItems<InternalPtr> {
                 start,
                 end,
                 bytes,
-            } => ListRootedItems::BinarySlice {
+            } => ListItems::BinarySlice {
                 elements: scope.root(elements),
                 start,
                 end,
                 bytes,
             },
-            Self::Pointers(rooted_ptrs) => {
-                ListRootedItems::Pointers(rooted_ptrs.into_iter().map(|r| scope.root(r)).collect())
+            Self::Pointers(pointers) => {
+                ListItems::Pointers(pointers.into_iter().map(|ptr| scope.root(ptr)).collect())
             }
         }
     }
@@ -525,114 +525,5 @@ pub(super) fn list_items_from_pointer(
             expected: "list".into(),
             got: cell.cell_type_name().into(),
         }),
-    }
-}
-
-#[derive(Clone)]
-pub(crate) enum ListRootedItems<'scope> {
-    Slice {
-        elements: RootedPtr<'scope>,
-        start: usize,
-        end: usize,
-    },
-    BinarySlice {
-        elements: RootedPtr<'scope>,
-        start: usize,
-        end: usize,
-        bytes: Arc<[u8]>,
-    },
-    Pointers(Vec<RootedPtr<'scope>>),
-}
-
-impl<'scope> ListRootedItems<'scope> {
-    pub(crate) fn into_rooted_list_items(self) -> ListItems<RootedPtr<'scope>> {
-        match self {
-            Self::Slice {
-                elements,
-                start,
-                end,
-            } => ListItems::Slice {
-                elements,
-                start,
-                end,
-            },
-            Self::BinarySlice {
-                elements,
-                start,
-                end,
-                bytes,
-            } => ListItems::BinarySlice {
-                elements,
-                start,
-                end,
-                bytes,
-            },
-            Self::Pointers(values) => ListItems::Pointers(values),
-        }
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        match self {
-            Self::Slice { start, end, .. } => end - start,
-            Self::BinarySlice { start, end, .. } => end - start,
-            Self::Pointers(values) => values.len(),
-        }
-    }
-
-    pub(crate) fn get(
-        &self,
-        scope: &mut RootScope<'_, 'scope>,
-        index: usize,
-    ) -> Result<RootedPtr<'scope>, EngineError> {
-        match self {
-            Self::Slice {
-                elements,
-                start,
-                end,
-            } => {
-                let len = end - start;
-                if index >= len {
-                    return Err(EngineError::Internal(
-                        "list item index out of bounds".into(),
-                    ));
-                }
-                let backing_index = start.checked_add(index).ok_or_else(|| {
-                    EngineError::Internal("list slice backing index overflow".into())
-                })?;
-                if backing_index >= *end {
-                    return Err(EngineError::Internal(
-                        "list slice backing index out of bounds".into(),
-                    ));
-                }
-                let values: Vec<InternalPtr> =
-                    scope.get_cell_from_rooted_ptr(*elements)?.cell_as_data()?;
-                let res_ptr = values.get(backing_index).copied().ok_or_else(|| {
-                    EngineError::Internal("list slice backing index out of bounds".into())
-                })?;
-                Ok(scope.root(res_ptr))
-            }
-            Self::BinarySlice {
-                start, end, bytes, ..
-            } => {
-                let len = end - start;
-                if index >= len {
-                    return Err(EngineError::Internal(
-                        "list item index out of bounds".into(),
-                    ));
-                }
-                let value = bytes.get(index).copied().ok_or_else(|| {
-                    EngineError::Internal("binary list slice index out of bounds".into())
-                })?;
-                scope.alloc_root_u8(value)
-            }
-            Self::Pointers(values) => values
-                .get(index)
-                .copied()
-                .ok_or_else(|| EngineError::Internal("list item index out of bounds".into())),
-        }
     }
 }

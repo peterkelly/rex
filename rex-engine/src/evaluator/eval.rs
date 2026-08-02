@@ -16,7 +16,7 @@ use crate::{
             Handle, Heap, PersistentPtr, PersistentRootStore, RootScope, RootedCallable,
             RootedClosure, RootedPtr,
         },
-        lists::ListRootedItems,
+        lists::ListItems,
     },
     native_fn::NativeApplyResult,
     overloaded_fn::OverloadedFn,
@@ -1688,7 +1688,7 @@ fn match_pattern_ptr<'scope>(
             {
                 return Ok(Some(BTreeMap::new()));
             }
-            let values: ListRootedItems = scope.list_items(value)?;
+            let values = scope.list_items(value)?;
             match_list_patterns(scope, ps, values)
         }
         Pattern::Cons(_, head, tail) => {
@@ -1725,7 +1725,7 @@ fn match_pattern_ptr<'scope>(
 fn match_list_patterns<'scope>(
     scope: &mut RootScope<'_, 'scope>,
     patterns: &[Pattern],
-    values: ListRootedItems<'scope>,
+    values: ListItems<RootedPtr<'scope>>,
 ) -> Result<Option<BTreeMap<Symbol, RootedPtr<'scope>>>, EngineError> {
     if patterns.len() != values.len() {
         return Ok(None);

@@ -20,8 +20,8 @@ use crate::{
 use super::{
     handle_promotion::with_promotable_root_scope,
     lists::{
-        ListElement, ListItemsSeed, ListRootElement, ListRootedItems, collect_list_u8,
-        format_list_debug, format_list_display, list_cells_eq_inner, list_elements_from_pointer,
+        ListElement, ListItems, ListItemsSeed, ListRootElement, collect_list_u8, format_list_debug,
+        format_list_display, list_cells_eq_inner, list_elements_from_pointer,
         list_elements_to_rooted_ptr_vec, list_items_from_pointer, list_len_from_pointer,
         list_slice_backing_len, list_slice_head_element, materialize_list_elements,
         validate_list_slice_bounds,
@@ -922,19 +922,19 @@ impl<'h, 'scope> RootScope<'h, 'scope> {
     pub(crate) fn list_items(
         &mut self,
         root: RootedPtr<'scope>,
-    ) -> Result<ListRootedItems<'scope>, EngineError> {
+    ) -> Result<ListItems<RootedPtr<'scope>>, EngineError> {
         let pointer = self.pointer(root);
         match list_items_from_pointer(self.heap, pointer)? {
-            ListItemsSeed::Ready(items) => Ok(items.into_list_rooted_items(self)),
+            ListItemsSeed::Ready(items) => Ok(items.into_rooted(self)),
             ListItemsSeed::Elements(elements) => {
                 if elements
                     .iter()
                     .all(|element| matches!(element, ListElement::InternalPtr(_)))
                 {
                     return list_elements_to_rooted_ptr_vec(self, elements)
-                        .map(ListRootedItems::Pointers);
+                        .map(ListItems::Pointers);
                 }
-                materialize_list_elements(self, elements).map(ListRootedItems::Pointers)
+                materialize_list_elements(self, elements).map(ListItems::Pointers)
             }
         }
     }

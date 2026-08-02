@@ -749,8 +749,8 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
                 })?;
                 let list_ty = lhs_ty.apply(&subst);
                 let elem_ty = list_elem_type(&list_ty)?;
-                let xs = scope.list_items(args[0])?.into_rooted_list_items();
-                let ys = scope.list_items(args[1])?.into_rooted_list_items();
+                let xs = scope.list_items(args[0])?;
+                let ys = scope.list_items(args[1])?;
                 Ok(SchedulerNativeResult::Task(NativeTask::ArrayEq(
                     NativeArrayEq {
                         elem_type: elem_ty,
@@ -773,8 +773,8 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
             })?;
             let list_ty = lhs_ty.apply(&subst);
             let elem_ty = list_elem_type(&list_ty)?;
-            let xs = scope.list_items(args[0])?.into_rooted_list_items();
-            let ys = scope.list_items(args[1])?.into_rooted_list_items();
+            let xs = scope.list_items(args[0])?;
+            let ys = scope.list_items(args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::ArrayEq(
                 NativeArrayEq {
                     elem_type: elem_ty,
@@ -1641,7 +1641,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let list_ty = arg_tys[1].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = scope.list_items(args[1])?.into_rooted_list_items();
+            let values = scope.list_items(args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::SequenceMap(
                 NativeSequenceMap {
                     func: args[0],
@@ -1736,7 +1736,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = scope.list_items(args[2])?.into_rooted_list_items();
+            let values = scope.list_items(args[2])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1806,7 +1806,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = scope.list_items(args[2])?.into_rooted_list_items();
+            let values = scope.list_items(args[2])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1876,7 +1876,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = scope.list_items(args[2])?.into_rooted_list_items();
+            let values = scope.list_items(args[2])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1939,7 +1939,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let list_ty = arg_tys[1].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = scope.list_items(args[1])?.into_rooted_list_items();
+            let values = scope.list_items(args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilter(
                 NativeSequenceFilter {
                     func: args[0],
@@ -2001,7 +2001,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = scope.list_items(args[1])?.into_rooted_list_items();
+                let values = scope.list_items(args[1])?;
                 Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilterMap(
                     NativeSequenceFilterMap {
                         func: args[0],
@@ -2064,7 +2064,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let list_ty = arg_tys[1].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = scope.list_items(args[1])?.into_rooted_list_items();
+            let values = scope.list_items(args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::SequenceFlatMap(
                 NativeSequenceFlatMap {
                     func: args[0],
@@ -2223,7 +2223,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = scope.list_items(args[0])?.into_rooted_list_items();
+            let values = scope.list_items(args[0])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Sum(NativeSum {
                 elem_type: elem_ty,
                 values,
@@ -2265,7 +2265,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = scope.list_items(args[0])?.into_rooted_list_items();
+            let values = scope.list_items(args[0])?;
             if values.is_empty() {
                 return Err(EngineError::EmptySequence);
             }
