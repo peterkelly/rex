@@ -382,6 +382,27 @@ impl HeapState {
         }
     }
 
+    fn with_allocation_protection<R>(
+        &mut self,
+        pointers: impl IntoIterator<Item = InternalPtr>,
+        operation: impl FnOnce(&mut Self, &[RootId]) -> Result<R, EngineError>,
+    ) -> Result<R, EngineError> {
+        let root_ids = self.register_roots(pointers)?;
+        let result = operation(self, &root_ids);
+        let cleanup = self.unregister_roots(root_ids);
+
+        match (result, cleanup) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(cleanup_error)) => Err(EngineError::Internal(format!(
+                "allocation protection root cleanup failed: {cleanup_error}"
+            ))),
+            (Err(error), Err(cleanup_error)) => Err(EngineError::Internal(format!(
+                "allocation failed: {error}; allocation protection root cleanup also failed: {cleanup_error}"
+            ))),
+        }
+    }
+
     fn resolve_root(&self, root_id: RootId) -> Result<InternalPtr, EngineError> {
         if root_id.heap_id != self.id {
             return Err(invalid_root(root_id));
@@ -616,28 +637,13 @@ impl HeapState {
         let mut protected = Vec::new();
         cell.trace_pointers(&mut protected);
 
-        let mut root_ids = Vec::with_capacity(protected.len());
-        for pointer in protected {
-            match self.register_root(pointer) {
-                Ok(root_id) => root_ids.push(root_id),
-                Err(err) => {
-                    for root_id in root_ids {
-                        let _ = self.unregister_root(root_id);
-                    }
-                    return Err(err);
-                }
-            }
-        }
-
-        self.collect()?;
-
-        let mut relocated = Vec::with_capacity(root_ids.len());
-        for root_id in &root_ids {
-            relocated.push(self.resolve_root(*root_id)?);
-        }
-        for root_id in root_ids {
-            self.unregister_root(root_id)?;
-        }
+        let relocated = self.with_allocation_protection(protected, |heap, root_ids| {
+            heap.collect()?;
+            root_ids
+                .iter()
+                .map(|root_id| heap.resolve_root(*root_id))
+                .collect::<Result<Vec<_>, EngineError>>()
+        })?;
         let mut relocated = relocated.into_iter();
         cell.map_pointers(&mut |_| {
             relocated.next().ok_or_else(|| {
@@ -3670,6 +3676,32 @@ mod tests {
             "allocation should have triggered collection"
         );
         assert_eq!(rooted.as_i32().expect("rooted value"), 7);
+    }
+
+    #[test]
+    fn allocation_protection_roots_are_released_when_collection_fails() {
+        let mut heap = HeapState::new();
+        let child = heap
+            .push_cell(Cell::I32(42))
+            .expect("child should allocate")
+            .into_pointer();
+        heap.set_gc_slot_threshold(0);
+        heap.collection_epoch = u64::MAX;
+
+        let error = match heap.alloc_reference(Cell::Tuple(vec![child])) {
+            Ok(_) => panic!("collection epoch exhaustion should fail allocation"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.to_string().contains("collection count exhausted"),
+            "unexpected allocation error: {error}"
+        );
+        assert_eq!(
+            heap.root_count(),
+            0,
+            "failed allocation must release its protection roots"
+        );
     }
 
     #[test]

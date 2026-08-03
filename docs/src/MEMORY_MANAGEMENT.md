@@ -141,7 +141,9 @@ embedder. Scope branding also prevents a `RootedPtr` from being returned to the 
 
 The single object-allocation path decides whether collection is needed. If a new cell already
 contains internal child edges, it registers those children before collecting and rewrites them to
-their new locations before installing the cell.
+their new locations before installing the cell. Protection-root registration and cleanup are one
+transaction: partial registration is rolled back, and every registered protection root is released
+whether collection and relocation succeed or return an error.
 
 Collection starts from two root sets:
 
