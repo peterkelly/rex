@@ -78,18 +78,20 @@ control results use `RootedPtr` while one evaluator cycle is executing. The scop
 
 ### `PersistentPtr` is evaluator-owned unlocked state
 
-A `PersistentPtr` is a generational token for a slot in one `PersistentRootStore`. It contains no
-heap location and no `Heap` capability. Every live arena slot owns an ordinary registered heap root,
-which the collector updates when its value moves.
+A `PersistentPtr` is an opaque token for an entry in one `PersistentRootStore`. It contains no heap
+location and no `Heap` capability. Every entry owns an ordinary registered heap root, which the
+collector updates when its value moves.
 
 Frames, environments, scheduler work items, and native-task state are converted to `PersistentPtr`
 before the evaluator releases the mutex. On the next cycle, the owning store resolves them into a
-new scope's `RootedPtr` values. Store identity, slot generation, and heap identity checks reject
-stale tokens and tokens from another heap or evaluator arena.
+new scope's `RootedPtr` values. Store and heap identity checks reject tokens from another heap or
+evaluator arena.
 
-The arena uses explicit insertion, replacement, removal, and teardown. It intentionally performs no
-destructor-based heap cleanup: dropping evaluator state while the heap is locked must not attempt to
-lock the same mutex again.
+The arena is append-only. The evaluator inserts every value needed by the next cycle, resolves those
+values when that cycle starts, and consumes the previous store to unregister all of its roots as one
+operation. Entries cannot be replaced, removed, or reused, so the store needs neither per-entry
+generations nor a free list. It intentionally performs no destructor-based heap cleanup: dropping
+evaluator state while the heap is locked must not attempt to lock the same mutex again.
 
 ### `Handle` is the boundary-safe registered root
 
@@ -191,8 +193,8 @@ The heap enforces or verifies:
 
 - heap identity on raw pointers, handles, root identifiers, stores, and persistent tokens;
 - the heap-wide collection epoch for raw pointers;
-- slot generations for stale registered-root and persistent-arena identifiers;
-- explicit persistent-root ownership and teardown;
+- slot generations for stale registered-root identifiers;
+- append-only persistent-root ownership and consuming whole-store teardown;
 - temporary-root stack integrity when a `RootScope` exits;
 - complete forwarding of registered roots and temporary roots during collection;
 - valid rewritten child pointers in every copied cell;

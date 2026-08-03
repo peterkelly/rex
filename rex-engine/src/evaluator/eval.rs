@@ -129,7 +129,7 @@ fn persist_eval_state<'heap, 'scope>(
     scope: &mut RootScope<'heap, 'scope>,
     frames: FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     scheduler: EvalScheduler<RootedPtr<'scope>>,
-    mut previous_roots: Option<PersistentRootStore>,
+    previous_roots: Option<PersistentRootStore>,
 ) -> Result<PersistentEvalState, EngineError> {
     let mut roots = scope.persistent_root_store()?;
 
@@ -149,14 +149,14 @@ fn persist_eval_state<'heap, 'scope>(
         Ok(converted) => converted,
         Err(error) => {
             let _ = roots.clear(scope);
-            if let Some(previous_roots) = previous_roots.as_mut() {
+            if let Some(previous_roots) = previous_roots {
                 let _ = previous_roots.clear(scope);
             }
             return Err(error);
         }
     };
 
-    if let Some(previous_roots) = previous_roots.as_mut() {
+    if let Some(previous_roots) = previous_roots {
         previous_roots.clear(scope)?;
     }
     Ok(PersistentEvalState {
@@ -171,7 +171,7 @@ fn resolve_eval_state<'heap, 'scope>(
     state: PersistentEvalState,
 ) -> Result<TransientEvalState<'scope>, EngineError> {
     let PersistentEvalState {
-        mut roots,
+        roots,
         frames,
         scheduler,
     } = state;
@@ -331,7 +331,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     let TransientEvalState {
-        mut previous_roots,
+        previous_roots,
         mut frames,
         mut scheduler,
     } = resolve_eval_state(scope, state)?;
@@ -391,7 +391,7 @@ where
         }
     }
 
-    let mut state = persist_eval_state(scope, frames, scheduler, Some(previous_roots))?;
+    let state = persist_eval_state(scope, frames, scheduler, Some(previous_roots))?;
     let queued_native = match native_request {
         Some((frame, call)) => match call.promote(scope, promoter) {
             Ok(call) => Some((frame, call)),
