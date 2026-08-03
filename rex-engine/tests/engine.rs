@@ -78,7 +78,7 @@ async fn compile_program_uses_explicit_main_signature_and_runtime_inputs() {
 #[tokio::test]
 async fn compile_program_handles_gc_during_compile_and_main_input_application() {
     let builder = Builder::with_prelude(()).unwrap();
-    builder.heap().set_collect_on_every_alloc(true).unwrap();
+    builder.heap().set_extreme_stress(true).unwrap();
     let compiler = builder.build_compiler();
     let program = parse_program("fn main x: i32 -> i32 = x + 1;");
     let (compiled, evaluator) = compiler

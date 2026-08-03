@@ -188,7 +188,7 @@ pub(super) struct HeapState {
     free_root_list: Vec<u64>,
     next_persistent_store_id: u64,
     next_gc_slot_count: usize,
-    collect_on_every_alloc: bool,
+    extreme_stress: bool,
     collection_epoch: u64,
 }
 
@@ -209,13 +209,13 @@ impl HeapState {
             free_root_list: Vec::new(),
             next_persistent_store_id: 0,
             next_gc_slot_count: DEFAULT_GC_SLOT_THRESHOLD,
-            collect_on_every_alloc: GC_EXTREME_STRESS,
+            extreme_stress: false,
             collection_epoch: 0,
         }
     }
 
     fn collect_needed(&self) -> bool {
-        self.collect_on_every_alloc || self.slots.len() >= self.next_gc_slot_count
+        self.extreme_stress_enabled() || self.slots.len() >= self.next_gc_slot_count
     }
 
     fn push_cell<'a>(&'a mut self, cell: Cell) -> Result<Reference<'a>, EngineError> {
@@ -233,8 +233,12 @@ impl HeapState {
         })
     }
 
-    pub(crate) fn set_collect_on_every_alloc(&mut self, enabled: bool) {
-        self.collect_on_every_alloc = enabled;
+    fn extreme_stress_enabled(&self) -> bool {
+        GC_EXTREME_STRESS || self.extreme_stress
+    }
+
+    pub(crate) fn set_extreme_stress(&mut self, enabled: bool) {
+        self.extreme_stress = enabled;
     }
 
     #[cfg(test)]
@@ -445,7 +449,7 @@ impl HeapState {
             .iter()
             .map(|(pointer, _)| pointer.index)
             .collect::<Vec<_>>();
-        let destinations = if GC_EXTREME_STRESS {
+        let destinations = if self.extreme_stress_enabled() {
             randomized_gc_destinations(&old_indices, self.collection_epoch)
         } else {
             (0..live.len()).collect()
@@ -2046,16 +2050,22 @@ impl Heap {
         })
     }
 
-    /// Enable or disable collection before every allocation on this heap.
+    /// Enable or disable extreme collector stress on this heap.
     ///
-    /// This is intended for collector stress tests. Normal execution uses the
-    /// heap-growth threshold and should retain the default setting.
-    pub fn set_collect_on_every_alloc(&self, enabled: bool) -> Result<(), EngineError> {
+    /// Extreme stress collects before every allocation and randomizes the
+    /// destination of every live object during collection. This is intended for
+    /// collector stress tests. Normal execution uses the heap-growth threshold
+    /// and deterministic compaction and should retain the default setting.
+    ///
+    /// The compile-time `GC_EXTREME_STRESS` override takes precedence over this
+    /// per-heap setting so that development builds can enforce extreme stress
+    /// across every test at once.
+    pub fn set_extreme_stress(&self, enabled: bool) -> Result<(), EngineError> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| EngineError::HeapStatePoisoned)?;
-        state.set_collect_on_every_alloc(enabled);
+        state.set_extreme_stress(enabled);
         Ok(())
     }
 
@@ -3663,10 +3673,54 @@ mod tests {
     }
 
     #[test]
+    fn extreme_stress_collects_and_randomizes_relocation() {
+        let heap = Heap::new();
+        let handles = (0..4)
+            .map(|value| heap.alloc_i32(value).expect("alloc_i32 should succeed"))
+            .collect::<Vec<_>>();
+        let before = heap
+            .with_locked(|state| {
+                handles
+                    .iter()
+                    .map(|handle| handle.pointer(state))
+                    .collect::<Result<Vec<_>, EngineError>>()
+            })
+            .expect("handles should resolve before collection");
+        let collections_before = heap.collection_count().expect("collection count");
+
+        heap.set_extreme_stress(true)
+            .expect("enable extreme stress");
+        let _trigger = heap.alloc_i32(99).expect("allocation should collect");
+
+        let after = heap
+            .with_locked(|state| {
+                handles
+                    .iter()
+                    .map(|handle| handle.pointer(state))
+                    .collect::<Result<Vec<_>, EngineError>>()
+            })
+            .expect("handles should resolve after collection");
+        assert!(
+            heap.collection_count().expect("collection count") > collections_before,
+            "extreme stress should collect before allocation"
+        );
+        assert!(
+            before
+                .iter()
+                .zip(&after)
+                .all(|(before, after)| before.index != after.index),
+            "extreme stress should relocate every live object when possible"
+        );
+        for (expected, handle) in handles.iter().enumerate() {
+            assert_eq!(handle.as_i32().expect("relocated value"), expected as i32);
+        }
+    }
+
+    #[test]
     fn alloc_list_protects_inputs_across_collection() {
         let heap = Heap::new();
-        heap.set_collect_on_every_alloc(false)
-            .expect("disable automatic collection");
+        heap.set_extreme_stress(false)
+            .expect("disable extreme stress");
         heap.with_locked_ok(|heap| heap.set_gc_slot_threshold(usize::MAX))
             .expect("set threshold");
         let values = (0..2048)
@@ -3838,8 +3892,8 @@ mod tests {
             .into_rex(&heap)
             .expect("Vec<u8> should convert");
 
-        heap.set_collect_on_every_alloc(true)
-            .expect("enable gc every alloc");
+        heap.set_extreme_stress(true)
+            .expect("enable extreme stress");
         let bytes_pointer = heap
             .with_locked(|heap| bytes.pointer(heap))
             .expect("bytes pointer");
@@ -3947,8 +4001,8 @@ mod tests {
     #[test]
     fn copying_gc_traces_deep_lists_iteratively() {
         let heap = Heap::new();
-        heap.set_collect_on_every_alloc(false)
-            .expect("disable automatic collection during graph construction");
+        heap.set_extreme_stress(false)
+            .expect("disable extreme stress during graph construction");
         heap.with_locked_ok(|heap| heap.set_gc_slot_threshold(usize::MAX))
             .expect("set threshold");
         let values = (0..10_000)

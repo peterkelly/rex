@@ -2155,7 +2155,7 @@ mod tests {
         let list = heap
             .alloc_binary_list(vec![10, 20, 30, 40])
             .expect("binary list should allocate");
-        heap.set_collect_on_every_alloc(true)
+        heap.set_extreme_stress(true)
             .expect("collection setting should succeed");
         let collections_before = heap
             .collection_count()
@@ -2231,7 +2231,7 @@ mod tests {
             ],
         );
 
-        heap.set_collect_on_every_alloc(true)
+        heap.set_extreme_stress(true)
             .expect("collection setting should succeed");
         let collections_before = heap
             .collection_count()

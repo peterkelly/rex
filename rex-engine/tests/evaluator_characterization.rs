@@ -127,7 +127,7 @@ async fn synchronous_native_callback_can_allocate_scalar_result() {
             },
         )
     });
-    builder.heap().set_collect_on_every_alloc(true).unwrap();
+    builder.heap().set_extreme_stress(true).unwrap();
 
     let (value, typ) = run_snippet(builder, "allocate_answer").await.unwrap();
 
@@ -159,7 +159,7 @@ async fn synchronous_native_callback_can_allocate_while_retaining_argument() {
             },
         )
     });
-    builder.heap().set_collect_on_every_alloc(true).unwrap();
+    builder.heap().set_extreme_stress(true).unwrap();
 
     let (value, typ) = run_snippet(builder, "allocate_then_return 73")
         .await
@@ -192,7 +192,7 @@ async fn synchronous_native_callback_can_build_composite_result() {
             },
         )
     });
-    builder.heap().set_collect_on_every_alloc(true).unwrap();
+    builder.heap().set_extreme_stress(true).unwrap();
 
     let (value, typ) = run_snippet(builder, "allocate_row 10").await.unwrap();
 

@@ -254,7 +254,7 @@ mod tests {
             .extend(Symbol::intern("a"), a)
             .extend(Symbol::intern("b"), b);
 
-        heap.set_collect_on_every_alloc(true).unwrap();
+        heap.set_extreme_stress(true).unwrap();
         heap.with_root_scope(|scope| {
             let env = rooted.to_scoped_environment(scope)?;
             scope.alloc_root_i32(3)?;

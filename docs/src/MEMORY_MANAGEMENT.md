@@ -224,5 +224,6 @@ callbacks receive the same heap through `Context` and can safely allocate additi
 typed exports use that heap internally when converting Rust arguments and results.
 
 There is no public operation that exposes a heap location or manually runs collection. The public
-collection-on-every-allocation setting exists for stress validation; production execution uses the
-heap-growth policy. Embedders must treat object location and collection epochs as entirely opaque.
+extreme-stress setting exists for validation; it collects before every allocation and randomizes
+the destinations of live objects. Production execution uses the heap-growth policy and deterministic
+compaction. Embedders must treat object location and collection epochs as entirely opaque.

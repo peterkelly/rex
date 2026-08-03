@@ -349,9 +349,9 @@ fn handle_as_i32_list(value: &Handle) -> Vec<i32> {
         .collect()
 }
 
-fn builder_collecting_on_every_alloc() -> Builder<()> {
+fn extreme_stress_builder() -> Builder<()> {
     let builder = Builder::with_prelude(()).unwrap();
-    builder.heap().set_collect_on_every_alloc(true).unwrap();
+    builder.heap().set_extreme_stress(true).unwrap();
     builder
 }
 
@@ -1138,7 +1138,7 @@ async fn concurrent_host_allocations_survive_repeated_collections() {
             })
             .unwrap();
         builder.inject_module(module).unwrap();
-        builder.heap().set_collect_on_every_alloc(true).unwrap();
+        builder.heap().set_extreme_stress(true).unwrap();
 
         let eval_task = tokio::spawn(async move {
             eval_i32(
@@ -1188,7 +1188,7 @@ async fn concurrent_host_allocations_survive_repeated_collections() {
 }
 
 #[tokio::test]
-async fn gc_every_alloc_handles_broad_evaluator_paths() {
+async fn extreme_stress_handles_broad_evaluator_paths() {
     let result = eval_i32(
         r#"
         type Point = Point { x: i32, y: i32 };
@@ -1242,14 +1242,14 @@ async fn gc_every_alloc_handles_broad_evaluator_paths() {
                 + (if arr == arr then 1 else 0)
                 + tuple_score
         "#,
-        builder_collecting_on_every_alloc(),
+        extreme_stress_builder(),
     )
     .await;
     assert_eq!(result, 313);
 }
 
 #[tokio::test]
-async fn gc_every_alloc_handles_host_callbacks_and_conversions() {
+async fn extreme_stress_handles_host_callbacks_and_conversions() {
     let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     module
@@ -1267,7 +1267,7 @@ async fn gc_every_alloc_handles_host_callbacks_and_conversions() {
         )
         .unwrap();
     builder.inject_module(module).unwrap();
-    builder.heap().set_collect_on_every_alloc(true).unwrap();
+    builder.heap().set_extreme_stress(true).unwrap();
 
     let result = eval_i32(
         r#"
@@ -1288,7 +1288,7 @@ async fn gc_every_alloc_handles_host_callbacks_and_conversions() {
 }
 
 #[tokio::test]
-async fn gc_every_alloc_handles_native_returning_nested_data() {
+async fn extreme_stress_handles_native_returning_nested_data() {
     let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     let i32_ty = Type::builtin(BuiltinTypeId::I32);
@@ -1333,7 +1333,7 @@ async fn gc_every_alloc_handles_native_returning_nested_data() {
         })
         .unwrap();
     builder.inject_module(module).unwrap();
-    builder.heap().set_collect_on_every_alloc(true).unwrap();
+    builder.heap().set_extreme_stress(true).unwrap();
 
     let result = eval_i32(
         r#"
@@ -1351,7 +1351,7 @@ async fn gc_every_alloc_handles_native_returning_nested_data() {
 }
 
 #[tokio::test]
-async fn gc_every_alloc_handles_captured_closure_envs() {
+async fn extreme_stress_handles_captured_closure_envs() {
     let result = eval_i32(
         r#"
         let
@@ -1369,14 +1369,14 @@ async fn gc_every_alloc_handles_captured_closure_envs() {
         in
             f 10 + sum noise
         "#,
-        builder_collecting_on_every_alloc(),
+        extreme_stress_builder(),
     )
     .await;
     assert_eq!(result, 466);
 }
 
 #[tokio::test]
-async fn gc_every_alloc_handles_repeated_typeclass_resolution() {
+async fn extreme_stress_handles_repeated_typeclass_resolution() {
     let result = eval_i32(
         r#"
         type Box = Box { value: i32 };
@@ -1406,14 +1406,14 @@ async fn gc_every_alloc_handles_repeated_typeclass_resolution() {
         in
             sum box_scores + sum int_scores + reused_box + reused_int
         "#,
-        builder_collecting_on_every_alloc(),
+        extreme_stress_builder(),
     )
     .await;
     assert_eq!(result, 89);
 }
 
 #[tokio::test]
-async fn gc_every_alloc_handles_async_native_handles_across_awaits() {
+async fn extreme_stress_handles_async_native_handles_across_awaits() {
     let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     let list_i32 = Type::list(Type::builtin(BuiltinTypeId::I32));
@@ -1446,7 +1446,7 @@ async fn gc_every_alloc_handles_async_native_handles_across_awaits() {
         )
         .unwrap();
     builder.inject_module(module).unwrap();
-    builder.heap().set_collect_on_every_alloc(true).unwrap();
+    builder.heap().set_extreme_stress(true).unwrap();
 
     let result = eval_i32(
         r#"
