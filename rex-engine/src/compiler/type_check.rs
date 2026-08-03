@@ -1,6 +1,6 @@
 use crate::{
     builder::registry::NativeRegistry, env::RootedEnvironment, error::EngineError,
-    modules::collect_pattern_bindings, util::impl_matches_type,
+    modules::collect_pattern_bindings,
 };
 use rex_ast::{Expr, Span, Symbol};
 use rex_typesystem::{
@@ -93,11 +93,8 @@ where
                             typ: expr.typ.to_string(),
                         });
                     }
-                    if expr.typ.ftv().is_empty() && !has_native_impl(natives, name, &expr.typ) {
-                        return Err(EngineError::MissingImpl {
-                            name: name.clone(),
-                            typ: expr.typ.to_string(),
-                        });
+                    if expr.typ.ftv().is_empty() {
+                        let _ = natives.resolve(name, &expr.typ)?;
                     }
                 }
                 TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
@@ -185,16 +182,6 @@ where
         }
     }
     Ok(())
-}
-
-fn has_native_impl<State>(natives: &NativeRegistry<State>, name: &Symbol, typ: &Type) -> bool
-where
-    State: Clone + Send + Sync + 'static,
-{
-    natives
-        .get(name)
-        .map(|impls| impls.iter().any(|imp| impl_matches_type(imp, typ)))
-        .unwrap_or(false)
 }
 
 fn first_hole_span(expr: &Expr) -> Option<Span> {

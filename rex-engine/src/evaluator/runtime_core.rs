@@ -29,8 +29,7 @@ where
         id: NativeId,
     ) -> Result<&NativeCallable<State>, EngineError> {
         self.natives
-            .by_id(id)
-            .map(|imp| &imp.func)
+            .callable_by_id(id)
             .ok_or_else(|| EngineError::Internal(format!("unknown native id: {id}")))
     }
 }

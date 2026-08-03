@@ -971,11 +971,7 @@ where
         type_system.register_adt(&adt);
     }
     for (ctor, scheme) in adt.constructor_schemes() {
-        if runtime
-            .natives
-            .get(&ctor)
-            .is_some_and(|existing| existing.iter().any(|imp| imp.scheme == scheme))
-        {
+        if runtime.natives.contains_scheme(&ctor, &scheme) {
             continue;
         }
         let ctor_name = ctor.clone();

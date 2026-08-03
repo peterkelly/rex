@@ -1195,7 +1195,7 @@ where
         };
     }
 
-    let (native_id, _, _) = runtime.resolve_native_parts(over.name.as_ref(), &full_ty)?;
+    let (native_id, _, _) = runtime.resolve_native_parts(&over.name, &full_ty)?;
     runtime
         .native_callable(native_id)?
         .call(native_id, full_ty, &over.applied)
@@ -1366,7 +1366,7 @@ where
             ClassMethodPlan::Deferred(value) => Ok(EvalVarResult::Value(value)),
         }
     } else {
-        let ctx_root = runtime.resolve_native(scope, name.as_ref(), typ)?;
+        let ctx_root = runtime.resolve_native(scope, name, typ)?;
         let native = scope
             .root_as_native(ctx_root)?
             .filter(|native| native.arity == 0 && native.applied.is_empty());

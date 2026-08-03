@@ -9,12 +9,12 @@ use rex_typesystem::{
 };
 
 use crate::{
-    builder::registry::{NativeId, NativeImpl},
+    builder::registry::{NativeId, NativeResolution},
     env::{RootedEnvironment, ScopedEnvironment},
     error::EngineError,
     evaluator::{application_result_type, eval::eval_typed_expr, runtime_core::RuntimeCore},
     memory::heap::{Handle, Heap, RootScope, RootedPtr},
-    util::{impl_matches_type, is_function_type},
+    util::is_function_type,
 };
 
 /// Public context supplied to handle-based host callbacks.
@@ -211,57 +211,24 @@ where
 
     pub(crate) fn resolve_native_parts(
         &self,
-        name: &str,
+        name: &Symbol,
         typ: &Type,
     ) -> Result<(NativeId, Symbol, usize), EngineError> {
-        let sym_name = Symbol::intern(name);
-        let impls = self
-            .natives
-            .get(&sym_name)
-            .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
-        let matches: Vec<&NativeImpl<State>> = impls
-            .iter()
-            .filter(|imp| impl_matches_type(imp, typ))
-            .collect();
-        match matches.len() {
-            0 => Err(EngineError::MissingImpl {
-                name: sym_name.clone(),
-                typ: typ.to_string(),
-            }),
-            1 => Ok(matches[0].runtime_parts()),
-            _ => Err(EngineError::AmbiguousImpl {
-                name: sym_name,
-                typ: typ.to_string(),
-            }),
-        }
+        let (native_id, arity) = self.natives.resolve_unique(name, typ)?;
+        Ok((native_id, name.clone(), arity))
     }
 
     pub(crate) fn resolve_native<'scope>(
         &self,
         scope: &mut RootScope<'_, 'scope>,
-        name: &str,
+        name: &Symbol,
         typ: &Type,
     ) -> Result<RootedPtr<'scope>, EngineError> {
-        let sym_name = Symbol::intern(name);
-        let impls = self
-            .natives
-            .get(&sym_name)
-            .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
-        let matches: Vec<&NativeImpl<State>> = impls
-            .iter()
-            .filter(|imp| impl_matches_type(imp, typ))
-            .collect();
-        match matches.len() {
-            0 => Err(EngineError::MissingImpl {
-                name: sym_name.clone(),
-                typ: typ.to_string(),
-            }),
-            1 => {
-                let imp = matches[0];
-                let (native_id, name, arity) = imp.runtime_parts();
+        match self.natives.resolve(name, typ)? {
+            NativeResolution::Unique { native_id, arity } => {
                 let root = scope.alloc_root_native(
                     native_id,
-                    name,
+                    name.clone(),
                     arity,
                     typ.clone(),
                     Vec::new(),
@@ -269,22 +236,22 @@ where
                 )?;
                 Ok(root)
             }
-            _ => {
+            NativeResolution::Ambiguous => {
                 if typ.ftv().is_empty() {
                     Err(EngineError::AmbiguousImpl {
-                        name: sym_name.clone(),
+                        name: name.clone(),
                         typ: typ.to_string(),
                     })
                 } else if is_function_type(typ) {
                     let root = scope.alloc_root_overloaded(
-                        sym_name.clone(),
+                        name.clone(),
                         typ.clone(),
                         Vec::new(),
                         Vec::new(),
                     )?;
                     Ok(root)
                 } else {
-                    Err(EngineError::AmbiguousOverload { name: sym_name })
+                    Err(EngineError::AmbiguousOverload { name: name.clone() })
                 }
             }
         }

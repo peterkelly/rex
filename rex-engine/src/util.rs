@@ -1,10 +1,8 @@
-use crate::{builder::registry::NativeImpl, error::EngineError};
+use crate::error::EngineError;
 use rex_ast::{NameRef, Span, Symbol, TypeExpr};
 use rex_typesystem::{
     error::{CollectAdtsError, TypeError},
     types::{BuiltinTypeId, Scheme, Type, TypeKind},
-    typesystem::{TypeVarSupply, instantiate},
-    unification::unify,
 };
 
 pub(crate) fn type_expr_from_type(typ: &Type) -> TypeExpr {
@@ -156,13 +154,4 @@ pub(crate) fn split_fun(typ: &Type) -> Option<(Type, Type)> {
         TypeKind::Fun(a, b) => Some((a.clone(), b.clone())),
         _ => None,
     }
-}
-
-pub(crate) fn impl_matches_type<State: Clone + Send + Sync + 'static>(
-    imp: &NativeImpl<State>,
-    typ: &Type,
-) -> bool {
-    let mut supply = TypeVarSupply::new();
-    let (_preds, scheme_ty) = instantiate(&imp.scheme, &mut supply);
-    unify(&scheme_ty, typ).is_ok()
 }

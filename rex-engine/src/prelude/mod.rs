@@ -2763,15 +2763,9 @@ mod tests {
         builder
             .runtime
             .natives
-            .entries
-            .iter()
+            .schemes()
             .filter(|(name, _)| is_primitive_name(name))
-            .map(|(name, impls)| {
-                (
-                    name.clone(),
-                    impls.iter().map(|imp| imp.scheme.clone()).collect(),
-                )
-            })
+            .map(|(name, schemes)| (name.clone(), schemes))
             .collect()
     }
 
