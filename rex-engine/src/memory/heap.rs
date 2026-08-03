@@ -3274,14 +3274,56 @@ mod tests {
     use super::*;
     use crate::memory::traits::{FromRex, IntoRex};
 
-    fn assert_send_sync<T: Send + Sync>() {}
+    mod auto_trait_contract {
+        use super::*;
+        use static_assertions::{assert_impl_all, assert_not_impl_any};
 
-    #[test]
-    fn boundary_safe_references_are_send_and_sync() {
-        assert_send_sync::<Heap>();
-        assert_send_sync::<Handle>();
-        assert_send_sync::<PersistentPtr>();
-        assert_send_sync::<PersistentRootStore>();
+        // `Heap` is the cloneable capability retained by `Context`, `Handle`, and the outer
+        // async evaluator. Those owners can cross `await` points, and their futures may resume
+        // on another executor thread. Moving and sharing `Heap` is sound because it exposes
+        // `HeapState` only through `Arc<Mutex<_>>`; requiring both traits prevents a future
+        // field from silently making this public boundary thread-affine.
+        assert_impl_all!(Heap: Send, Sync);
+
+        // `Handle` is the public rooted value passed to and from host callbacks. Its clones
+        // share an immutable root identifier and keep the heap alive; inspection and
+        // last-owner cleanup acquire the heap mutex. Async host futures are `Send` and may
+        // retain or share handles across suspension, so a new non-thread-safe field must not
+        // silently make handles unusable at the embedding boundary.
+        assert_impl_all!(Handle: Send, Sync);
+
+        // `PersistentPtr` replaces scoped roots in frames, environments, and scheduler work
+        // whenever the evaluator releases the heap lock. It contains only heap, store, and
+        // slot identity; resolution requires its owning `PersistentRootStore` and a new
+        // `RootScope`. `Send` permits the suspended evaluator future to migrate between
+        // threads. `Sync` records that an immutable token carries no hidden mutable or
+        // thread-affine heap access and is therefore safe to reference from shared state.
+        assert_impl_all!(PersistentPtr: Send, Sync);
+
+        // `PersistentRootStore` travels with suspended evaluator state while the heap is
+        // unlocked. It owns registered-root identifiers but no `Heap`, lock guard, raw heap
+        // pointer, or destructor that performs heap cleanup; mutation and resolution require
+        // explicit access to a new `RootScope`. `Send` lets the evaluator migrate while
+        // awaiting host work, and `Sync` confirms that immutable sharing grants no collector
+        // access. If the store gains thread-affine ownership, this assertion forces review.
+        assert_impl_all!(PersistentRootStore: Send, Sync);
+
+        // `RootedPtr` is only an index into the temporary-root stack of one active
+        // `RootScope`; it is not a registered root and carries no heap identity. Collection
+        // rewrites that stack entry, and dropping the scope truncates the stack. Without the
+        // deliberate `Rc<Cell<_>>` brand, this integer-shaped token and every scoped frame
+        // containing it would automatically become `Send + Sync`. Denying both traits keeps
+        // temporary evaluator state on the thread that owns the heap lock and stack lifetime.
+        assert_not_impl_any!(RootedPtr<'static>: Send, Sync);
+
+        // `RootScope` carries exclusive `&mut HeapState` access borrowed from a mutex-locked
+        // operation and owns the base depth restored by its `Drop` implementation. The mutex
+        // guard remains in the caller that created the scope; transferring only the scope
+        // would separate collector authority and shadow-stack teardown from the thread that
+        // owns that guard. Sharing it would likewise violate the deliberately synchronous,
+        // single-threaded collector cycle. Changing these traits requires redesigning lock
+        // ownership and temporary-root-stack ownership together, not merely changing a field.
+        assert_not_impl_any!(RootScope<'static, 'static>: Send, Sync);
     }
 
     fn new_persistent_store(heap: &Heap) -> PersistentRootStore {

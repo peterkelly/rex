@@ -24,4 +24,5 @@ workspace = true
 
 [dev-dependencies]
 serde = { workspace = true }
+static_assertions = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
