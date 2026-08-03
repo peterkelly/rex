@@ -21,11 +21,11 @@ use crate::{
     native_fn::NativeApplyResult,
     overloaded_fn::OverloadedFn,
     stack::{
-        FrApp, FrAppArg, FrAppState, FrBool, FrBranchState, FrDateTime, FrDict, FrFloat, FrHole,
-        FrInt, FrIte, FrLam, FrLet, FrLetRec, FrLetRecState, FrLetState, FrList, FrMatch,
-        FrMatchArm, FrMatchState, FrNativeCall, FrNativeCallState, FrNativeHost, FrProject,
-        FrRecordUpdate, FrRecordUpdateState, FrSequenceState, FrString, FrTuple, FrUint, FrUuid,
-        FrValueState, FrVar, Frame, FrameId, FrameStore, FrameValueMapper,
+        FrApp, FrAppArg, FrAppState, FrBranchState, FrHole, FrIte, FrLam, FrLet, FrLetRec,
+        FrLetRecState, FrLetState, FrLiteral, FrMatch, FrMatchArm, FrMatchState, FrNativeCall,
+        FrNativeCallState, FrNativeHost, FrProject, FrRecordUpdate, FrRecordUpdateState,
+        FrSequence, FrSequenceState, FrValueState, FrVar, Frame, FrameId, FrameStore,
+        FrameValueMapper,
     },
     util::{is_function_type, split_fun},
 };
@@ -420,55 +420,13 @@ pub(crate) fn frame_for_expr<'scope>(
 ) -> Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>> {
     let kind = Arc::clone(&expr.kind);
     match kind.as_ref() {
-        TypedExprKind::Bool(_) => Frame::Bool(FrBool {
-            parent,
-            expr,
-            env,
-            state: FrValueState::Enter,
-            value: None,
-        }),
-        TypedExprKind::Uint(_) => Frame::Uint(FrUint {
-            parent,
-            expr,
-            env,
-            state: FrValueState::Enter,
-            value: None,
-        }),
-        TypedExprKind::Int(_) => Frame::Int(FrInt {
-            parent,
-            expr,
-            env,
-            state: FrValueState::Enter,
-            value: None,
-        }),
-        TypedExprKind::Float(_) => Frame::Float(FrFloat {
-            parent,
-            expr,
-            env,
-            state: FrValueState::Enter,
-            value: None,
-        }),
-        TypedExprKind::String(_) => Frame::String(FrString {
-            parent,
-            expr,
-            env,
-            state: FrValueState::Enter,
-            value: None,
-        }),
-        TypedExprKind::Uuid(_) => Frame::Uuid(FrUuid {
-            parent,
-            expr,
-            env,
-            state: FrValueState::Enter,
-            value: None,
-        }),
-        TypedExprKind::DateTime(_) => Frame::DateTime(FrDateTime {
-            parent,
-            expr,
-            env,
-            state: FrValueState::Enter,
-            value: None,
-        }),
+        TypedExprKind::Bool(_)
+        | TypedExprKind::Uint(_)
+        | TypedExprKind::Int(_)
+        | TypedExprKind::Float(_)
+        | TypedExprKind::String(_)
+        | TypedExprKind::Uuid(_)
+        | TypedExprKind::DateTime(_) => Frame::Literal(FrLiteral { parent, expr }),
         TypedExprKind::Hole => Frame::Hole(FrHole {
             parent,
             expr,
@@ -476,34 +434,17 @@ pub(crate) fn frame_for_expr<'scope>(
             state: FrValueState::Enter,
             value: None,
         }),
-        TypedExprKind::Tuple(_) => Frame::Tuple(FrTuple {
-            parent,
-            expr,
-            env,
-            state: FrSequenceState::Enter,
-            children: Vec::new(),
-            values: Vec::new(),
-            remaining: 0,
-        }),
-        TypedExprKind::List(_) => Frame::List(FrList {
-            parent,
-            expr,
-            env,
-            state: FrSequenceState::Enter,
-            children: Vec::new(),
-            values: Vec::new(),
-            remaining: 0,
-        }),
-        TypedExprKind::Dict(kvs) => Frame::Dict(FrDict {
-            parent,
-            expr,
-            env,
-            state: FrSequenceState::Enter,
-            keys: kvs.keys().cloned().collect(),
-            children: Vec::new(),
-            values: Vec::new(),
-            remaining: 0,
-        }),
+        TypedExprKind::Tuple(_) | TypedExprKind::List(_) | TypedExprKind::Dict(_) => {
+            Frame::Sequence(FrSequence {
+                parent,
+                expr,
+                env,
+                state: FrSequenceState::Enter,
+                children: Vec::new(),
+                values: Vec::new(),
+                remaining: 0,
+            })
+        }
         TypedExprKind::RecordUpdate { updates, .. } => Frame::RecordUpdate(FrRecordUpdate {
             parent,
             expr,
@@ -606,59 +547,9 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match frame {
-        Frame::Bool(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Bool(value) => {
-                let root = scope.alloc_root_bool(*value)?;
-                Ok(EvalControl::Return(root))
-            }
-            _ => frame_kind_error("bool"),
-        },
-        Frame::Uint(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Uint(value) => {
-                let root = alloc_uint_literal_as(scope, *value, &frame.expr.typ)?;
-                Ok(EvalControl::Return(root))
-            }
-            _ => frame_kind_error("uint"),
-        },
-        Frame::Int(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Int(value) => {
-                let root = alloc_int_literal_as(scope, *value, &frame.expr.typ)?;
-                Ok(EvalControl::Return(root))
-            }
-            _ => frame_kind_error("int"),
-        },
-        Frame::Float(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Float(value) => {
-                let root = alloc_float_literal_as(scope, *value, &frame.expr.typ)?;
-                Ok(EvalControl::Return(root))
-            }
-            _ => frame_kind_error("float"),
-        },
-        Frame::String(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::String(value) => {
-                let root = scope.alloc_root_string(value.clone())?;
-                Ok(EvalControl::Return(root))
-            }
-            _ => frame_kind_error("string"),
-        },
-        Frame::Uuid(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Uuid(value) => {
-                let root = scope.alloc_root_uuid(*value)?;
-                Ok(EvalControl::Return(root))
-            }
-            _ => frame_kind_error("uuid"),
-        },
-        Frame::DateTime(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::DateTime(value) => {
-                let root = scope.alloc_root_datetime(*value)?;
-                Ok(EvalControl::Return(root))
-            }
-            _ => frame_kind_error("datetime"),
-        },
+        Frame::Literal(frame) => eval_literal_enter(scope, frame),
         Frame::Hole(_) => Err(EngineError::UnsupportedExpr),
-        Frame::Tuple(frame) => eval_tuple_enter(scope, frames, frame_id, frame),
-        Frame::List(frame) => eval_list_enter(scope, frames, frame_id, frame),
-        Frame::Dict(frame) => eval_dict_enter(scope, frames, frame_id, frame),
+        Frame::Sequence(frame) => eval_sequence_enter(scope, frames, frame_id, frame),
         Frame::RecordUpdate(mut frame) => {
             let base = match frame.expr.kind.as_ref() {
                 TypedExprKind::RecordUpdate { base, .. } => Arc::clone(base),
@@ -785,73 +676,32 @@ where
     }
 }
 
-fn eval_tuple_enter<'scope>(
+fn eval_literal_enter<'scope>(
     scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
-    frame_id: FrameId,
-    mut frame: FrTuple<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
+    frame: FrLiteral,
 ) -> Result<EvalControl<'scope>, EngineError> {
-    let elems = match frame.expr.kind.as_ref() {
-        TypedExprKind::Tuple(elems) => elems.clone(),
-        _ => return frame_kind_error("tuple"),
+    let root = match frame.expr.kind.as_ref() {
+        TypedExprKind::Bool(value) => scope.alloc_root_bool(*value)?,
+        TypedExprKind::Uint(value) => alloc_uint_literal_as(scope, *value, &frame.expr.typ)?,
+        TypedExprKind::Int(value) => alloc_int_literal_as(scope, *value, &frame.expr.typ)?,
+        TypedExprKind::Float(value) => alloc_float_literal_as(scope, *value, &frame.expr.typ)?,
+        TypedExprKind::String(value) => scope.alloc_root_string(value.clone())?,
+        TypedExprKind::Uuid(value) => scope.alloc_root_uuid(*value)?,
+        TypedExprKind::DateTime(value) => scope.alloc_root_datetime(*value)?,
+        _ => return frame_kind_error("literal"),
     };
-    if elems.is_empty() {
-        let root = scope.alloc_root_tuple(vec![])?;
-        return Ok(EvalControl::Return(root));
-    }
-
-    frame.state = FrSequenceState::EvalItem;
-    frame.children = Vec::with_capacity(elems.len());
-    frame.values = vec![None; elems.len()];
-    frame.remaining = elems.len();
-    let env = frame.env.clone();
-    for expr in elems {
-        let child = frames.insert(frame_for_expr(Some(frame_id), expr, env.clone()));
-        frame.children.push(child);
-    }
-    let children = frame.children.clone();
-    frames.replace(frame_id, Frame::Tuple(frame))?;
-    Ok(EvalControl::Schedule(children))
+    Ok(EvalControl::Return(root))
 }
 
-fn eval_list_enter<'scope>(
+fn eval_sequence_enter<'scope>(
     scope: &mut RootScope<'_, 'scope>,
     frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
     frame_id: FrameId,
-    mut frame: FrList<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
+    mut frame: FrSequence<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
 ) -> Result<EvalControl<'scope>, EngineError> {
-    let elems = match frame.expr.kind.as_ref() {
-        TypedExprKind::List(elems) => elems.clone(),
-        _ => return frame_kind_error("list"),
-    };
-    if elems.is_empty() {
-        let empty = scope.alloc_root_empty()?;
-        return Ok(EvalControl::Return(empty));
-    }
-
-    frame.state = FrSequenceState::EvalItem;
-    frame.children = Vec::with_capacity(elems.len());
-    frame.values = vec![None; elems.len()];
-    frame.remaining = elems.len();
-    let env = frame.env.clone();
-    for expr in elems {
-        let child = frames.insert(frame_for_expr(Some(frame_id), expr, env.clone()));
-        frame.children.push(child);
-    }
-    let children = frame.children.clone();
-    frames.replace(frame_id, Frame::List(frame))?;
-    Ok(EvalControl::Schedule(children))
-}
-
-fn eval_dict_enter<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
-    frame_id: FrameId,
-    mut frame: FrDict<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
-) -> Result<EvalControl<'scope>, EngineError> {
-    let exprs = dict_exprs_for_keys(&frame, &frame.keys)?;
+    let exprs = sequence_exprs(&frame.expr)?;
     if exprs.is_empty() {
-        let root = scope.alloc_root_dict(BTreeMap::new())?;
+        let root = alloc_sequence_values(scope, &frame.expr, Vec::new())?;
         return Ok(EvalControl::Return(root));
     }
 
@@ -865,7 +715,7 @@ fn eval_dict_enter<'scope>(
         frame.children.push(child);
     }
     let children = frame.children.clone();
-    frames.replace(frame_id, Frame::Dict(frame))?;
+    frames.replace(frame_id, Frame::Sequence(frame))?;
     Ok(EvalControl::Schedule(children))
 }
 
@@ -1032,20 +882,37 @@ fn map_keys_to_values<P>(
     Ok(keys.iter().cloned().zip(values).collect())
 }
 
-fn dict_exprs_for_keys<P, E>(
-    frame: &FrDict<P, E>,
-    keys: &[Symbol],
-) -> Result<Vec<Arc<TypedExpr>>, EngineError> {
-    match frame.expr.kind.as_ref() {
-        TypedExprKind::Dict(kvs) => keys
-            .iter()
-            .map(|key| {
-                kvs.get(key)
-                    .cloned()
-                    .ok_or_else(|| EngineError::Internal("dict frame key missing".into()))
-            })
-            .collect(),
-        _ => frame_kind_error("dict"),
+fn sequence_exprs(expr: &TypedExpr) -> Result<Vec<Arc<TypedExpr>>, EngineError> {
+    match expr.kind.as_ref() {
+        TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => Ok(elems.clone()),
+        TypedExprKind::Dict(kvs) => Ok(kvs.values().cloned().collect()),
+        _ => frame_kind_error("sequence"),
+    }
+}
+
+fn sequence_kind(expr: &TypedExpr) -> Result<&'static str, EngineError> {
+    match expr.kind.as_ref() {
+        TypedExprKind::Tuple(_) => Ok("tuple"),
+        TypedExprKind::List(_) => Ok("list"),
+        TypedExprKind::Dict(_) => Ok("dict"),
+        _ => frame_kind_error("sequence"),
+    }
+}
+
+fn alloc_sequence_values<'scope>(
+    scope: &mut RootScope<'_, 'scope>,
+    expr: &TypedExpr,
+    values: Vec<RootedPtr<'scope>>,
+) -> Result<RootedPtr<'scope>, EngineError> {
+    match expr.kind.as_ref() {
+        TypedExprKind::Tuple(_) => scope.alloc_root_tuple(values),
+        TypedExprKind::List(_) => scope.alloc_root_list(values),
+        TypedExprKind::Dict(kvs) => {
+            let keys = kvs.keys().cloned().collect::<Vec<_>>();
+            let values = map_keys_to_values("dict", &keys, values)?;
+            scope.alloc_root_dict(values)
+        }
+        _ => frame_kind_error("sequence"),
     }
 }
 
@@ -1080,50 +947,13 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match frame {
-        Frame::Tuple(mut frame) => {
+        Frame::Sequence(mut frame) => {
+            let kind = sequence_kind(&frame.expr)?;
             if frame.state != FrSequenceState::EvalItem {
-                return unexpected_child_result("tuple");
-            }
-            let index = frame
-                .children
-                .iter()
-                .position(|candidate| *candidate == child)
-                .ok_or_else(|| {
-                    EngineError::Internal("tuple received result from unknown child".into())
-                })?;
-            if frame.values.get(index).and_then(|value| *value).is_some() {
-                return Err(EngineError::Internal(
-                    "tuple received duplicate result from child".into(),
-                ));
-            }
-            let slot = frame.values.get_mut(index).ok_or_else(|| {
-                EngineError::Internal("tuple result slot index out of bounds".into())
-            })?;
-            *slot = Some(value);
-            frame.remaining = frame.remaining.checked_sub(1).ok_or_else(|| {
-                EngineError::Internal("tuple received more results than expected".into())
-            })?;
-            if frame.remaining == 0 {
-                let values = frame
-                    .values
-                    .iter()
-                    .copied()
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or_else(|| {
-                        EngineError::Internal("tuple completed with missing result".into())
-                    })?;
-                let root = scope.alloc_root_tuple(values)?;
-                return Ok(EvalControl::Return(root));
-            }
-            frames.replace(frame_id, Frame::Tuple(frame))?;
-            Ok(EvalControl::Wait)
-        }
-        Frame::List(mut frame) => {
-            if frame.state != FrSequenceState::EvalItem {
-                return unexpected_child_result("list");
+                return unexpected_child_result(kind);
             }
             receive_sequence_value(
-                "list",
+                kind,
                 &frame.children,
                 &mut frame.values,
                 &mut frame.remaining,
@@ -1131,35 +961,11 @@ where
                 value,
             )?;
             if frame.remaining == 0 {
-                let values = completed_values("list", &frame.values)?;
-                let root = scope.alloc_root_list(values)?;
+                let values = completed_values(kind, &frame.values)?;
+                let root = alloc_sequence_values(scope, &frame.expr, values)?;
                 return Ok(EvalControl::Return(root));
             }
-            frames.replace(frame_id, Frame::List(frame))?;
-            Ok(EvalControl::Wait)
-        }
-        Frame::Dict(mut frame) => {
-            if frame.state != FrSequenceState::EvalItem {
-                return unexpected_child_result("dict");
-            }
-            receive_sequence_value(
-                "dict",
-                &frame.children,
-                &mut frame.values,
-                &mut frame.remaining,
-                child,
-                value,
-            )?;
-            if frame.remaining == 0 {
-                let values = map_keys_to_values(
-                    "dict",
-                    &frame.keys,
-                    completed_values("dict", &frame.values)?,
-                )?;
-                let root = scope.alloc_root_dict(values)?;
-                return Ok(EvalControl::Return(root));
-            }
-            frames.replace(frame_id, Frame::Dict(frame))?;
+            frames.replace(frame_id, Frame::Sequence(frame))?;
             Ok(EvalControl::Wait)
         }
         Frame::RecordUpdate(mut frame) => match frame.state {
