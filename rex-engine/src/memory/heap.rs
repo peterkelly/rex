@@ -2016,6 +2016,11 @@ impl Heap {
         state.root_scope(f)
     }
 
+    #[cfg(test)]
+    pub(crate) fn registered_root_count_for_test(&self) -> Result<usize, EngineError> {
+        self.with_locked_ok(|state| state.root_count())
+    }
+
     fn with_locked_ok<R>(&self, f: impl FnOnce(&mut HeapState) -> R) -> Result<R, EngineError> {
         // Keep all heap reads inside this access object while the lock is held.
         let mut state = self

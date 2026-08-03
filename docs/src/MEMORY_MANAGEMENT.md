@@ -93,6 +93,12 @@ operation. Entries cannot be replaced, removed, or reused, so the store needs ne
 generations nor a free list. It intentionally performs no destructor-based heap cleanup: dropping
 evaluator state while the heap is locked must not attempt to lock the same mutex again.
 
+The outer async evaluator wraps its persistent state in a separate suspended-state owner. That
+owner exists only while the heap is unlocked, takes the state out before entering a locked cycle,
+and restores it after the cycle returns. Its destructor can therefore unregister the store's roots
+if the evaluation future is cancelled while awaiting host work without creating a lock-reentrant
+destructor on `PersistentRootStore` itself.
+
 ### `Handle` is the boundary-safe registered root
 
 A `Handle` owns a generational registered-root identifier. It never exposes the current heap
@@ -152,9 +158,17 @@ The collector is solely responsible for rewriting raw cell edges and root slots.
 
 ## Evaluator and host boundary
 
-One non-async evaluator cycle executes under a single `RootScope`. It resolves persistent state,
-runs one work item and its synchronous helpers, applies the control result, persists surviving
-state, and promotes any final result or host-call arguments before returning.
+Frames and scheduler work are grouped in one representation-generic evaluator state. The async
+coordinator owns its persistent representation independently of the current scheduling boundary;
+the boundary is only a decision about whether host work must be polled. A non-async evaluator cycle
+temporarily converts that state to its scope-rooted representation under one `RootScope`, runs one
+work item and its synchronous helpers, applies the control result, persists surviving state, and
+promotes any final result or host-call arguments before returning.
+
+The persistent root owner remains available until each fallible phase completes. Errors inside a
+locked cycle unregister the prior store before returning, errors after an unlock reacquire the heap
+solely to unregister the suspended store, and a successful transition unregisters the prior store
+only after its replacement has been fully constructed.
 
 The outer async coordinator releases the heap lock before it activates or polls host work. Queued
 and completed host calls contain public `Handle` values, types, and Rust-owned metadata only. A

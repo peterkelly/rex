@@ -48,19 +48,22 @@ pub(crate) enum EvalControl<'scope> {
     Return(RootedPtr<'scope>),
 }
 
-type PersistentFrame = Frame<PersistentPtr, PersistentEnvironment>;
-type PersistentFrameStore = FrameStore<PersistentFrame>;
+struct EvalState<P, E> {
+    frames: FrameStore<Frame<P, E>>,
+    scheduler: EvalScheduler<P>,
+}
+
+type PersistentState = EvalState<PersistentPtr, PersistentEnvironment>;
+type ScopedState<'scope> = EvalState<RootedPtr<'scope>, ScopedEnvironment<'scope>>;
 
 struct PersistentEvalState {
     roots: PersistentRootStore,
-    frames: PersistentFrameStore,
-    scheduler: EvalScheduler<PersistentPtr>,
+    state: PersistentState,
 }
 
-struct TransientEvalState<'scope> {
-    previous_roots: PersistentRootStore,
-    frames: FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
-    scheduler: EvalScheduler<RootedPtr<'scope>>,
+struct ScopedEvalState<'scope> {
+    roots: PersistentRootStore,
+    state: ScopedState<'scope>,
 }
 
 struct PersistFrameMapper<'a, 'heap, 'scope> {
@@ -112,6 +115,101 @@ impl<'a, 'heap, 'scope> FrameValueMapper<PersistentPtr, PersistentEnvironment>
     }
 }
 
+fn combine_root_cleanup_error(error: EngineError, cleanup_error: EngineError) -> EngineError {
+    EngineError::Internal(format!(
+        "evaluator failed: {error}; persistent root cleanup also failed: {cleanup_error}"
+    ))
+}
+
+fn clear_roots_after_error<'heap, 'scope>(
+    scope: &mut RootScope<'heap, 'scope>,
+    roots: PersistentRootStore,
+    error: EngineError,
+) -> EngineError {
+    match roots.clear(scope) {
+        Ok(()) => error,
+        Err(cleanup_error) => combine_root_cleanup_error(error, cleanup_error),
+    }
+}
+
+fn clear_persistent_state_after_error<'heap, 'scope>(
+    scope: &mut RootScope<'heap, 'scope>,
+    state: PersistentEvalState,
+    error: EngineError,
+) -> EngineError {
+    clear_roots_after_error(scope, state.roots, error)
+}
+
+/// Owns persistent evaluator roots only while the heap is unlocked.
+///
+/// The state is taken out before entering a locked cycle and restored only
+/// after that cycle returns. This makes destructor-based cleanup safe here,
+/// even though [`PersistentRootStore`] itself must never acquire the heap lock
+/// from `Drop`. In particular, cancelling the outer evaluation future while it
+/// is awaiting host work still unregisters every evaluator-owned root.
+struct SuspendedEvalState<'heap> {
+    heap: &'heap Heap,
+    state: Option<PersistentEvalState>,
+}
+
+impl<'heap> SuspendedEvalState<'heap> {
+    fn new(heap: &'heap Heap, state: PersistentEvalState) -> Self {
+        Self {
+            heap,
+            state: Some(state),
+        }
+    }
+
+    fn get(&self) -> &PersistentEvalState {
+        match &self.state {
+            Some(state) => state,
+            None => panic!("suspended evaluator state must be present outside a locked cycle"),
+        }
+    }
+
+    fn get_mut(&mut self) -> &mut PersistentEvalState {
+        match &mut self.state {
+            Some(state) => state,
+            None => panic!("suspended evaluator state must be present outside a locked cycle"),
+        }
+    }
+
+    fn take(&mut self) -> PersistentEvalState {
+        match self.state.take() {
+            Some(state) => state,
+            None => panic!("suspended evaluator state must be present before a locked cycle"),
+        }
+    }
+
+    fn restore(&mut self, state: PersistentEvalState) {
+        assert!(
+            self.state.replace(state).is_none(),
+            "locked evaluator cycle returned while suspended state was still present"
+        );
+    }
+
+    fn finish_with_error(mut self, error: EngineError) -> EngineError {
+        let state = self.take();
+        match self.clear(state) {
+            Ok(()) => error,
+            Err(cleanup_error) => combine_root_cleanup_error(error, cleanup_error),
+        }
+    }
+
+    fn clear(&self, state: PersistentEvalState) -> Result<(), EngineError> {
+        let roots = state.roots;
+        self.heap.with_root_scope(|scope| roots.clear(scope))
+    }
+}
+
+impl Drop for SuspendedEvalState<'_> {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            let _ = self.clear(state);
+        }
+    }
+}
+
 pub(crate) async fn eval_typed_expr<State>(
     runtime: RuntimeCore<State>,
     heap: &Heap,
@@ -127,11 +225,10 @@ where
 
 fn persist_eval_state<'heap, 'scope>(
     scope: &mut RootScope<'heap, 'scope>,
-    frames: FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
-    scheduler: EvalScheduler<RootedPtr<'scope>>,
-    previous_roots: Option<PersistentRootStore>,
+    state: ScopedState<'scope>,
 ) -> Result<PersistentEvalState, EngineError> {
     let mut roots = scope.persistent_root_store()?;
+    let EvalState { frames, scheduler } = state;
 
     let converted = (|| {
         let frames = {
@@ -148,33 +245,22 @@ fn persist_eval_state<'heap, 'scope>(
     let (frames, scheduler) = match converted {
         Ok(converted) => converted,
         Err(error) => {
-            let _ = roots.clear(scope);
-            if let Some(previous_roots) = previous_roots {
-                let _ = previous_roots.clear(scope);
-            }
-            return Err(error);
+            return Err(clear_roots_after_error(scope, roots, error));
         }
     };
 
-    if let Some(previous_roots) = previous_roots {
-        previous_roots.clear(scope)?;
-    }
     Ok(PersistentEvalState {
         roots,
-        frames,
-        scheduler,
+        state: EvalState { frames, scheduler },
     })
 }
 
 fn resolve_eval_state<'heap, 'scope>(
     scope: &mut RootScope<'heap, 'scope>,
     state: PersistentEvalState,
-) -> Result<TransientEvalState<'scope>, EngineError> {
-    let PersistentEvalState {
-        roots,
-        frames,
-        scheduler,
-    } = state;
+) -> Result<ScopedEvalState<'scope>, EngineError> {
+    let PersistentEvalState { roots, state } = state;
+    let EvalState { frames, scheduler } = state;
 
     let converted = (|| {
         let frames = {
@@ -194,14 +280,12 @@ fn resolve_eval_state<'heap, 'scope>(
     let (frames, scheduler) = match converted {
         Ok(converted) => converted,
         Err(error) => {
-            let _ = roots.clear(scope);
-            return Err(error);
+            return Err(clear_roots_after_error(scope, roots, error));
         }
     };
-    Ok(TransientEvalState {
-        previous_roots: roots,
-        frames,
-        scheduler,
+    Ok(ScopedEvalState {
+        roots,
+        state: EvalState { frames, scheduler },
     })
 }
 
@@ -233,74 +317,100 @@ where
         let mut frames = FrameStore::default();
         let root_frame = frames.insert(frame_for_expr(None, expr, env));
         let scheduler = EvalScheduler::new(root_frame, ready_work_limit);
-        persist_eval_state(scope, frames, scheduler, None)
+        persist_eval_state(scope, EvalState { frames, scheduler })
     })?;
-    let mut boundary = EvalBoundary::MoreInternalWork(state);
+    let mut suspended = SuspendedEvalState::new(heap, state);
+    let mut boundary = EvalBoundary::MoreInternalWork;
 
     loop {
-        let (mut state, wait_for_host) = match boundary {
-            EvalBoundary::MoreInternalWork(state) => (state, false),
-            EvalBoundary::HostWork(state) | EvalBoundary::WaitingForHost(state) => (state, true),
-            EvalBoundary::Completed(result) => return Ok(result),
-        };
+        let wait_for_host = boundary.wait_for_host();
 
-        state
+        suspended
+            .get_mut()
+            .state
             .scheduler
             .set_ready_work_limit(runtime.parallelism_controller.ready_work_limit());
-        let completed_native =
-            match poll_pending_native(&runtime, heap, &mut host_scheduler, wait_for_host).await? {
-                NativePoll::Progress => {
-                    boundary = EvalBoundary::from_state(state, &host_scheduler)?;
-                    continue;
-                }
-                NativePoll::Completed { frame, handle } => Some((frame, handle)),
-                NativePoll::Idle if !wait_for_host => None,
-                NativePoll::Idle => {
-                    return Err(EngineError::Internal(
-                        "eval scheduler ran out of host work".into(),
-                    ));
-                }
+        let native_poll =
+            match poll_pending_native(&runtime, heap, &mut host_scheduler, wait_for_host).await {
+                Ok(native_poll) => native_poll,
+                Err(error) => return Err(suspended.finish_with_error(error)),
             };
+        let completed_native = match native_poll {
+            NativePoll::Progress => {
+                boundary = match EvalBoundary::from_state(suspended.get(), &host_scheduler) {
+                    Ok(boundary) => boundary,
+                    Err(error) => return Err(suspended.finish_with_error(error)),
+                };
+                continue;
+            }
+            NativePoll::Completed { frame, handle } => Some((frame, handle)),
+            NativePoll::Idle if !wait_for_host => None,
+            NativePoll::Idle => {
+                let error = EngineError::Internal("eval scheduler ran out of host work".into());
+                return Err(suspended.finish_with_error(error));
+            }
+        };
 
         let completed_native_ref = completed_native
             .as_ref()
             .map(|(frame, handle)| (*frame, handle));
+        let mut state_for_cycle = Some(suspended.take());
         let outcome = with_promotable_root_scope(heap, |scope, promoter| {
+            let state = state_for_cycle.take().ok_or_else(|| {
+                EngineError::Internal("locked evaluator cycle missing persistent state".into())
+            })?;
             run_locked_eval_cycle(&runtime, scope, promoter, state, completed_native_ref)
-        })?;
-        boundary = match outcome {
+        });
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if let Some(state) = state_for_cycle {
+                    suspended.restore(state);
+                    return Err(suspended.finish_with_error(error));
+                }
+                return Err(error);
+            }
+        };
+        match outcome {
             LockedCycleOutcome::Continue {
-                state,
+                state: next_state,
                 queued_native,
             } => {
+                suspended.restore(next_state);
                 if let Some((frame, call)) = queued_native {
                     host_scheduler.schedule_native(frame, call);
                 }
-                EvalBoundary::from_state(state, &host_scheduler)?
+                boundary = match EvalBoundary::from_state(suspended.get(), &host_scheduler) {
+                    Ok(boundary) => boundary,
+                    Err(error) => return Err(suspended.finish_with_error(error)),
+                };
             }
-            LockedCycleOutcome::Completed(result) => EvalBoundary::Completed(result),
-        };
+            LockedCycleOutcome::Completed(result) => return Ok(result),
+        }
     }
 }
 
 enum EvalBoundary {
-    MoreInternalWork(PersistentEvalState),
-    HostWork(PersistentEvalState),
-    WaitingForHost(PersistentEvalState),
-    Completed(Handle),
+    MoreInternalWork,
+    HostWork,
+    WaitingForHost,
 }
 
 impl EvalBoundary {
+    fn wait_for_host(&self) -> bool {
+        matches!(self, Self::HostWork | Self::WaitingForHost)
+    }
+
     fn from_state(
-        state: PersistentEvalState,
+        state: &PersistentEvalState,
         host_scheduler: &HostScheduler,
     ) -> Result<Self, EngineError> {
-        if state.scheduler.has_ready_work() {
-            Ok(Self::MoreInternalWork(state))
+        if state.state.scheduler.has_ready_work() {
+            Ok(Self::MoreInternalWork)
         } else if host_scheduler.has_queued_native_work() {
-            Ok(Self::HostWork(state))
+            Ok(Self::HostWork)
         } else if host_scheduler.has_pending_native_work() {
-            Ok(Self::WaitingForHost(state))
+            Ok(Self::WaitingForHost)
         } else {
             Err(EngineError::Internal(
                 "eval scheduler has no internal or host work".into(),
@@ -320,6 +430,13 @@ enum LockedCycleOutcome {
     Completed(Handle),
 }
 
+enum ScopedCycleOutcome<'scope> {
+    Continue {
+        native_request: Option<(FrameId, NativeCallRequest<'scope>)>,
+    },
+    Completed(RootedPtr<'scope>),
+}
+
 fn run_locked_eval_cycle<'heap, 'scope, State>(
     runtime: &RuntimeCore<State>,
     scope: &mut RootScope<'heap, 'scope>,
@@ -330,11 +447,60 @@ fn run_locked_eval_cycle<'heap, 'scope, State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let TransientEvalState {
-        previous_roots,
-        mut frames,
-        mut scheduler,
+    let ScopedEvalState {
+        roots: previous_roots,
+        mut state,
     } = resolve_eval_state(scope, state)?;
+
+    let outcome = match run_scoped_eval_cycle(runtime, scope, &mut state, completed_native) {
+        Ok(outcome) => outcome,
+        Err(error) => return Err(clear_roots_after_error(scope, previous_roots, error)),
+    };
+
+    match outcome {
+        ScopedCycleOutcome::Completed(value) => {
+            previous_roots.clear(scope)?;
+            let result = promoter.promote(scope, value)?;
+            Ok(LockedCycleOutcome::Completed(result))
+        }
+        ScopedCycleOutcome::Continue { native_request } => {
+            let state = match persist_eval_state(scope, state) {
+                Ok(state) => state,
+                Err(error) => {
+                    return Err(clear_roots_after_error(scope, previous_roots, error));
+                }
+            };
+            if let Err(error) = previous_roots.clear(scope) {
+                return Err(clear_persistent_state_after_error(scope, state, error));
+            }
+
+            let queued_native = match native_request {
+                Some((frame, call)) => match call.promote(scope, promoter) {
+                    Ok(call) => Some((frame, call)),
+                    Err(error) => {
+                        return Err(clear_persistent_state_after_error(scope, state, error));
+                    }
+                },
+                None => None,
+            };
+            Ok(LockedCycleOutcome::Continue {
+                state,
+                queued_native,
+            })
+        }
+    }
+}
+
+fn run_scoped_eval_cycle<'heap, 'scope, State>(
+    runtime: &RuntimeCore<State>,
+    scope: &mut RootScope<'heap, 'scope>,
+    state: &mut ScopedState<'scope>,
+    completed_native: Option<(FrameId, &Handle)>,
+) -> Result<ScopedCycleOutcome<'scope>, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let EvalState { frames, scheduler } = state;
     if let Some((frame, handle)) = completed_native {
         let value = scope.root_handle(handle)?;
         scheduler.schedule_next(EvalWorkItem::receive(frame, frame, value));
@@ -350,9 +516,9 @@ where
         .map(|returned| (returned.child, returned.value));
     let control = match returned {
         Some((child, value)) => {
-            eval_receive(runtime, scope, &mut frames, item.frame, frame, child, value)?
+            eval_receive(runtime, scope, frames, item.frame, frame, child, value)?
         }
-        None => eval_enter(runtime, scope, &mut frames, item.frame, frame)?,
+        None => eval_enter(runtime, scope, frames, item.frame, frame)?,
     };
 
     let mut native_request = None;
@@ -383,34 +549,13 @@ where
             let frame = frames.remove(item.frame)?;
             let parent = frame.parent();
             let Some(parent) = parent else {
-                previous_roots.clear(scope)?;
-                let result = promoter.promote(scope, value)?;
-                return Ok(LockedCycleOutcome::Completed(result));
+                return Ok(ScopedCycleOutcome::Completed(value));
             };
             scheduler.schedule_next(EvalWorkItem::receive(parent, item.frame, value));
         }
     }
 
-    let state = persist_eval_state(scope, frames, scheduler, Some(previous_roots))?;
-    let queued_native = match native_request {
-        Some((frame, call)) => match call.promote(scope, promoter) {
-            Ok(call) => Some((frame, call)),
-            Err(error) => {
-                let cleanup = state.roots.clear(scope);
-                return Err(match cleanup {
-                    Ok(()) => error,
-                    Err(cleanup_error) => EngineError::Internal(format!(
-                        "failed to promote host call: {error}; evaluator root cleanup also failed: {cleanup_error}"
-                    )),
-                });
-            }
-        },
-        None => None,
-    };
-    Ok(LockedCycleOutcome::Continue {
-        state,
-        queued_native,
-    })
+    Ok(ScopedCycleOutcome::Continue { native_request })
 }
 
 pub(crate) fn frame_for_expr<'scope>(
@@ -1868,7 +2013,7 @@ fn synthetic_rooted_application_expr_from_head<'scope>(
 mod tests {
     use super::*;
     use crate::{
-        Builder,
+        Builder, Module,
         compiler::CompileOptions,
         config::{NativeAsyncPermit, ParallelismController},
     };
@@ -1923,6 +2068,81 @@ mod tests {
 
         assert_eq!(result.as_i32().unwrap(), 3);
         assert!(checks.load(Ordering::SeqCst) > 1);
+    }
+
+    async fn run_failing_program(builder: Builder, source: &str) -> (Heap, EngineError) {
+        let heap = builder.heap().clone();
+        let compiler = builder.build_compiler();
+        let parsed = rex_parser::parse(source).expect("test program should parse");
+        let (program, evaluator) = compiler
+            .compile_program(
+                &parsed,
+                CompileOptions::for_module("test.root_cleanup").unwrap(),
+            )
+            .await
+            .expect("test program should compile");
+        let error = evaluator
+            .run(program, Default::default())
+            .await
+            .expect_err("test program should fail during evaluation");
+        (heap, error)
+    }
+
+    #[tokio::test]
+    async fn host_error_releases_persistent_evaluator_roots() {
+        let mut builder = Builder::new(());
+        let mut module = Module::global();
+        module
+            .export("fail", |_: &()| {
+                Err::<i32, _>(EngineError::Custom("expected failure".into()))
+            })
+            .unwrap();
+        builder.inject_module(module).unwrap();
+
+        let (heap, error) = run_failing_program(builder, "fail").await;
+
+        assert!(matches!(error, EngineError::Custom(message) if message == "expected failure"));
+        assert_eq!(heap.registered_root_count_for_test().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn locked_cycle_error_releases_persistent_evaluator_roots() {
+        let builder = Builder::with_prelude(()).unwrap();
+
+        let (heap, error) = run_failing_program(builder, "mean ([] is List f64)").await;
+
+        assert!(matches!(error, EngineError::EmptySequence));
+        assert_eq!(heap.registered_root_count_for_test().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn cancelling_evaluation_releases_persistent_evaluator_roots() {
+        let mut builder = Builder::new(());
+        let mut module = Module::global();
+        module
+            .export_async("wait_forever", |_: &()| async {
+                futures::future::pending::<()>().await;
+                Ok(0i32)
+            })
+            .unwrap();
+        builder.inject_module(module).unwrap();
+        let heap = builder.heap().clone();
+        let compiler = builder.build_compiler();
+        let parsed = rex_parser::parse("(wait_forever, true)").unwrap();
+        let (program, evaluator) = compiler
+            .compile_program(
+                &parsed,
+                CompileOptions::for_module("test.root_cleanup").unwrap(),
+            )
+            .await
+            .unwrap();
+        let mut evaluation = Box::pin(evaluator.run(program, Default::default()));
+
+        assert!(futures::poll!(evaluation.as_mut()).is_pending());
+        assert!(heap.registered_root_count_for_test().unwrap() > 0);
+        drop(evaluation);
+
+        assert_eq!(heap.registered_root_count_for_test().unwrap(), 0);
     }
 
     fn wildcard() -> Pattern {
