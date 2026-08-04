@@ -843,7 +843,7 @@ pub(crate) fn workspace_edit_fingerprint(edit: &WorkspaceEdit) -> String {
     {
         payload.push_str(&encoded);
     }
-    sha256_hex(payload.as_bytes())
+    blake3::hash(payload.as_bytes()).to_hex().to_string()
 }
 
 pub(crate) fn semantic_quick_fixes_for_range(
@@ -1085,7 +1085,7 @@ pub fn apply_workspace_edit_to_text(uri: &Url, text: &str, edit: &WorkspaceEdit)
 }
 
 pub fn text_state_hash(text: &str) -> String {
-    sha256_hex(text.as_bytes())
+    blake3::hash(text.as_bytes()).to_hex().to_string()
 }
 
 pub fn next_no_improvement_streak(streak: usize, diagnostics_delta: i64) -> usize {

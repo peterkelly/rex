@@ -994,6 +994,7 @@ dependencies = [
 name = "rex-lsp"
 version = "3.9.14"
 dependencies = [
+ "blake3",
  "futures",
  "lsp-types",
  "rex",

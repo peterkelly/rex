@@ -37,7 +37,7 @@ pub(crate) use rex_typesystem::{
     typesystem::{PreparedInstanceDecl, TypeSystem, instantiate},
     unification::unify,
 };
-pub(crate) use rex_util::{resolve_local_import_path, sha256_hex};
+pub(crate) use rex_util::resolve_local_import_path;
 pub(crate) use serde_json::{Value, json, to_value};
 
 pub(crate) use crate::{
