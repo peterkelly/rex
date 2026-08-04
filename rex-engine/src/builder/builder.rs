@@ -29,9 +29,8 @@ use crate::{
     },
     modules::{
         CompilationPackage, Declarations, ImportRequest, Importer, Module, ModuleExports, ModuleId,
-        ModuleSystem, ROOT_MODULE_NAME, ResolvedModule, ResolvedModuleContent, StdlibImporter,
-        VirtualModule, exports_from_package, interface_decls_from_package, prefix_for_module,
-        virtual_export_name,
+        ModuleSystem, ROOT_MODULE_NAME, ResolvedModule, ResolvedModuleContent, VirtualModule,
+        exports_from_package, interface_decls_from_package, prefix_for_module, virtual_export_name,
     },
     prelude::{inject_prelude, inject_prelude_virtual_module, standard_type_system},
     util::{
@@ -118,10 +117,6 @@ where
             heap: Heap::new(),
         };
         if matches!(options.prelude, PreludeMode::Enabled) {
-            builder
-                .module_loader
-                .system
-                .append_importer("stdlib", Arc::new(StdlibImporter));
             inject_prelude(&mut builder)?;
             inject_prelude_virtual_module(&mut builder)?;
         }

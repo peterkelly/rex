@@ -120,7 +120,6 @@ pub enum NativeTask<P> {
     UnaryFlatMap(NativeUnaryFlatMap<P>),
     Fold(NativeFold<P>),
     DictMap(NativeDictMap<P>),
-    DictTraverse(NativeDictTraverse<P>),
     ArrayEq(NativeArrayEq<P>),
     Sum(NativeSum<P>),
     Mean(NativeMean<P>),
@@ -289,14 +288,6 @@ impl<P> NativeTask<P> {
                 output: map_values_into(task.output, map)?,
                 remaining: task.remaining,
             }),
-            Self::DictTraverse(task) => NativeTask::DictTraverse(NativeDictTraverse {
-                func: map(task.func)?,
-                func_type: task.func_type,
-                elem_type: task.elem_type,
-                entries: map_entries_into(task.entries, map)?,
-                next_index: task.next_index,
-                output: map_values_into(task.output, map)?,
-            }),
             Self::ArrayEq(task) => NativeTask::ArrayEq(NativeArrayEq {
                 elem_type: task.elem_type,
                 xs: task.xs.map_values(map)?,
@@ -403,7 +394,6 @@ impl Coroutine for NativeTask<RootedPtr> {
             NativeTask::UnaryFlatMap(task) => task.enter(scope),
             NativeTask::Fold(task) => task.enter(scope),
             NativeTask::DictMap(task) => task.enter(scope),
-            NativeTask::DictTraverse(task) => task.enter(scope),
             NativeTask::ArrayEq(task) => task.enter(scope),
             NativeTask::Sum(task) => task.enter(scope),
             NativeTask::Mean(task) => task.enter(scope),
@@ -428,7 +418,6 @@ impl Coroutine for NativeTask<RootedPtr> {
             NativeTask::UnaryFlatMap(task) => task.receive(scope, child, value),
             NativeTask::Fold(task) => task.receive(scope, child, value),
             NativeTask::DictMap(task) => task.receive(scope, child, value),
-            NativeTask::DictTraverse(task) => task.receive(scope, child, value),
             NativeTask::ArrayEq(task) => task.receive(scope, child, value),
             NativeTask::Sum(task) => task.receive(scope, child, value),
             NativeTask::Mean(task) => task.receive(scope, child, value),
@@ -1140,66 +1129,6 @@ impl NativeDictMap<RootedPtr> {
             self.func,
             self.func_type.clone(),
             *value,
-            self.elem_type.clone(),
-        )
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeDictTraverse<P> {
-    pub func: P,
-    pub func_type: Type,
-    pub elem_type: Type,
-    pub entries: Vec<(Symbol, P)>,
-    pub next_index: usize,
-    pub output: BTreeMap<Symbol, P>,
-}
-
-impl Coroutine for NativeDictTraverse<RootedPtr> {
-    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
-        if self.entries.is_empty() {
-            let root = scope.alloc_root_dict(BTreeMap::new())?;
-            let root = result_from_native_pointer(scope, Ok(root))?;
-            return Ok(NativeStep::Return(root));
-        }
-        self.next_index = 0;
-        let (_, value) = self.entries[0].clone();
-        native_apply_step(
-            self.func,
-            self.func_type.clone(),
-            value,
-            self.elem_type.clone(),
-        )
-    }
-
-    fn receive(
-        &mut self,
-        scope: &mut RootScope<'_>,
-        _child: FrameId,
-        value: RootedPtr,
-    ) -> Result<NativeStep, EngineError> {
-        match result_value_ptr(scope, value)? {
-            Ok(value) => {
-                let (key, _) = self.entries[self.next_index].clone();
-                self.output.insert(key, value);
-            }
-            Err(err) => {
-                let root = result_from_native_pointer(scope, Err(err))?;
-                return Ok(NativeStep::Return(root));
-            }
-        }
-        self.next_index += 1;
-        if self.next_index == self.entries.len() {
-            let output = self.output.clone();
-            let root = scope.alloc_root_dict(output)?;
-            let root = result_from_native_pointer(scope, Ok(root))?;
-            return Ok(NativeStep::Return(root));
-        }
-        let (_, value) = self.entries[self.next_index].clone();
-        native_apply_step(
-            self.func,
-            self.func_type.clone(),
-            value,
             self.elem_type.clone(),
         )
     }

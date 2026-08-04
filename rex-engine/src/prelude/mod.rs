@@ -77,11 +77,11 @@ use crate::{
     evaluator::{
         native_callable::SchedulerNativeResult,
         native_functions::{
-            NativeApplyUnary, NativeArrayEq, NativeArrayEqState, NativeDictMap, NativeDictTraverse,
-            NativeFold, NativeFoldOrder, NativeFoldState, NativeMean, NativeMeanState,
-            NativeSequenceFilter, NativeSequenceFilterMap, NativeSequenceFlatMap,
-            NativeSequenceMap, NativeSequenceShape, NativeSum, NativeTask, NativeUnaryFilter,
-            NativeUnaryFilterMap, NativeUnaryFlatMap, NativeUnaryMap,
+            NativeApplyUnary, NativeArrayEq, NativeArrayEqState, NativeDictMap, NativeFold,
+            NativeFoldOrder, NativeFoldState, NativeMean, NativeMeanState, NativeSequenceFilter,
+            NativeSequenceFilterMap, NativeSequenceFlatMap, NativeSequenceMap, NativeSequenceShape,
+            NativeSum, NativeTask, NativeUnaryFilter, NativeUnaryFilterMap, NativeUnaryFlatMap,
+            NativeUnaryMap,
         },
     },
     memory::{
@@ -138,7 +138,7 @@ where
     inject_numeric_ops(engine)?;
     inject_list_builtins(engine)?;
     inject_option_result_builtins(engine)?;
-    inject_json_primops(engine)?;
+    inject_dict_builtins(engine)?;
     register_prelude_typeclass_instances(engine)?;
     Ok(())
 }
@@ -1156,7 +1156,7 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     export_checked_int_rem!(i32);
     export_checked_int_rem!(i64);
 
-    // Numeric conversions (used by `std.json`).
+    // Numeric conversions.
     engine.export("prim_to_f64", |_: &State, x: u8| Ok(x as f64))?;
     engine.export("prim_to_f64", |_: &State, x: u16| Ok(x as f64))?;
     engine.export("prim_to_f64", |_: &State, x: u32| Ok(x as f64))?;
@@ -1193,138 +1193,12 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     export_int_widen!(u32 => u64);
     export_int_widen!(u32 => i64);
 
-    // f64 -> Option <number> conversions (used by `std.json`).
-    // - reject NaN/±inf
-    // - for integer types: require integral `x` (fract == 0) and in range
-    {
-        macro_rules! inject_f64_to {
-            ($name:literal, $dst_ty:expr, $convert:expr) => {{
-                let scheme = scheme!(Type::fun(
-                    Type::builtin(BuiltinTypeId::F64),
-                    Type::option($dst_ty),
-                ));
-                engine.export_native($name, scheme, 1, move |scope, _t, args| {
-                    let x = scope.root_as_f64(args[0])?;
-                    let converted = $convert(scope, x)?;
-                    option_from_root(scope, converted)
-                })?;
-            }};
-        }
-
-        inject_f64_to!(
-            "prim_f64_to_u8",
-            Type::builtin(BuiltinTypeId::U8),
-            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
-                if x.is_finite() && x.fract() == 0.0 && x >= u8::MIN as f64 && x <= u8::MAX as f64 {
-                    Ok(Some(scope.alloc_root_u8(x as u8)?))
-                } else {
-                    Ok(None)
-                }
-            }
-        );
-        inject_f64_to!(
-            "prim_f64_to_u16",
-            Type::builtin(BuiltinTypeId::U16),
-            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
-                if x.is_finite() && x.fract() == 0.0 && x >= u16::MIN as f64 && x <= u16::MAX as f64
-                {
-                    Ok(Some(scope.alloc_root_u16(x as u16)?))
-                } else {
-                    Ok(None)
-                }
-            }
-        );
-        inject_f64_to!(
-            "prim_f64_to_u32",
-            Type::builtin(BuiltinTypeId::U32),
-            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
-                if x.is_finite() && x.fract() == 0.0 && x >= u32::MIN as f64 && x <= u32::MAX as f64
-                {
-                    Ok(Some(scope.alloc_root_u32(x as u32)?))
-                } else {
-                    Ok(None)
-                }
-            }
-        );
-        inject_f64_to!(
-            "prim_f64_to_u64",
-            Type::builtin(BuiltinTypeId::U64),
-            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
-                if x.is_finite() && x.fract() == 0.0 && x >= u64::MIN as f64 && x <= u64::MAX as f64
-                {
-                    Ok(Some(scope.alloc_root_u64(x as u64)?))
-                } else {
-                    Ok(None)
-                }
-            }
-        );
-        inject_f64_to!(
-            "prim_f64_to_i8",
-            Type::builtin(BuiltinTypeId::I8),
-            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
-                if x.is_finite() && x.fract() == 0.0 && x >= i8::MIN as f64 && x <= i8::MAX as f64 {
-                    Ok(Some(scope.alloc_root_i8(x as i8)?))
-                } else {
-                    Ok(None)
-                }
-            }
-        );
-        inject_f64_to!(
-            "prim_f64_to_i16",
-            Type::builtin(BuiltinTypeId::I16),
-            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
-                if x.is_finite() && x.fract() == 0.0 && x >= i16::MIN as f64 && x <= i16::MAX as f64
-                {
-                    Ok(Some(scope.alloc_root_i16(x as i16)?))
-                } else {
-                    Ok(None)
-                }
-            }
-        );
-        inject_f64_to!(
-            "prim_f64_to_i32",
-            Type::builtin(BuiltinTypeId::I32),
-            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
-                if x.is_finite() && x.fract() == 0.0 && x >= i32::MIN as f64 && x <= i32::MAX as f64
-                {
-                    Ok(Some(scope.alloc_root_i32(x as i32)?))
-                } else {
-                    Ok(None)
-                }
-            }
-        );
-        inject_f64_to!(
-            "prim_f64_to_i64",
-            Type::builtin(BuiltinTypeId::I64),
-            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
-                if x.is_finite() && x.fract() == 0.0 && x >= i64::MIN as f64 && x <= i64::MAX as f64
-                {
-                    Ok(Some(scope.alloc_root_i64(x as i64)?))
-                } else {
-                    Ok(None)
-                }
-            }
-        );
-        inject_f64_to!(
-            "prim_f64_to_f32",
-            Type::builtin(BuiltinTypeId::F32),
-            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
-                if x.is_finite() && x >= f32::MIN as f64 && x <= f32::MAX as f64 {
-                    Ok(Some(scope.alloc_root_f32(x as f32)?))
-                } else {
-                    Ok(None)
-                }
-            }
-        );
-    }
-
     Ok(())
 }
 
-fn inject_json_primops<State: Clone + Send + Sync + 'static>(
+fn inject_dict_builtins<State: Clone + Send + Sync + 'static>(
     engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
-    // Dict mapping and traversal helpers (used by `std.json`).
     {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::dict(a), Type::builtin(BuiltinTypeId::I32))
@@ -1361,270 +1235,6 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                     remaining: 0,
                 },
             )))
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b, e] =>
-            Type::fun(
-                Type::fun(a, Type::result(b, e)),
-                Type::fun(Type::dict(a), Type::result(Type::dict(b), e)),
-            )
-        );
-        engine.export_native_scheduler(
-            "prim_dict_traverse_result",
-            scheme,
-            2,
-            |scope, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
-                let func_ty = arg_tys[0].clone();
-                let dict_ty = arg_tys[1].clone();
-                let elem_ty = dict_elem_type(&dict_ty)?;
-                let map = scope.root_as_dict(args[1])?;
-                Ok(SchedulerNativeResult::Task(NativeTask::DictTraverse(
-                    NativeDictTraverse {
-                        func: args[0],
-                        func_type: func_ty,
-                        elem_type: elem_ty,
-                        entries: map.into_iter().collect(),
-                        next_index: 0,
-                        output: BTreeMap::new(),
-                    },
-                )))
-            },
-        )?;
-    }
-
-    // Parsing helpers used by `std.json` instances.
-    {
-        let string_ty = Type::builtin(BuiltinTypeId::String);
-        let uuid_ty = Type::builtin(BuiltinTypeId::Uuid);
-        let scheme = scheme!(Type::fun(&string_ty, Type::option(uuid_ty)));
-        engine.export_native("prim_parse_uuid", scheme, 1, |scope, _, args| {
-            let s = scope.root_as_string(args[0])?;
-            let parsed = Uuid::parse_str(&s)
-                .ok()
-                .map(|uuid| scope.alloc_root_uuid(uuid))
-                .transpose()?;
-            option_from_root(scope, parsed)
-        })?;
-    }
-
-    {
-        let string_ty = Type::builtin(BuiltinTypeId::String);
-        let hash_ty = Type::builtin(BuiltinTypeId::Hash);
-        let scheme = scheme!(Type::fun(&string_ty, Type::option(hash_ty)));
-        engine.export_native("prim_parse_hash", scheme, 1, |scope, _, args| {
-            let s = scope.root_as_string(args[0])?;
-            let parsed = Hash::from_hex(&s)
-                .ok()
-                .map(|hash| scope.alloc_root_hash(hash))
-                .transpose()?;
-            option_from_root(scope, parsed)
-        })?;
-    }
-
-    {
-        let string_ty = Type::builtin(BuiltinTypeId::String);
-        let dt_ty = Type::builtin(BuiltinTypeId::DateTime);
-        let scheme = scheme!(Type::fun(&string_ty, Type::option(dt_ty)));
-        engine.export_native("prim_parse_datetime", scheme, 1, |scope, _, args| {
-            let s = scope.root_as_string(args[0])?;
-            let parsed = DateTime::parse_from_rfc3339(&s)
-                .ok()
-                .map(|dt| dt.with_timezone(&Utc))
-                .map(|dt| scope.alloc_root_datetime(dt))
-                .transpose()?;
-            option_from_root(scope, parsed)
-        })?;
-    }
-
-    // prim_json_stringify : a -> string
-    //
-    // Used by `std.json` to implement `Show Value` (JSON-encoded string).
-    {
-        let string_ty = Type::builtin(BuiltinTypeId::String);
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(a, &string_ty)
-        );
-
-        #[derive(Clone)]
-        struct Tags {
-            null: Symbol,
-            bool_: Symbol,
-            string: Symbol,
-            number: Symbol,
-            array: Symbol,
-            object: Symbol,
-        }
-
-        let tags = Tags {
-            null: Symbol::intern("Null"),
-            bool_: Symbol::intern("Bool"),
-            string: Symbol::intern("String"),
-            number: Symbol::intern("Number"),
-            array: Symbol::intern("Array"),
-            object: Symbol::intern("Object"),
-        };
-
-        fn to_serde_json(
-            scope: &mut RootScope<'_>,
-            value: RootedPtr,
-            tags: &Tags,
-        ) -> Option<serde_json::Value> {
-            let (tag, args) = scope.root_as_adt(value).ok()?;
-            if tag == tags.null {
-                return Some(serde_json::Value::Null);
-            }
-            let [arg] = args.as_slice() else {
-                return None;
-            };
-            if tag == tags.bool_ {
-                return scope.root_as_bool(*arg).ok().map(serde_json::Value::Bool);
-            }
-            if tag == tags.string {
-                return scope
-                    .root_as_string(*arg)
-                    .ok()
-                    .map(serde_json::Value::String);
-            }
-            if tag == tags.number {
-                let number = scope.root_as_f64(*arg).ok()?;
-                return serde_json::Number::from_f64(number)
-                    .map(serde_json::Value::Number)
-                    .or(Some(serde_json::Value::Null));
-            }
-            if tag == tags.array {
-                let values = scope.root_as_list(*arg).ok()?;
-                let mut out = Vec::with_capacity(values.len());
-                for value in values {
-                    out.push(to_serde_json(scope, value, tags)?);
-                }
-                return Some(serde_json::Value::Array(out));
-            }
-            if tag == tags.object {
-                let values = scope.root_as_dict(*arg).ok()?;
-                let mut out = serde_json::Map::with_capacity(values.len());
-                for (name, value) in values {
-                    out.insert(
-                        name.as_ref().to_string(),
-                        to_serde_json(scope, value, tags)?,
-                    );
-                }
-                return Some(serde_json::Value::Object(out));
-            }
-            None
-        }
-
-        engine.export_native("prim_json_stringify", scheme, 1, move |scope, _, args| {
-            let json = to_serde_json(scope, args[0], &tags);
-            let Some(json) = json else {
-                return scope.alloc_root_string("<non-std.json.Value>".into());
-            };
-            scope.alloc_root_string(json.to_string())
-        })?;
-    }
-
-    // prim_json_parse : string -> Result a string
-    //
-    // This returns `Ok <std.json.Value>` when `a` is instantiated to the
-    // qualified `std.json.Value` type. It's a primop, so we keep it minimal and
-    // let `std.json.parse/from_string` wrap the string error into `DecodeError`.
-    {
-        let string_ty = Type::builtin(BuiltinTypeId::String);
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(&string_ty, Type::result(a, &string_ty))
-        );
-
-        #[derive(Clone)]
-        struct Tags {
-            null: Symbol,
-            bool_: Symbol,
-            string: Symbol,
-            number: Symbol,
-            array: Symbol,
-            object: Symbol,
-        }
-
-        let tags = Tags {
-            null: Symbol::intern("Null"),
-            bool_: Symbol::intern("Bool"),
-            string: Symbol::intern("String"),
-            number: Symbol::intern("Number"),
-            array: Symbol::intern("Array"),
-            object: Symbol::intern("Object"),
-        };
-
-        fn to_json_value(
-            v: &serde_json::Value,
-            tags: &Tags,
-            scope: &mut RootScope<'_>,
-        ) -> Result<RootedPtr, EngineError> {
-            match v {
-                serde_json::Value::Null => scope.alloc_root_adt(tags.null.clone(), vec![]),
-                serde_json::Value::Bool(b) => {
-                    let value = scope.alloc_root_bool(*b)?;
-                    scope.alloc_root_adt(tags.bool_.clone(), vec![value])
-                }
-                serde_json::Value::String(s) => {
-                    let value = scope.alloc_root_string(s.clone())?;
-                    scope.alloc_root_adt(tags.string.clone(), vec![value])
-                }
-                serde_json::Value::Number(n) => {
-                    let Some(f) = n.as_f64() else {
-                        return Err(EngineError::Custom(
-                            "expected JSON number representable as f64".into(),
-                        ));
-                    };
-                    let value = scope.alloc_root_f64(f)?;
-                    scope.alloc_root_adt(tags.number.clone(), vec![value])
-                }
-                serde_json::Value::Array(xs) => {
-                    let mut out = Vec::with_capacity(xs.len());
-                    for x in xs {
-                        let value = to_json_value(x, tags, scope)?;
-                        out.push(value);
-                    }
-                    let list = scope.alloc_root_list(out)?;
-                    scope.alloc_root_adt(tags.array.clone(), vec![list])
-                }
-                serde_json::Value::Object(obj) => {
-                    let mut out = BTreeMap::new();
-                    for (k, v) in obj {
-                        let value = to_json_value(v, tags, scope)?;
-                        out.insert(Symbol::intern(k.as_str()), value);
-                    }
-                    let dict = scope.alloc_root_dict(out)?;
-                    scope.alloc_root_adt(tags.object.clone(), vec![dict])
-                }
-            }
-        }
-
-        fn result_ok(
-            scope: &mut RootScope<'_>,
-            value: RootedPtr,
-        ) -> Result<RootedPtr, EngineError> {
-            scope.alloc_root_adt(Symbol::intern("Ok"), vec![value])
-        }
-
-        fn result_err(
-            scope: &mut RootScope<'_>,
-            message: String,
-        ) -> Result<RootedPtr, EngineError> {
-            let message = scope.alloc_root_string(message)?;
-            scope.alloc_root_adt(Symbol::intern("Err"), vec![message])
-        }
-
-        engine.export_native("prim_json_parse", scheme, 1, move |scope, _, args| {
-            let s = scope.root_as_string(args[0])?;
-            let parsed: serde_json::Value = match serde_json::from_str(&s) {
-                Ok(v) => v,
-                Err(e) => return result_err(scope, e.to_string()),
-            };
-            match to_json_value(&parsed, &tags, scope) {
-                Ok(value) => result_ok(scope, value),
-                Err(err) => result_err(scope, err.to_string()),
-            }
         })?;
     }
 

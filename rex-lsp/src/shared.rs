@@ -230,10 +230,6 @@ impl LspModuleService {
     }
 
     fn load_request(&self, req: ImportRequest) -> Result<Option<LspLoadedModule>, EngineError> {
-        if let Some(module) = self.load_stdlib(req.module_id.clone())? {
-            return Ok(Some(module));
-        }
-
         let importer_path = req
             .importer
             .as_ref()
@@ -265,18 +261,6 @@ impl LspModuleService {
             }
         };
         self.load_path(resolved_id, path, "local")
-    }
-
-    fn load_stdlib(&self, module_id: ModuleId) -> Result<Option<LspLoadedModule>, EngineError> {
-        let module_name = module_id.to_string();
-        let Some(source) = stdlib_source(&module_name) else {
-            return Ok(None);
-        };
-        Ok(Some(LspLoadedModule {
-            id: module_id,
-            path: None,
-            source: source.to_string(),
-        }))
     }
 
     fn load_path(

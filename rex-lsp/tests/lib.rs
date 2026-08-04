@@ -216,19 +216,6 @@ fn hole_expected_types_for_document(uri: &Url, text: &str) -> Vec<Value> {
 }
 
 #[test]
-fn stdlib_json_imports_typecheck_for_non_file_uri() {
-    let uri = Url::parse("untitled:Test.rex").expect("uri");
-    let text = r#"
-import std.json as Json;
-
-Json.stringify Json.Null
-"#;
-
-    let diags = diagnostics_from_text(&uri, text);
-    assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
-}
-
-#[test]
 fn diagnostics_handle_c_style_comments() {
     let uri = Url::parse("inmemory:///comments.rex").expect("uri");
 

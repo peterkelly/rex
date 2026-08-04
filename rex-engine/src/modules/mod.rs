@@ -16,7 +16,7 @@ pub(crate) mod module_id;
 pub(crate) mod system;
 pub(crate) mod types;
 
-pub use importers::{DenyImporter, StdlibImporter};
+pub use importers::DenyImporter;
 pub use module::{CompilationPackage, Declarations, Module, StagedAdtDecl};
 pub use module_id::{ModuleId, ModuleIdError};
 pub use system::Importer;

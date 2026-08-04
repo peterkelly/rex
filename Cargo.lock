@@ -971,7 +971,6 @@ dependencies = [
  "rex-typesystem",
  "rex-util",
  "serde",
- "serde_json",
  "static_assertions",
  "thiserror",
  "tokio",

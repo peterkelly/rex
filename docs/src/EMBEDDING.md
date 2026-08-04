@@ -154,7 +154,7 @@ let mut builder = Builder::with_options(
 
 This is fully supported in `rex-engine`. You can compose module loading from:
 
-- bundled stdlib imports (`std.prelude` and other `std.*` modules)
+- the bundled `std.prelude` virtual module
 - modules injected with `Builder::inject_module`
 - Rust modules returned lazily by importers
 - custom async importers (for DB/object-store/in-memory modules)

@@ -306,35 +306,6 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
         }
     }
 
-    // JSON stringification (used by `std.json`'s `Show` instance).
-    //
-    // This is intentionally a `prim_` helper with a polymorphic type so the
-    // `std.json` module can stay purely-Rex at the surface level.
-    {
-        let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        ts.add_value(
-            "prim_json_stringify",
-            Scheme::new(vec![a_tv], vec![], Type::fun(a, string_ty.clone())),
-        );
-    }
-
-    // prim_json_parse : string -> Result a string
-    //
-    // The ok type is polymorphic so `std.json` can instantiate it as
-    // `Result std.json.Value string` (and then wrap the string error into
-    // `DecodeError`).
-    {
-        let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let result_con = Type::builtin(BuiltinTypeId::Result);
-        let result_as = Type::app(Type::app(result_con, string_ty.clone()), a);
-        ts.add_value(
-            "prim_json_parse",
-            Scheme::new(vec![a_tv], vec![], Type::fun(string_ty.clone(), result_as)),
-        );
-    }
-
     // Collection intrinsics used by the standard type class instances.
     //
     // These are all `prim_` because they are the host-provided “bottom layer”.
@@ -655,32 +626,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             );
         }
 
-        // prim_dict_traverse_result : (a -> Result b e) -> Dict a -> Result (Dict b) e
-        {
-            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
-            let b_tv = ts.supply.fresh(Some(Symbol::intern("b")));
-            let e_tv = ts.supply.fresh(Some(Symbol::intern("e")));
-            let a = Type::var(a_tv.clone());
-            let b = Type::var(b_tv.clone());
-            let e = Type::var(e_tv.clone());
-            let dict_a = Type::app(Type::builtin(BuiltinTypeId::Dict), a.clone());
-            let dict_b = Type::app(Type::builtin(BuiltinTypeId::Dict), b.clone());
-            let result_eb = result_of(b.clone(), e.clone());
-            let result_edictb = result_of(dict_b, e);
-            ts.add_value(
-                "prim_dict_traverse_result",
-                Scheme::new(
-                    vec![a_tv, b_tv, e_tv],
-                    vec![],
-                    Type::fun(Type::fun(a, result_eb), Type::fun(dict_a, result_edictb)),
-                ),
-            );
-        }
-
-        // Numeric conversions used by `std.json`.
-        //
-        // We model these as primitive intrinsics to keep Rex code simple and to
-        // make overflow/rounding rules explicit at the host boundary.
+        // Numeric conversions.
         for src in [
             BuiltinTypeId::U8,
             BuiltinTypeId::U16,
@@ -731,62 +677,6 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                 Scheme::new(vec![], vec![], Type::fun(src_ty, dst_ty)),
             );
         }
-
-        for (name, dst) in [
-            ("prim_f64_to_u8", BuiltinTypeId::U8),
-            ("prim_f64_to_u16", BuiltinTypeId::U16),
-            ("prim_f64_to_u32", BuiltinTypeId::U32),
-            ("prim_f64_to_u64", BuiltinTypeId::U64),
-            ("prim_f64_to_i8", BuiltinTypeId::I8),
-            ("prim_f64_to_i16", BuiltinTypeId::I16),
-            ("prim_f64_to_i32", BuiltinTypeId::I32),
-            ("prim_f64_to_i64", BuiltinTypeId::I64),
-            ("prim_f64_to_f32", BuiltinTypeId::F32),
-        ] {
-            let dst_ty = Type::builtin(dst);
-            ts.add_value(
-                name,
-                Scheme::new(
-                    vec![],
-                    vec![],
-                    Type::fun(Type::builtin(BuiltinTypeId::F64), option_of(dst_ty)),
-                ),
-            );
-        }
-
-        ts.add_value(
-            "prim_parse_uuid",
-            Scheme::new(
-                vec![],
-                vec![],
-                Type::fun(
-                    Type::builtin(BuiltinTypeId::String),
-                    option_of(Type::builtin(BuiltinTypeId::Uuid)),
-                ),
-            ),
-        );
-        ts.add_value(
-            "prim_parse_hash",
-            Scheme::new(
-                vec![],
-                vec![],
-                Type::fun(
-                    Type::builtin(BuiltinTypeId::String),
-                    option_of(Type::builtin(BuiltinTypeId::Hash)),
-                ),
-            ),
-        );
-        ts.add_value(
-            "prim_parse_datetime",
-            Scheme::new(
-                vec![],
-                vec![],
-                Type::fun(
-                    Type::builtin(BuiltinTypeId::String),
-                    option_of(Type::builtin(BuiltinTypeId::DateTime)),
-                ),
-            ),
-        );
     }
 }
 

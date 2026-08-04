@@ -123,9 +123,6 @@ pub use rex_engine::ROOT_MODULE_NAME;
 /// Create a typing environment with the standard Rex prelude.
 pub use rex_engine::standard_type_system;
 
-/// Importer implementation for bundled stdlib modules.
-pub use rex_engine::StdlibImporter;
-
 /// Module payload returned by an importer.
 pub use rex_engine::ResolvedModule;
 

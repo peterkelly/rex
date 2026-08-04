@@ -48,8 +48,8 @@ pub use memory::{
 pub use modules::{
     CanonicalSymbol, CompilationPackage, Declarations, DenyImporter, ImportRequest, Importer,
     Module, ModuleExports, ModuleId, ModuleKey, PRELUDE_MODULE_NAME, ROOT_MODULE_NAME,
-    ResolvedModule, ResolvedModuleContent, ResolvedRustModule, StagedAdtDecl, StdlibImporter,
-    SymbolKind, virtual_export_name,
+    ResolvedModule, ResolvedModuleContent, ResolvedRustModule, StagedAdtDecl, SymbolKind,
+    virtual_export_name,
 };
 pub use prelude::{prelude_typeclasses_program, standard_type_system};
 pub use util::collect_adts_error_to_engine;

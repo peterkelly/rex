@@ -89,10 +89,9 @@ pub use rex_proc_macro::Rex;
 /// Parse, typecheck, evaluate, and JSON-encode a Rex snippet.
 ///
 /// This is a convenience helper for small integrations, examples, and tests. It
-/// creates a [`Builder`](engine::Builder) with the prelude enabled, installs the
-/// bundled stdlib importer, compiles `source` as a snippet, evaluates it once, and
-/// converts the result to JSON [`Value`](serde_json::Value) using the inferred
-/// result type.
+/// creates a [`Builder`](engine::Builder) with the prelude enabled, compiles
+/// `source` as a snippet, evaluates it once, and converts the result to JSON
+/// [`Value`](serde_json::Value) using the inferred result type.
 ///
 /// Hosts that need to inject functions, control module loading, preserve compile
 /// diagnostics, or set runtime policy should use [`Builder`](engine::Builder)
