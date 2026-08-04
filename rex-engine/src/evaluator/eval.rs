@@ -11,7 +11,7 @@ use crate::{
     },
     handlers::{NativeCall, NativeCallRequest, NativeCompletion},
     memory::{
-        heap::{HeapState, RootScope, RootedCallable, RootedClosure, RootedPtr},
+        heap::{Heap, RootScope, RootedCallable, RootedClosure, RootedPtr},
         lists::ListItems,
     },
     native_fn::NativeApplyResult,
@@ -106,7 +106,7 @@ fn collect_machine_if_needed(
 
 pub(crate) async fn eval_typed_expr<State>(
     runtime: RuntimeCore<State>,
-    heap: &mut HeapState,
+    heap: &mut Heap,
     rooted_env: RootedEnvironment,
     expr: Arc<TypedExpr>,
     input_args: Vec<(crate::Value, Type)>,
@@ -119,7 +119,7 @@ where
 
 async fn eval_typed_expr_inner<State>(
     runtime: RuntimeCore<State>,
-    heap: &mut HeapState,
+    heap: &mut Heap,
     rooted_env: RootedEnvironment,
     expr: Arc<TypedExpr>,
     input_args: Vec<(crate::Value, Type)>,
@@ -1801,7 +1801,7 @@ fn synthetic_rooted_application_expr_from_head(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::heap::HeapState;
+    use crate::memory::heap::Heap;
     use rex_ast::{Span, Var};
 
     fn wildcard() -> Pattern {
@@ -1810,7 +1810,7 @@ mod tests {
 
     #[test]
     fn binary_list_length_and_wildcard_patterns_do_not_allocate_elements() {
-        let mut heap = HeapState::new();
+        let mut heap = Heap::new();
         let list = heap
             .machine_root_scope(|scope| scope.alloc_root_binary_list(vec![10, 20, 30, 40]))
             .expect("binary list should allocate");
@@ -1863,7 +1863,7 @@ mod tests {
 
     #[test]
     fn nested_binary_list_bindings_survive_collection() {
-        let mut heap = HeapState::new();
+        let mut heap = Heap::new();
         let outer = heap
             .machine_root_scope(|scope| {
                 let first = scope.alloc_root_binary_list(vec![10])?;

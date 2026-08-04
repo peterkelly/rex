@@ -54,7 +54,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 
 ## Runtime Ownership and GC Boundaries
 
-`rex-engine` uses a moving copying collector. `HeapState` has one owner and moves exactly once
+`rex-engine` uses a moving copying collector. `Heap` has one owner and moves exactly once
 through `Builder -> Compiler -> Evaluator`; there is no heap mutex or public heap capability.
 Private heap cells contain moving edges, while evaluator frames, environments, scheduler work, and
 compiler state contain stable runtime-root tokens. The evaluator traverses and relocates those

@@ -6,7 +6,7 @@ use rex_ast::Symbol;
 
 use crate::EngineError;
 
-use super::heap::{Cell, HeapState, InternalPtr, RootScope, RootedPtr};
+use super::heap::{Cell, Heap, InternalPtr, RootScope, RootedPtr};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum ListElement {
@@ -201,7 +201,7 @@ pub(super) fn list_slice_backing_len(cell: &Cell) -> Result<usize, EngineError> 
 }
 
 fn append_list_slice_elements(
-    heap: &HeapState,
+    heap: &Heap,
     elements: &InternalPtr,
     start: usize,
     end: usize,
@@ -258,7 +258,7 @@ pub(super) fn list_slice_head_element(
     }
 }
 
-fn list_elements_from_cell(heap: &HeapState, cell: &Cell) -> Result<Vec<ListElement>, EngineError> {
+fn list_elements_from_cell(heap: &Heap, cell: &Cell) -> Result<Vec<ListElement>, EngineError> {
     let mut out = Vec::new();
     let mut cursor = cell;
     loop {
@@ -287,7 +287,7 @@ fn list_elements_from_cell(heap: &HeapState, cell: &Cell) -> Result<Vec<ListElem
 }
 
 pub(super) fn list_elements_from_pointer(
-    heap: &HeapState,
+    heap: &Heap,
     pointer: InternalPtr,
 ) -> Result<Vec<ListElement>, EngineError> {
     let cell = heap.get_cell_from_pointer(&pointer)?;
@@ -295,7 +295,7 @@ pub(super) fn list_elements_from_pointer(
 }
 
 pub(super) fn list_len_from_pointer(
-    heap: &HeapState,
+    heap: &Heap,
     pointer: InternalPtr,
 ) -> Result<usize, EngineError> {
     let mut len = 0usize;
@@ -377,10 +377,7 @@ pub(super) fn list_elements_to_rooted_ptr_vec(
         .collect()
 }
 
-pub(super) fn collect_list_u8(
-    heap: &HeapState,
-    pointer: &InternalPtr,
-) -> Result<Vec<u8>, EngineError> {
+pub(super) fn collect_list_u8(heap: &Heap, pointer: &InternalPtr) -> Result<Vec<u8>, EngineError> {
     let mut out = Vec::with_capacity(list_len_from_pointer(heap, *pointer)?);
     let mut cursor = heap.get_cell_from_pointer(pointer)?;
     loop {
@@ -425,7 +422,7 @@ pub(super) fn collect_list_u8(
 }
 
 pub(super) fn list_items_from_pointer(
-    heap: &HeapState,
+    heap: &Heap,
     pointer: InternalPtr,
 ) -> Result<ListItemsSeed, EngineError> {
     let cell = heap.get_cell_from_pointer(&pointer)?;

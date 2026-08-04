@@ -1,7 +1,7 @@
 # Memory Management
 
 `rex-engine` stores evaluator data in a private moving heap. The builder creates
-`HeapState`, then ownership moves through the single-use pipeline:
+`Heap`, then ownership moves through the single-use pipeline:
 
 ```text
 Builder -> Compiler -> Evaluator
@@ -71,7 +71,7 @@ relocation rather than relying on stable slot numbers.
 
 ## Host calls
 
-Public host functions never receive `HeapState`, `RootScope`, `RootedPtr`, or a
+Public host functions never receive `Heap`, `RootScope`, `RootedPtr`, or a
 capability that can obtain them. Public `Context` retains only host state and
 type-system metadata, not runtime registries or their root tokens. The call boundary is:
 

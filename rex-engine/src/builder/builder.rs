@@ -24,7 +24,7 @@ use crate::{
     },
     handlers::RexDefault,
     memory::{
-        heap::{HeapState, RootScope, RootedPtr},
+        heap::{Heap, RootScope, RootedPtr},
         traits::IntoRex,
     },
     modules::{
@@ -65,7 +65,7 @@ where
     pub(crate) runtime: RuntimeRegistry<State>,
     pub(crate) module_loader: ModuleLoaderState<State>,
     pub(crate) policy: RuntimePolicy,
-    pub(crate) heap: HeapState,
+    pub(crate) heap: Heap,
 }
 
 impl<State> Default for Builder<State>
@@ -92,7 +92,7 @@ where
             },
             module_loader: ModuleLoaderState::new(Vec::new()),
             policy: RuntimePolicy::default(),
-            heap: HeapState::new(),
+            heap: Heap::new(),
         }
     }
 
@@ -115,7 +115,7 @@ where
             },
             module_loader: ModuleLoaderState::new(options.default_imports),
             policy: RuntimePolicy::default(),
-            heap: HeapState::new(),
+            heap: Heap::new(),
         };
         if matches!(options.prelude, PreludeMode::Enabled) {
             builder
@@ -503,7 +503,7 @@ fn register_owned_value_parts<State>(
     module_loader: &ModuleLoaderState<State>,
     type_system: &mut TypeSystem,
     runtime: &mut RuntimeRegistry<State>,
-    heap: &mut HeapState,
+    heap: &mut Heap,
     module_name: &str,
     export_name: &str,
     mut typ: Type,
@@ -1098,7 +1098,7 @@ fn inject_fn_runtime_parts<State>(
     env: &mut RootedEnvironment,
     type_system: &mut TypeSystem,
     runtime: &RuntimeRegistry<State>,
-    heap: &mut HeapState,
+    heap: &mut Heap,
     decls: &[FnDecl],
 ) -> Result<(), EngineError>
 where
@@ -1192,7 +1192,7 @@ fn inject_decls_parts<State>(
     env: &mut RootedEnvironment,
     type_system: &mut TypeSystem,
     runtime: &mut RuntimeRegistry<State>,
-    heap: &mut HeapState,
+    heap: &mut Heap,
     decls: &Declarations,
 ) -> Result<(), EngineError>
 where
@@ -1241,7 +1241,7 @@ where
 
 fn publish_runtime_decl_interfaces_parts(
     env: &mut RootedEnvironment,
-    heap: &mut HeapState,
+    heap: &mut Heap,
     decls: &[DeclareFnDecl],
 ) -> Result<(), EngineError> {
     for df in decls {
@@ -1257,7 +1257,7 @@ fn publish_runtime_decl_interfaces_parts(
 
 fn publish_runtime_interfaces_parts(
     env: &mut RootedEnvironment,
-    heap: &mut HeapState,
+    heap: &mut Heap,
     decls: &Declarations,
 ) -> Result<(), EngineError> {
     publish_runtime_decl_interfaces_parts(env, heap, &decls.declare_fns)
@@ -1368,7 +1368,7 @@ fn ensure_cycle_interfaces_published_parts<State>(
     env: &mut RootedEnvironment,
     type_system: &mut TypeSystem,
     runtime: &mut RuntimeRegistry<State>,
-    heap: &mut HeapState,
+    heap: &mut Heap,
     module_id: &ModuleId,
 ) -> Result<(), EngineError>
 where

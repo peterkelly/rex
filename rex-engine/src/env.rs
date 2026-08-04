@@ -179,11 +179,11 @@ impl Default for RootedEnvironment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EngineError, memory::heap::HeapState};
+    use crate::{EngineError, memory::heap::Heap};
 
     #[test]
     fn rooted_environment_survives_copying_gc() {
-        let mut heap = HeapState::new();
+        let mut heap = Heap::new();
         let (a, b) = heap
             .machine_root_scope(|scope| {
                 Ok::<_, EngineError>((scope.alloc_root_i32(1)?, scope.alloc_root_i32(2)?))

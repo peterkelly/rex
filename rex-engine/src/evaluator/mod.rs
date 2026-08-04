@@ -14,7 +14,7 @@ use crate::{
     compiler::program::CompiledProgram,
     error::EngineError,
     evaluator::{eval::eval_typed_expr, runtime_core::RuntimeCore},
-    memory::heap::{HeapState, RootScope, RootedPtr},
+    memory::heap::{Heap, RootScope, RootedPtr},
     util::split_fun,
 };
 
@@ -35,14 +35,14 @@ where
     State: Clone + Send + Sync + 'static,
 {
     pub(crate) runtime: RuntimeCore<State>,
-    pub(crate) heap: HeapState,
+    pub(crate) heap: Heap,
 }
 
 impl<State> Evaluator<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(runtime: RuntimeCore<State>, heap: HeapState) -> Self {
+    pub(crate) fn new(runtime: RuntimeCore<State>, heap: Heap) -> Self {
         Self { runtime, heap }
     }
 

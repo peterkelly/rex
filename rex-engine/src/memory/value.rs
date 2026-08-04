@@ -1016,7 +1016,7 @@ fn conversion_error(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{memory::heap::HeapState, prelude::standard_type_system};
+    use crate::{memory::heap::Heap, prelude::standard_type_system};
     use rex_typesystem::{types::BuiltinTypeId, typesystem::TypeVarSupply};
     use static_assertions::assert_impl_all;
 
@@ -1030,7 +1030,7 @@ mod tests {
     fn list_u8_is_canonicalized_from_every_physical_layout() {
         let types = standard_type_system().unwrap();
         let expected = Type::list(builtin(BuiltinTypeId::U8));
-        let mut heap = HeapState::new();
+        let mut heap = Heap::new();
 
         let values = heap
             .root_scope(|scope| {
@@ -1078,7 +1078,7 @@ mod tests {
     fn byte_list_host_representation_is_strictly_canonical() {
         let types = standard_type_system().unwrap();
         let expected = Type::list(builtin(BuiltinTypeId::U8));
-        let mut heap = HeapState::new();
+        let mut heap = Heap::new();
 
         heap.root_scope(|scope| {
             let root = scope.alloc_value(Value::Bytes(vec![1, 2, 3]), &expected, &types)?;
@@ -1126,7 +1126,7 @@ mod tests {
             ),
             Value::Adt(Symbol::intern("Some"), vec![Value::I32(3)]),
         ]);
-        let mut heap = HeapState::new();
+        let mut heap = Heap::new();
 
         heap.root_scope(|scope| {
             let root = scope.alloc_value(value.clone(), &expected, &types)?;
@@ -1158,7 +1158,7 @@ mod tests {
         let types = standard_type_system().unwrap();
         let function = Type::fun(builtin(BuiltinTypeId::I32), builtin(BuiltinTypeId::I32));
         let option = Type::option(builtin(BuiltinTypeId::I32));
-        let mut heap = HeapState::new();
+        let mut heap = Heap::new();
 
         heap.root_scope(|scope| {
             let scalar = scope.alloc_root_i32(1)?;
@@ -1205,7 +1205,7 @@ mod tests {
             input = Value::Adt(Symbol::intern("Next"), vec![input]);
         }
 
-        let mut heap = HeapState::new();
+        let mut heap = Heap::new();
         let mut output = heap
             .root_scope(|scope| {
                 let root = scope.alloc_value(input, &expected, &types)?;

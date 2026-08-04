@@ -144,8 +144,8 @@ pub(crate) enum RootedCallable {
 
 /// Mutable storage and collector state for one Rex heap.
 ///
-/// `HeapState` moves from builder to compiler to evaluator and is never shared.
-/// Exclusive `&mut HeapState` access is the proof that a synchronous operation
+/// `Heap` moves from builder to compiler to evaluator and is never shared.
+/// Exclusive `&mut Heap` access is the proof that a synchronous operation
 /// has sole access to the collector; evaluator code receives that proof through
 /// [`RootScope`].
 /// A scope must never invoke host code, block, or cross an `await` boundary.
@@ -161,7 +161,7 @@ pub(crate) enum RootedCallable {
 /// Any allocation can collect before creating its result. An `InternalPtr`
 /// local therefore cannot survive an allocation unless it has first been
 /// placed in a traced cell or converted to one of the rooted representations.
-pub(crate) struct HeapState {
+pub(crate) struct Heap {
     id: u64,
     slots: Vec<HeapSlot>,
     runtime_roots: Vec<RootSlot>,
@@ -177,7 +177,7 @@ const GC_SLOT_GROWTH_NUMERATOR: usize = 3;
 const GC_SLOT_GROWTH_DENOMINATOR: usize = 2;
 const GC_EXTREME_STRESS: bool = false;
 
-impl HeapState {
+impl Heap {
     pub(crate) fn new() -> Self {
         static NEXT_HEAP_ID: AtomicU64 = AtomicU64::new(1);
         let id = NEXT_HEAP_ID.fetch_add(1, Ordering::Relaxed);
@@ -640,17 +640,17 @@ pub(crate) struct RootedPtr {
     generation: u64,
 }
 
-/// Exclusive synchronous access to one [`HeapState`].
+/// Exclusive synchronous access to one [`Heap`].
 ///
 /// `RootScope` is the only general evaluator capability for inspecting and
-/// allocating Rex values. Its `&mut HeapState` proves exclusive collector
+/// allocating Rex values. Its `&mut Heap` proves exclusive collector
 /// access. Allocation may collect, and the collector rewrites runtime-root
 /// entries before control returns.
 ///
 /// A scope deliberately contains no public heap capability. Scoped code must
 /// not call host callbacks, block, or cross an `await` boundary.
 pub(crate) struct RootScope<'heap> {
-    pub(super) heap: &'heap mut HeapState,
+    pub(super) heap: &'heap mut Heap,
     created_runtime_roots: Vec<RootedPtr>,
     retain_runtime_roots: bool,
 }
@@ -1223,7 +1223,7 @@ impl RootScope<'_> {
 /// Raw moving reference used only for edges owned by the collector.
 ///
 /// An `InternalPtr` identifies a heap, slot, and heap-wide collection epoch. It
-/// may be stored in [`Cell`] or used as a short-lived local while `HeapState`
+/// may be stored in [`Cell`] or used as a short-lived local while `Heap`
 /// is exclusively borrowed. It must never cross an allocation that may
 /// collect or an `await` point as an unrooted local. Copying collection
 /// rewrites every traced cell edge; epoch and heap checks reject stale or
@@ -1236,7 +1236,7 @@ pub(super) struct InternalPtr {
 }
 
 struct Reference<'a> {
-    heap: &'a mut HeapState,
+    heap: &'a mut Heap,
     index: u32,
     generation: u64,
 }
@@ -1452,7 +1452,7 @@ impl Cell {
     }
 }
 
-fn infer_cell_type(heap: &HeapState, cell: &Cell) -> Result<Type, EngineError> {
+fn infer_cell_type(heap: &Heap, cell: &Cell) -> Result<Type, EngineError> {
     let pointer_type = |pointer: &InternalPtr| -> Result<Type, EngineError> {
         infer_cell_type(heap, heap.get_cell_from_pointer(pointer)?)
     };
@@ -1743,12 +1743,12 @@ mod tests {
     use super::*;
     use static_assertions::assert_impl_all;
 
-    assert_impl_all!(HeapState: Send);
+    assert_impl_all!(Heap: Send);
     assert_impl_all!(RootedPtr: Send, Sync);
 
     #[test]
     fn copying_gc_relocates_runtime_roots() {
-        let mut heap = HeapState::new();
+        let mut heap = Heap::new();
         let root = heap
             .machine_root_scope(|scope| scope.alloc_root_i32(42))
             .expect("value should allocate");
@@ -1766,7 +1766,7 @@ mod tests {
 
     #[test]
     fn failed_collection_releases_allocation_roots() {
-        let mut heap = HeapState::new();
+        let mut heap = Heap::new();
         let child = heap
             .push_cell(Cell::I32(42))
             .expect("child should allocate")
@@ -1788,7 +1788,7 @@ mod tests {
 
     #[test]
     fn extreme_stress_relocates_every_live_root() {
-        let mut heap = HeapState::new();
+        let mut heap = Heap::new();
         let roots = heap
             .machine_root_scope(|scope| {
                 (0..4)
