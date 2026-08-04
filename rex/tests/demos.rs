@@ -1,7 +1,7 @@
 mod common;
 
 use rex::{
-    engine::{Builder, CompileOptions, Handle, Heap, Value},
+    engine::{Builder, CompileOptions, Value},
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type},
 };
@@ -28,7 +28,7 @@ fn extract_first_interactive_rex(markdown: &str) -> String {
     panic!("no rex,interactive fence found");
 }
 
-async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
+async fn eval_demo(name: &str, markdown: &str) -> ((), Value, Type) {
     let source = extract_first_interactive_rex(markdown);
     let name = name.to_string();
     std::thread::Builder::new()
@@ -41,7 +41,6 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
                 .unwrap()
                 .block_on(async move {
                     let builder = Builder::with_prelude(()).unwrap();
-                    let heap = builder.heap().clone();
                     let compiler = builder.build_compiler();
                     let parsed = parse_rex(&source)
                         .unwrap_or_else(|errs| panic!("{name}: parse error before eval: {errs:?}"));
@@ -54,7 +53,7 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
                         .run(program, Default::default())
                         .await
                         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
-                    (heap, value, ty)
+                    ((), value, ty)
                 })
         })
         .unwrap()
@@ -62,7 +61,7 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
         .unwrap()
 }
 
-fn list_i32_values(handle: &Handle) -> Vec<i32> {
+fn list_i32_values(handle: &Value) -> Vec<i32> {
     let elems = common::list_elements(handle);
     elems
         .iter()
@@ -287,7 +286,7 @@ async fn demo_topological_sort() {
     let elems = common::list_elements(&value);
     assert_eq!(elems.len(), 4);
     for (idx, expected_tag) in ["A", "B", "C", "D"].iter().enumerate() {
-        let Value::Adt(tag, args) = elems[idx].value().unwrap() else {
+        let Value::Adt(tag, args) = elems[idx].clone() else {
             panic!("expected ADT constructor");
         };
         assert_eq!(tag.as_ref(), *expected_tag, "unexpected constructor tag");

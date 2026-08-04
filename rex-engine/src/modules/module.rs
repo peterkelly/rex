@@ -10,7 +10,7 @@ use rex_typesystem::{
 };
 
 use crate::{
-    Context, EngineError, Handle, IntoRex,
+    Context, EngineError, IntoRex, Value,
     builder::{
         core::Builder,
         export::{Export, HostFnAsync, HostFnSync, NativeFuture},
@@ -114,7 +114,7 @@ pub struct StagedAdtDecl {
 /// - host-provided ADTs
 /// - typeclass instances for existing classes
 /// - typed Rust handlers via [`Module::export`] / [`Module::export_async`]
-/// - handle-based dynamic native handlers via [`Module::export_native`] /
+/// - value-based dynamic native handlers via [`Module::export_native`] /
 ///   [`Module::export_native_async`]
 ///
 /// Once the module is assembled, pass it to [`Builder::inject_module`] to make it importable
@@ -167,7 +167,8 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     /// Staged host exports that will become callable Rex values when the module is injected.
     ///
     /// Each [`Export`] bundles a public Rex name, a declaration that is inserted into the virtual
-    /// module source, and the runtime injector that registers the implementation with the engine.
+    /// module source, and either a callable registration or an owned value imported once during
+    /// module installation.
     ///
     /// Most callers populate this with [`Module::export`], [`Module::export_async`],
     /// [`Module::export_native`], [`Module::export_native_async`], or [`Module::add_export`].
@@ -457,7 +458,7 @@ where
         Ok(())
     }
 
-    /// Stage a handle-based synchronous native export with an explicit Rex type scheme.
+    /// Stage a value-based synchronous native export with an explicit Rex type scheme.
     ///
     /// This lower-level API is intended for dynamic or runtime-defined integrations where the
     /// handler needs dynamic Rex values or where the Rex type cannot be inferred from an
@@ -466,18 +467,16 @@ where
     /// `scheme` describes the Rex-visible type, and `arity` must match the number of arguments the
     /// handler expects.
     ///
-    /// The evaluator invokes the handler after releasing its locked heap cycle. Its arguments and
-    /// result cross that boundary as rooted [`Handle`] values, so the handler may allocate through
-    /// [`Context::heap`](crate::Context::heap). Synchronous handlers resume immediately through
-    /// the native completion path and do not consume asynchronous admission permits.
+    /// The evaluator copies arguments into owned [`Value`] trees before invoking the handler and
+    /// imports the returned value afterward. Synchronous handlers resume immediately through the
+    /// native completion path and do not consume asynchronous admission permits.
     /// They run on the evaluator task, so blocking or long-running work should use
-    /// [`Module::export_native_async`] instead. The returned handle must belong to the context's
-    /// heap; the evaluator rejects a handle from another heap.
+    /// [`Module::export_native_async`] instead.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::{Context, Handle, Module};
+    /// use rex_engine::{Context, Module, Value};
     /// use rex_typesystem::{BuiltinTypeId, Scheme, Type};
     ///
     /// let mut module = Module::<()>::new("acme.dynamic");
@@ -488,8 +487,8 @@ where
     /// );
     ///
     /// module
-    ///     .export_native("id_handle", scheme, 1, |_ctx: Context<()>, _typ: &Type, args: &[Handle]| {
-    ///         Ok(args[0].clone())
+    ///     .export_native("id_value", scheme, 1, |_ctx: Context<()>, _typ: &Type, mut args: Vec<Value>| {
+    ///         Ok(args.remove(0))
     ///     })
     ///     .unwrap();
     /// ```
@@ -501,7 +500,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(Context<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
+        F: for<'a> Fn(Context<State>, &'a Type, Vec<Value>) -> Result<Value, EngineError>
             + Send
             + Sync
             + 'static,
@@ -511,18 +510,17 @@ where
         Ok(())
     }
 
-    /// Stage a handle-based asynchronous native export with an explicit Rex type scheme.
+    /// Stage a value-based asynchronous native export with an explicit Rex type scheme.
     ///
-    /// This is the deferred counterpart to [`Module::export_native`]. Both APIs use the same
-    /// [`Context`] and rooted [`Handle`] heap boundary; this variant additionally participates in
-    /// asynchronous admission control and may remain suspended. Its result is subject to the same
-    /// same-heap validation as the synchronous form.
+    /// This is the deferred counterpart to [`Module::export_native`]. Both APIs use owned
+    /// [`Value`] trees; this variant additionally participates in asynchronous admission control
+    /// and may remain suspended without retaining access to the evaluator heap.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// use futures::FutureExt;
-    /// use rex_engine::{Context, Module};
+    /// use rex_engine::{Context, Module, Value};
     /// use rex_typesystem::{BuiltinTypeId, Scheme, Type};
     ///
     /// let mut module = Module::<()>::new("acme.dynamic");
@@ -533,8 +531,8 @@ where
     ///         "answer_async",
     ///         scheme,
     ///         0,
-    ///         |ctx: Context<()>, _typ: Type, _args| {
-    ///             async move { ctx.heap().alloc_i32(42) }.boxed()
+    ///         |_ctx: Context<()>, _typ: Type, _args| {
+    ///             async move { Ok(Value::I32(42)) }.boxed()
     ///         },
     ///     )
     ///     .unwrap();
@@ -547,7 +545,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: Fn(Context<State>, Type, Vec<Handle>) -> NativeFuture + Send + Sync + 'static,
+        F: Fn(Context<State>, Type, Vec<Value>) -> NativeFuture + Send + Sync + 'static,
     {
         self.exports
             .push(Export::from_native_async(name, scheme, arity, handler)?);
@@ -556,7 +554,7 @@ where
 
     pub fn export_value<V>(&mut self, name: impl Into<String>, value: V) -> Result<(), EngineError>
     where
-        V: IntoRex + RexType + Clone + Send + Sync + 'static,
+        V: IntoRex + RexType + Send + Sync + 'static,
     {
         self.exports.push(Export::<State>::from_value(name, value)?);
         Ok(())

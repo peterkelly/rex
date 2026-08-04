@@ -4,8 +4,8 @@ This crate prepares and evaluates Rex programs and supports host-native injectio
 values. The API exposes an explicit preparation boundary: `Builder` builds the host environment,
 `Compiler` prepares Rex code into `CompiledProgram`, and a single-shot `Evaluator` runs one
 prepared program with a map of runtime inputs for `main`. Builder/compiler/evaluator lineages are
-single-use; create a new lineage for each program run. The runtime stores values in the heap and
-returns rooted `Handle`s; `Handle::value()` exposes safe public `Value` views for inspection. It
+single-use; create a new lineage for each program run. The runtime stores values in a private heap
+and copies results into owned, heap-independent `Value` trees. It
 supports closures, application, let-in, if-then-else, tuples/lists/dicts, and `match` expressions.
 
 ## Quickstart
@@ -44,14 +44,10 @@ Phase-specific errors:
 
 ## Runtime Values and GC
 
-The runtime uses a moving copying collector. Public `Handle` values own registered roots rather
-than heap locations, so they remain valid across allocations, collections, thread transfers, and
-`await` points. `Evaluator::run` returns a `Handle`, and any handles supplied as external `main`
-inputs must have been allocated in that evaluator's `Evaluator::heap()`; foreign-heap inputs are
-rejected.
-
-Host callbacks are invoked only after the evaluator releases its locked heap cycle. Both
-synchronous and asynchronous callbacks cross that boundary with handles. See the
+The runtime uses a moving copying collector owned exclusively by the builder/compiler/evaluator
+lineage. `Evaluator::run` accepts and returns owned `Value`s. Host-call arguments are copied out of
+the heap before dispatch, and results are validated and copied back after completion; host code and
+host futures never receive heap access. See the
 [memory-management guide](../docs/src/MEMORY_MANAGEMENT.md) for the internal rooting model.
 
 ## Internal Layout
@@ -73,9 +69,9 @@ live beside those phase directories.
 - Use `Module::global()` for root-scope values/functions.
 - Use `Module::new("acme.math")` for importable modules.
 - Add typed exports with `export` / `export_async`.
-- Add handle-based exports with runtime-defined signatures using `export_native` /
+- Add value-based exports with runtime-defined signatures using `export_native` /
   `export_native_async`.
-- Add constant values with `export_value`.
+- Add constant values with `export_value`; they are imported once when the module is installed.
 - Add ADTs with `add_adt_decl` or `add_rex_adt::<T>()`.
 - Materialize the staged module with `Builder::inject_module(...)`.
 - For many available Rust modules where most programs import only a few, an `Importer<State>` can
@@ -92,9 +88,9 @@ Operator names can be injected with parentheses (e.g., `"(+)"`); the engine norm
 returning `Err(...)` fails evaluation.
 `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`;
 returning `Err(...)` fails evaluation.
-Handle-based APIs (`export_native*`) receive `Context<State>` so they can read host state and type
-information and allocate rooted values through the public heap. They do not expose raw heap
-pointers or locked evaluator internals.
+Value-based APIs (`export_native*`) receive `Context<State>`, the instantiated call type, and an
+owned `Vec<Value>`. The context exposes host state and type information but no heap capability.
+It does not retain runtime registries or internal root tokens.
 `export_native*` validates `Scheme`/arity compatibility during registration.
 
 ## Prelude
@@ -120,10 +116,8 @@ For explicit control, use:
 - **Collection combinators** (List/Option/Result): `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `bind`, `ap`, `sum`, `mean`, `length`, `first`, `last`, `slice`, `take`, `skip`, `zip`, `unzip`, `min`, `max`, `or_else`
 - **Option/Result helpers**: `is_some`, `is_none`, `is_ok`, `is_err`
 
-Rust `Vec<T>` values convert to Rex `List T`. Runtime lists may inspect as linked
-`Value::Cons`/`Value::Empty` values or as vector-backed `Value::ListSlice` values.
-For `Vec<u8>`, the slice can use `Value::BinaryData` backing to avoid allocating
-one cell per byte while preserving the same `List u8` behavior.
+Rust `Vec<T>` values convert to `Value::List` and Rex `List T`. `Vec<u8>` and every outbound Rex
+`List U8` use `Value::Bytes`, regardless of the list's private heap representation.
 
 ## Type Defaults
 

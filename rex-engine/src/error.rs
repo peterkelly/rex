@@ -132,6 +132,12 @@ pub enum EngineError {
     },
     #[error("expected {expected}, got {got}")]
     NativeType { expected: String, got: String },
+    #[error("cannot convert Rex value at {path}: expected {expected}, got {got}")]
+    ValueConversion {
+        path: String,
+        expected: String,
+        got: String,
+    },
     #[error("pattern match failure")]
     MatchFailure,
     #[error("expected boolean, got {0}")]

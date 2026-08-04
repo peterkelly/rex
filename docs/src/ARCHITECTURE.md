@@ -5,7 +5,7 @@ Rex is implemented as a small set of focused crates that form a pipeline:
 1. **Parsing** (`rex-parser`): converts source text into a `rex_ast::CompilationUnit { decls, body }`.
 2. **Typing** (`rex-typesystem`): Hindley–Milner inference + ADTs + type classes; produces a `rex_typesystem::TypedExpr`.
 3. **Execution** (`rex-engine`): builds the host environment, prepares typed code into a
-   `CompiledProgram`, and evaluates it to a runtime `rex_engine::Handle`.
+   `CompiledProgram`, and evaluates it to an owned `rex_engine::Value`.
 
 The crates are designed so you can use them independently (e.g. parser-only tooling, typechecking-only checks, or embedding the full evaluator).
 
@@ -27,13 +27,13 @@ The crates are designed so you can use them independently (e.g. parser-only tool
     point into `(CompiledProgram, Evaluator)`. `Compiler::infer_*` consumes the compiler for
     type-only checks.
   - `Evaluator::run(compiled, inputs).await` to execute one prepared program. `inputs` is a
-    `BTreeMap<String, Handle>` for the program's external `main` interface. Every input handle must
-    belong to that evaluator's heap; `run` consumes the evaluator, compiled program, and input map.
+    `BTreeMap<String, Value>` for the program's external `main` interface; `run` consumes the
+    evaluator, compiled program, and input map and returns a `Value`.
   - `Builder` carries host state as `Builder<State>` (`State: Clone + Send + Sync + 'static`);
     typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed
     `export_async` callbacks receive `&State` and return
-    `Future<Output = Result<T, EngineError>>`, while handle-based native APIs
-    (`export_native*`) receive `Context<State>`.
+    `Future<Output = Result<T, EngineError>>`, while dynamic native APIs (`export_native*`)
+    receive `Context<State>`, an instantiated type, and owned `Value`s.
   - compile and evaluation APIs return `EngineError`; convenience entry
     points that cross phases return `ExecutionError`.
   - Host module injection API: `Module` + `Export` + `Builder::inject_module` for eager
@@ -54,23 +54,21 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 
 ## Runtime Ownership and GC Boundaries
 
-`rex-engine` uses a moving copying collector. A heap slot is not a stable identity, and any
-allocation may collect. The runtime separates references according to the boundary they cross:
+`rex-engine` uses a moving copying collector. `HeapState` has one owner and moves exactly once
+through `Builder -> Compiler -> Evaluator`; there is no heap mutex or public heap capability.
+Private heap cells contain moving edges, while evaluator frames, environments, scheduler work, and
+compiler state contain stable runtime-root tokens. The evaluator traverses and relocates those
+roots only at actual collection safepoints, not around every work item.
 
-- heap cells contain private moving edges that the collector traces and rewrites;
-- one locked synchronous evaluator cycle uses branded temporary roots;
-- mutable frames, environments, and scheduler work use evaluator-owned persistent roots while the
-  heap is unlocked;
-- compiled/runtime environments and host work retain registered `Handle` roots;
-- the heap-value boundary exposed to embedders consists of `Heap`, `Handle`, and public `Value`
-  views; callback `Context` carries the same public heap capability.
+The public boundary is an owned `Value` tree. Before a host call starts, the evaluator performs a
+type-directed copy from internal roots to `Value`; the host future contains only those values and
+host state. On completion, the evaluator validates and imports the result while it again has
+exclusive heap access. Internal prelude intrinsics are deliberately separate: they operate
+synchronously through the private runtime/root scope and never use the host `Value` ABI.
 
-The async evaluator coordinator owns the shared `Heap`, but a locked evaluator cycle receives only
-exclusive scoped access. Before releasing the heap mutex, it converts surviving evaluator state to
-persistent roots and promotes host-call arguments or the final result to handles. Embedder-provided
-host callbacks and their futures are invoked or polled only after the lock is released, so they may
-allocate using their public `Context` without re-entering the same locked cycle. Internal
-scheduler-native helpers are separate and operate synchronously through scoped roots.
+This separation also leaves the internal representation free for a future LLVM backend and custom
+binary heap. Generated code can eventually use private tagged values and participate in the same
+GC safepoint/root protocol without changing host handlers or treating `Value` as a JIT ABI.
 
 See [Memory Management](MEMORY_MANAGEMENT.md) for the reference categories, allowed conversions,
 and collector invariants.

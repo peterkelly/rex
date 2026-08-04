@@ -1,16 +1,14 @@
 use std::collections::BTreeMap;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use rex_ast::Symbol;
 
-use crate::EngineError;
-use crate::memory::heap::{Handle, PersistentPtr, PersistentRootStore, RootScope, RootedPtr};
+use crate::memory::heap::RootedPtr;
 
 #[derive(Debug, PartialEq)]
-struct ScopedEnvEntry<'scope> {
-    parent: Option<ScopedEnvironment<'scope>>,
-    bindings: BTreeMap<Symbol, RootedPtr<'scope>>,
+struct ScopedEnvEntry {
+    parent: Option<ScopedEnvironment>,
+    bindings: BTreeMap<Symbol, RootedPtr>,
 }
 
 /// Environment used while a synchronous evaluator cycle owns a `RootScope`.
@@ -18,17 +16,17 @@ struct ScopedEnvEntry<'scope> {
 /// Unlike the environment embedded in heap closures, every value here is a
 /// shadow-stack root and is therefore rewritten automatically by collection.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ScopedEnvironment<'scope>(Rc<ScopedEnvEntry<'scope>>);
+pub(crate) struct ScopedEnvironment(Arc<ScopedEnvEntry>);
 
-impl<'scope> ScopedEnvironment<'scope> {
+impl ScopedEnvironment {
     pub(crate) fn new() -> Self {
-        Self(Rc::new(ScopedEnvEntry {
+        Self(Arc::new(ScopedEnvEntry {
             parent: None,
             bindings: BTreeMap::new(),
         }))
     }
 
-    pub(crate) fn entries(&self) -> Vec<BTreeMap<Symbol, RootedPtr<'scope>>> {
+    pub(crate) fn entries(&self) -> Vec<BTreeMap<Symbol, RootedPtr>> {
         let mut entries = Vec::new();
         let mut current = Some(self);
         while let Some(entry) = current {
@@ -45,23 +43,33 @@ impl<'scope> ScopedEnvironment<'scope> {
         entries
     }
 
-    pub(crate) fn extend(&self, name: Symbol, value: RootedPtr<'scope>) -> Self {
+    pub(crate) fn visit_values(&self, visit: &mut impl FnMut(RootedPtr)) {
+        let mut current = Some(self);
+        while let Some(entry) = current {
+            for value in entry.0.bindings.values() {
+                visit(*value);
+            }
+            current = entry.0.parent.as_ref();
+        }
+    }
+
+    pub(crate) fn extend(&self, name: Symbol, value: RootedPtr) -> Self {
         let mut bindings = BTreeMap::new();
         bindings.insert(name, value);
-        Self(Rc::new(ScopedEnvEntry {
+        Self(Arc::new(ScopedEnvEntry {
             parent: Some(self.clone()),
             bindings,
         }))
     }
 
-    pub(crate) fn extend_many(&self, bindings: BTreeMap<Symbol, RootedPtr<'scope>>) -> Self {
-        Self(Rc::new(ScopedEnvEntry {
+    pub(crate) fn extend_many(&self, bindings: BTreeMap<Symbol, RootedPtr>) -> Self {
+        Self(Arc::new(ScopedEnvEntry {
             parent: Some(self.clone()),
             bindings,
         }))
     }
 
-    pub(crate) fn get(&self, name: &Symbol) -> Option<RootedPtr<'scope>> {
+    pub(crate) fn get(&self, name: &Symbol) -> Option<RootedPtr> {
         let mut current = Some(self);
         while let Some(env) = current {
             if let Some(value) = env.0.bindings.get(name) {
@@ -72,10 +80,10 @@ impl<'scope> ScopedEnvironment<'scope> {
         None
     }
 
-    pub(crate) fn from_entries(entries: Vec<BTreeMap<Symbol, RootedPtr<'scope>>>) -> Self {
+    pub(crate) fn from_entries(entries: Vec<BTreeMap<Symbol, RootedPtr>>) -> Self {
         let mut rebuilt = None;
         for bindings in entries.into_iter().rev() {
-            rebuilt = Some(Self(Rc::new(ScopedEnvEntry {
+            rebuilt = Some(Self(Arc::new(ScopedEnvEntry {
                 parent: rebuilt,
                 bindings,
             })));
@@ -84,94 +92,16 @@ impl<'scope> ScopedEnvironment<'scope> {
     }
 }
 
-#[derive(Debug, PartialEq)]
-struct PersistentEnvEntry {
-    parent: Option<PersistentEnvironment>,
-    bindings: BTreeMap<Symbol, PersistentPtr>,
-}
-
-/// Evaluator-owned environment whose bindings remain valid while the heap is
-/// unlocked.
-///
-/// Each binding is an opaque token whose registered root is owned by the
-/// current [`PersistentRootStore`]. Entering a new locked cycle resolves the
-/// tokens into a [`ScopedEnvironment`].
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct PersistentEnvironment(Arc<PersistentEnvEntry>);
-
-impl PersistentEnvironment {
-    pub(crate) fn persist<'heap, 'scope>(
-        env: ScopedEnvironment<'scope>,
-        roots: &mut PersistentRootStore,
-        scope: &mut RootScope<'heap, 'scope>,
-    ) -> Result<Self, EngineError> {
-        let mut entries = Vec::new();
-        let mut current = Some(&env);
-        while let Some(entry) = current {
-            let mut bindings = BTreeMap::new();
-            for (name, value) in &entry.0.bindings {
-                bindings.insert(name.clone(), roots.insert(scope, *value)?);
-            }
-            entries.push(bindings);
-            current = entry.0.parent.as_ref();
-        }
-
-        let mut rebuilt = None;
-        for bindings in entries.into_iter().rev() {
-            rebuilt = Some(PersistentEnvironment(Arc::new(PersistentEnvEntry {
-                parent: rebuilt,
-                bindings,
-            })));
-        }
-        Ok(rebuilt.unwrap_or_else(Self::new))
-    }
-
-    pub(crate) fn resolve<'heap, 'scope>(
-        self,
-        roots: &PersistentRootStore,
-        scope: &mut RootScope<'heap, 'scope>,
-    ) -> Result<ScopedEnvironment<'scope>, EngineError> {
-        let mut entries = Vec::new();
-        let mut current = Some(&self);
-        while let Some(entry) = current {
-            let mut bindings = BTreeMap::new();
-            for (name, value) in &entry.0.bindings {
-                let rooted = roots.resolve(scope, value)?;
-                bindings.insert(name.clone(), rooted);
-            }
-            entries.push(bindings);
-            current = entry.0.parent.as_ref();
-        }
-
-        let mut rebuilt = None;
-        for bindings in entries.into_iter().rev() {
-            rebuilt = Some(ScopedEnvironment(Rc::new(ScopedEnvEntry {
-                parent: rebuilt,
-                bindings,
-            })));
-        }
-        Ok(rebuilt.unwrap_or_else(ScopedEnvironment::new))
-    }
-
-    fn new() -> Self {
-        Self(Arc::new(PersistentEnvEntry {
-            parent: None,
-            bindings: BTreeMap::new(),
-        }))
-    }
-}
-
 struct RootedEnvEntry {
     parent: Option<RootedEnvironment>,
-    bindings: BTreeMap<Symbol, Handle>,
+    bindings: BTreeMap<Symbol, RootedPtr>,
 }
 
-/// Long-lived immutable environment rooted by registered public handles.
+/// Long-lived immutable environment backed by stable runtime root tokens.
 ///
-/// Compiler output and runtime registries use this representation outside a
-/// locked evaluator cycle. Entering a cycle resolves its handles into a
-/// [`ScopedEnvironment`]. Mutable frames and scheduler state instead use
-/// [`PersistentEnvironment`] while the heap is unlocked.
+/// Compiler output and runtime registries use this representation between
+/// synchronous evaluator cycles. Creating a [`ScopedEnvironment`] copies only
+/// the stable tokens; no heap lookup or persistence transformation is needed.
 #[derive(Clone)]
 pub(crate) struct RootedEnvironment(Arc<RootedEnvEntry>);
 
@@ -183,7 +113,7 @@ impl RootedEnvironment {
         }))
     }
 
-    pub(crate) fn extend(&self, name: Symbol, value: Handle) -> Self {
+    pub(crate) fn extend(&self, name: Symbol, value: RootedPtr) -> Self {
         let mut bindings = BTreeMap::new();
         bindings.insert(name, value);
         RootedEnvironment(Arc::new(RootedEnvEntry {
@@ -192,11 +122,11 @@ impl RootedEnvironment {
         }))
     }
 
-    pub(crate) fn get(&self, name: &Symbol) -> Option<Handle> {
+    pub(crate) fn get(&self, name: &Symbol) -> Option<RootedPtr> {
         let mut current: Option<&RootedEnvironment> = Some(self);
         while let Some(env) = current {
             if let Some(v) = env.0.bindings.get(name) {
-                return Some(v.clone());
+                return Some(*v);
             }
             current = env.0.parent.as_ref();
         }
@@ -214,22 +144,29 @@ impl RootedEnvironment {
         false
     }
 
-    pub(crate) fn to_scoped_environment<'heap, 'scope>(
-        &self,
-        scope: &mut RootScope<'heap, 'scope>,
-    ) -> Result<ScopedEnvironment<'scope>, EngineError> {
+    pub(crate) fn visit_values(&self, visit: &mut impl FnMut(RootedPtr)) {
+        let mut current = Some(self);
+        while let Some(env) = current {
+            for value in env.0.bindings.values() {
+                visit(*value);
+            }
+            current = env.0.parent.as_ref();
+        }
+    }
+
+    pub(crate) fn to_scoped_environment(&self) -> ScopedEnvironment {
         let mut entries = Vec::new();
         let mut current = Some(self);
         while let Some(env) = current {
             let mut bindings = BTreeMap::new();
-            for (name, handle) in &env.0.bindings {
-                bindings.insert(name.clone(), scope.root_handle(handle)?);
+            for (name, root) in &env.0.bindings {
+                bindings.insert(name.clone(), *root);
             }
             entries.push(bindings);
             current = env.0.parent.as_ref();
         }
 
-        Ok(ScopedEnvironment::from_entries(entries))
+        ScopedEnvironment::from_entries(entries)
     }
 }
 
@@ -242,27 +179,30 @@ impl Default for RootedEnvironment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::heap::Heap;
+    use crate::{EngineError, memory::heap::HeapState};
 
     #[test]
     fn rooted_environment_survives_copying_gc() {
-        let heap = Heap::new();
-        let a = heap.alloc_i32(1).unwrap();
-        let b = heap.alloc_i32(2).unwrap();
+        let mut heap = HeapState::new();
+        let (a, b) = heap
+            .machine_root_scope(|scope| {
+                Ok::<_, EngineError>((scope.alloc_root_i32(1)?, scope.alloc_root_i32(2)?))
+            })
+            .unwrap();
 
         let rooted = RootedEnvironment::new()
             .extend(Symbol::intern("a"), a)
             .extend(Symbol::intern("b"), b);
 
-        heap.set_extreme_stress(true).unwrap();
-        heap.with_root_scope(|scope| {
-            let env = rooted.to_scoped_environment(scope)?;
+        heap.collect().unwrap();
+        heap.machine_root_scope(|scope| {
+            let env = rooted.to_scoped_environment();
             scope.alloc_root_i32(3)?;
             let a = env.get(&Symbol::intern("a")).unwrap();
             let b = env.get(&Symbol::intern("b")).unwrap();
             assert_eq!(scope.root_as_i32(a)?, 1);
             assert_eq!(scope.root_as_i32(b)?, 2);
-            Ok(())
+            Ok::<_, EngineError>(())
         })
         .unwrap();
     }

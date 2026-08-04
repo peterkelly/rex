@@ -75,26 +75,8 @@ pub use rex_engine::ExportTarget;
 /// Convert a Rex runtime value into a Rust value.
 pub use rex_engine::FromRex;
 
-/// Thread-safe registered root for a Rex runtime value.
-pub use rex_engine::Handle;
-
-/// Shared allocation and inspection capability for Rex runtime values.
-pub use rex_engine::Heap;
-
 /// Trait implemented by typed asynchronous Rust functions that can be exported to Rex.
 pub use rex_engine::HostFnAsync;
-
-/// One node in a host-managed monadic action graph.
-pub use rex_engine::HostAction;
-
-/// Effect thunk used by host-managed action runners.
-pub use rex_engine::HostActionEffect;
-
-/// Boxed future returned by a host-managed action effect.
-pub use rex_engine::HostActionFuture;
-
-/// Run a host-managed monadic action graph at an embedder boundary.
-pub use rex_engine::run_host_action;
 
 /// Trait implemented by typed synchronous Rust functions that can be exported to Rex.
 pub use rex_engine::HostFnSync;
@@ -123,7 +105,7 @@ pub use rex_engine::StagedAdtDecl;
 /// Stable identity assigned to an imported module.
 pub use rex_engine::ModuleId;
 
-/// Boxed future returned by handle-based async native functions.
+/// Boxed future returned by value-based async native functions.
 pub use rex_engine::NativeFuture;
 
 /// Name of the automatically injected Rex prelude module.
@@ -156,7 +138,7 @@ pub use rex_engine::ResolvedRustModule;
 /// Trait for producing a Rex default value for a Rust-facing type.
 pub use rex_engine::RexDefault;
 
-/// Safe public view of a Rex runtime value stored in the heap.
+/// Owned semantic data exchanged between Rex and host code.
 pub use rex_engine::Value;
 
 /// Formatting options for displaying Rex runtime values.

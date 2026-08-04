@@ -236,25 +236,14 @@ async fn eval_result_json(
         }
         None => serde_json::json!({}),
     };
-    let mut result_type = compiled.result_type().clone();
+    let result_type = compiled.result_type().clone();
     let type_system = evaluator.type_system();
-    let inputs = json_to_main_inputs(
-        evaluator.heap(),
-        input_value,
-        &signature,
-        type_system.as_ref(),
-    )
-    .map_err(|e| format!("{e}"))?;
-    let (mut value, ctx) = evaluator
-        .run_with_context(compiled, inputs)
+    let inputs = json_to_main_inputs(input_value, &signature, type_system.as_ref())
+        .map_err(|e| format!("{e}"))?;
+    let value = evaluator
+        .run(compiled, inputs)
         .await
         .map_err(|e| format!("{e}"))?;
-    if let Some(inner_type) = cli_prelude::io_result_type_arg(&result_type) {
-        value = cli_prelude::run_io_handle(ctx, value)
-            .await
-            .map_err(|e| format!("{e}"))?;
-        result_type = inner_type;
-    }
 
     rex_to_json(&value, &result_type, type_system.as_ref())
         .map_err(|e| format!("failed to convert result to JSON: {e}"))

@@ -3,7 +3,7 @@ mod common;
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{Builder, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value},
+    engine::{Builder, EngineError, FromRex, IntoRex, Module, Value},
     json::rex_to_json,
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, RexType, Type},
@@ -11,7 +11,7 @@ use rex::{
 use serde::Serialize;
 use std::collections::HashMap;
 
-async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
+async fn eval(code: &str) -> Result<((), Value, Type), EngineError> {
     let mut builder = Builder::with_prelude(())?;
     MyInnerStruct::inject_rex(&mut builder)?;
     MyStruct::inject_rex(&mut builder)?;
@@ -52,6 +52,12 @@ enum Maybe<T> {
     Nothing,
 }
 
+#[test]
+fn derive_from_rex_rejects_qualified_foreign_constructor() {
+    let value = Value::Adt(Symbol::intern("another.module.Just"), vec![Value::I32(1)]);
+    assert!(Maybe::<i32>::from_rex(value).is_err());
+}
+
 #[derive(Rex, Debug, PartialEq)]
 struct SharedLeaf {
     value: i32,
@@ -83,14 +89,14 @@ impl RexType for AtomRef {
 }
 
 impl IntoRex for AtomRef {
-    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
-        self.0.into_rex(heap)
+    fn into_rex(self) -> Result<Value, EngineError> {
+        self.0.into_rex()
     }
 }
 
 impl FromRex for AtomRef {
-    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
-        Ok(Self(i32::from_rex(handle)?))
+    fn from_rex(value: Value) -> Result<Self, EngineError> {
+        Ok(Self(i32::from_rex(value)?))
     }
 }
 
@@ -112,14 +118,14 @@ impl RexType for Xyzf32 {
 }
 
 impl IntoRex for Xyzf32 {
-    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
-        (self.0[0], self.0[1], self.0[2]).into_rex(heap)
+    fn into_rex(self) -> Result<Value, EngineError> {
+        (self.0[0], self.0[1], self.0[2]).into_rex()
     }
 }
 
 impl FromRex for Xyzf32 {
-    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
-        let (x, y, z) = <(f32, f32, f32)>::from_rex(handle)?;
+    fn from_rex(value: Value) -> Result<Self, EngineError> {
+        let (x, y, z) = <(f32, f32, f32)>::from_rex(value)?;
         Ok(Self([x, y, z]))
     }
 }
@@ -149,7 +155,7 @@ async fn derive_struct_roundtrip_value() {
     .unwrap();
     assert_eq!(ty, MyStruct::rex_type());
 
-    let decoded = MyStruct::from_rex(&v_handle).unwrap();
+    let decoded = MyStruct::from_rex(v_handle).unwrap();
     assert_eq!(
         decoded,
         MyStruct {
@@ -168,7 +174,7 @@ async fn derive_struct_roundtrip_value() {
 async fn derive_generic_struct_roundtrip_value() {
     let (_heap, v_handle, ty) = eval("Boxed { value = 123 }").await.unwrap();
     assert_eq!(ty, Boxed::<i32>::rex_type());
-    let decoded = Boxed::<i32>::from_rex(&v_handle).unwrap();
+    let decoded = Boxed::<i32>::from_rex(v_handle).unwrap();
     assert_eq!(decoded, Boxed { value: 123 });
 }
 
@@ -283,15 +289,16 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     let (v_handle, ty) = common::run_program(builder, &program).await.unwrap();
     let expected_ty = Type::tuple(vec![Maybe::<i32>::rex_type(), Maybe::<bool>::rex_type()]);
     assert_eq!(ty, expected_ty);
-    let v = v_handle.value().unwrap();
-
-    let Value::Tuple(items) = v else {
-        panic!("expected tuple, got {}", v_handle.type_name().unwrap());
+    let Value::Tuple(items) = v_handle else {
+        panic!("expected tuple");
     };
     assert_eq!(items.len(), 2);
-    assert_eq!(Maybe::<i32>::from_rex(&items[0]).unwrap(), Maybe::Just(1));
     assert_eq!(
-        Maybe::<bool>::from_rex(&items[1]).unwrap(),
+        Maybe::<i32>::from_rex(items[0].clone()).unwrap(),
+        Maybe::Just(1)
+    );
+    assert_eq!(
+        Maybe::<bool>::from_rex(items[1].clone()).unwrap(),
         Maybe::Just(true)
     );
 }
@@ -353,7 +360,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
         .await
         .unwrap();
     assert_eq!(ty, MyStruct::rex_type());
-    let bumped = MyStruct::from_rex(&v_handle).unwrap();
+    let bumped = MyStruct::from_rex(v_handle).unwrap();
     assert_eq!(bumped.y, 43);
 
     let program = parse_rex("const_struct.y").unwrap();
@@ -431,9 +438,8 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
             Type::builtin(BuiltinTypeId::I32)
         ])
     );
-    let v = v_handle.value().unwrap();
-    let Value::Tuple(items) = v else {
-        panic!("expected tuple, got {}", v_handle.type_name().unwrap());
+    let Value::Tuple(items) = v_handle else {
+        panic!("expected tuple");
     };
     assert_eq!(items[0].as_i32().unwrap(), 5);
     assert_eq!(items[1].as_i32().unwrap(), 0);
@@ -451,13 +457,12 @@ async fn derive_enum_constructor_currying() {
     .unwrap();
     assert_eq!(ty, Type::tuple(vec![Shape::rex_type(), Shape::rex_type()]));
 
-    let value = v_handle.value().unwrap();
-    let Value::Tuple(items) = value else {
-        panic!("expected tuple, got {}", v_handle.type_name().unwrap());
+    let Value::Tuple(items) = v_handle else {
+        panic!("expected tuple");
     };
     assert_eq!(items.len(), 2);
-    let a = Shape::from_rex(&items[0]).unwrap();
-    let b = Shape::from_rex(&items[1]).unwrap();
+    let a = Shape::from_rex(items[0].clone()).unwrap();
+    let b = Shape::from_rex(items[1].clone()).unwrap();
     assert_eq!(a, Shape::Rectangle(6, 12));
     assert_eq!(b, Shape::Rectangle(6, 8));
 }
@@ -485,7 +490,7 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
     let (v_handle, ty) = common::run_program(builder, &program).await.unwrap();
 
     assert_eq!(ty, RootNode::rex_type());
-    let decoded = RootNode::from_rex(&v_handle).unwrap();
+    let decoded = RootNode::from_rex(v_handle).unwrap();
     assert_eq!(
         decoded,
         RootNode {
@@ -501,16 +506,7 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
 
 #[test]
 fn derive_vec_fields_serialize_and_deserialize_as_lists() {
-    fn list_from_values(heap: &Heap, values: &[i32]) -> Handle {
-        let items = values
-            .iter()
-            .map(|value| heap.alloc_i32(*value).unwrap())
-            .collect();
-        heap.alloc_list(items).unwrap()
-    }
-
     fn assert_values(values: Vec<i32>, expected: &[i32]) {
-        let heap = Heap::new();
         let adt = VecFieldSnapshot::rex_adt_decl().unwrap();
         assert_eq!(
             adt.variants[0].args,
@@ -523,37 +519,25 @@ fn derive_vec_fields_serialize_and_deserialize_as_lists() {
         let snapshot = VecFieldSnapshot {
             values: values.clone(),
         }
-        .into_rex(&heap)
+        .into_rex()
         .unwrap();
-        let Value::Adt(tag, args) = snapshot.value().unwrap() else {
+        let Value::Adt(tag, args) = &snapshot else {
             panic!("expected VecFieldSnapshot ADT");
         };
         assert_eq!(tag.as_ref(), "VecFieldSnapshot");
         assert_eq!(args.len(), 1);
 
-        let Value::Dict(fields) = args[0].value().unwrap() else {
+        let Value::Dict(fields) = &args[0] else {
             panic!("expected record payload");
         };
-        let list_handle = fields
+        let list = fields
             .get(&Symbol::intern("values"))
             .expect("expected `values` field");
-        let list_items = list_handle.as_list().unwrap();
-        let actual = list_items
-            .iter()
-            .map(|item| item.to_rust::<i32>().unwrap())
-            .collect::<Vec<_>>();
+        let actual = Vec::<i32>::from_rex(list.clone()).unwrap();
 
         assert_eq!(actual, expected);
 
-        let mut fields = std::collections::BTreeMap::new();
-        fields.insert(Symbol::intern("values"), list_from_values(&heap, expected));
-        let handle = heap
-            .alloc_adt(
-                Symbol::intern("VecFieldSnapshot"),
-                vec![heap.alloc_dict(fields).unwrap()],
-            )
-            .unwrap();
-        let decoded = VecFieldSnapshot::from_rex(&handle).unwrap();
+        let decoded = VecFieldSnapshot::from_rex(snapshot).unwrap();
         assert_eq!(decoded, VecFieldSnapshot { values });
     }
 
@@ -571,7 +555,7 @@ async fn derive_leaf_rex_type_field_does_not_require_rex_adt_dependency() {
     let (v_handle, ty) = common::run_program(builder, &program).await.unwrap();
 
     assert_eq!(ty, Fragment::rex_type());
-    let decoded = Fragment::from_rex(&v_handle).unwrap();
+    let decoded = Fragment::from_rex(v_handle).unwrap();
     assert_eq!(decoded, Fragment(vec![AtomRef(1), AtomRef(2), AtomRef(3)]));
 }
 
@@ -585,7 +569,7 @@ async fn derive_leaf_rex_type_record_fields_support_manual_leaf_types() {
     let (v_handle, ty) = common::run_program(builder, &program).await.unwrap();
 
     assert_eq!(ty, BoundingBox::rex_type());
-    let decoded = BoundingBox::from_rex(&v_handle).unwrap();
+    let decoded = BoundingBox::from_rex(v_handle).unwrap();
     assert_eq!(
         decoded,
         BoundingBox {

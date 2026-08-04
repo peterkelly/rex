@@ -10,20 +10,17 @@ use rex_typesystem::{
 };
 
 use crate::{
+    Value,
     compiler::program::CompiledProgram,
     error::EngineError,
-    evaluator::{
-        context::{Context, InternalCtx},
-        eval::eval_typed_expr,
-        runtime_core::RuntimeCore,
-    },
-    memory::heap::{Handle, Heap, RootScope, RootedPtr},
+    evaluator::{eval::eval_typed_expr, runtime_core::RuntimeCore},
+    memory::heap::{HeapState, RootScope, RootedPtr},
     util::split_fun,
 };
 
 pub(crate) mod context;
 pub(crate) mod eval;
-pub(crate) mod host_action;
+pub(crate) mod intrinsic_handler;
 pub(crate) mod native_callable;
 pub(crate) mod native_functions;
 pub(crate) mod runtime_core;
@@ -38,14 +35,14 @@ where
     State: Clone + Send + Sync + 'static,
 {
     pub(crate) runtime: RuntimeCore<State>,
-    pub(crate) heap: Heap,
+    pub(crate) heap: HeapState,
 }
 
 impl<State> Evaluator<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(runtime: RuntimeCore<State>, heap: Heap) -> Self {
+    pub(crate) fn new(runtime: RuntimeCore<State>, heap: HeapState) -> Self {
         Self { runtime, heap }
     }
 
@@ -54,66 +51,45 @@ where
         Arc::clone(&self.runtime.type_system)
     }
 
-    /// Heap used by this evaluator runtime.
-    ///
-    /// Allocate external `main` inputs in this heap before calling [`run`](Self::run).
-    /// Handles from another heap are rejected rather than copied implicitly.
-    pub fn heap(&self) -> &Heap {
-        &self.heap
-    }
-
     /// Run one prepared program with runtime main inputs.
     ///
-    /// The `inputs` map must contain one [`Handle`] for each parameter in the
-    /// program's main signature, keyed by parameter name, and every handle
-    /// must belong to this evaluator's [`Heap`]. Foreign-heap handles are
-    /// rejected. When using the top-level `rex` crate and those inputs are
-    /// available as JSON, callers can build this map with
-    /// `rex::json::json_to_main_inputs`.
+    /// The `inputs` map must contain one owned [`Value`] for each parameter in
+    /// the program's main signature, keyed by parameter name.
     pub async fn run(
         self,
         program: CompiledProgram,
-        inputs: BTreeMap<String, Handle>,
-    ) -> Result<Handle, EngineError> {
-        self.run_with_context(program, inputs)
-            .await
-            .map(|(value, _ctx)| value)
-    }
-
-    /// Run one prepared program and keep a host-call context for follow-up host work.
-    ///
-    /// This is used by embedders that treat the evaluated result as a host-managed action and
-    /// need to resume Rex callbacks after the top-level expression has produced that action.
-    /// Runtime inputs have the same naming and same-heap requirements as [`run`](Self::run).
-    /// The returned [`Context`] retains the evaluator's heap and runtime, so it is ready for
-    /// follow-up host work and cannot be paired with an unrelated heap.
-    pub async fn run_with_context(
-        self,
-        program: CompiledProgram,
-        inputs: BTreeMap<String, Handle>,
-    ) -> Result<(Handle, Context<State>), EngineError> {
-        let Self { runtime, heap } = self;
+        inputs: BTreeMap<String, Value>,
+    ) -> Result<Value, EngineError> {
+        let Self { runtime, mut heap } = self;
         let main_signature = program.main_signature().clone();
-        let args = main_input_args(&heap, &main_signature, &inputs)?;
-        let value = eval_typed_expr(
+        let mut result_type = program.result_type().clone();
+        let args = main_input_args(&main_signature, inputs)?;
+        let result = eval_typed_expr(
             runtime.clone(),
-            &heap,
+            &mut heap,
             program.env,
             Arc::clone(&program.expr),
             args,
         )
         .await?;
-        let inner = InternalCtx::new(&runtime);
-        let ctx = Context::new(inner, heap);
-        Ok((value, ctx))
+        if !result_type.ftv().is_empty() {
+            let actual_type = heap.machine_root_scope(|scope| scope.infer_type(result))?;
+            let subst = unify(&result_type, &actual_type).map_err(|_| EngineError::NativeType {
+                expected: result_type.to_string(),
+                got: actual_type.to_string(),
+            })?;
+            result_type = result_type.apply(&subst);
+        }
+        heap.machine_root_scope(|scope| {
+            scope.export_value(result, &result_type, runtime.type_system.as_ref())
+        })
     }
 }
 
 fn main_input_args(
-    heap: &Heap,
     signature: &crate::MainSignature,
-    inputs: &BTreeMap<String, Handle>,
-) -> Result<Vec<(Handle, Type)>, EngineError> {
+    mut inputs: BTreeMap<String, Value>,
+) -> Result<Vec<(Value, Type)>, EngineError> {
     let expected = signature
         .inputs()
         .iter()
@@ -130,19 +106,18 @@ fn main_input_args(
         .inputs()
         .iter()
         .map(|input| {
-            let handle = inputs.get(&input.name).ok_or_else(|| {
+            let value = inputs.remove(&input.name).ok_or_else(|| {
                 EngineError::Internal("validated input map was incomplete".into())
             })?;
-            handle.ensure_heap(heap)?;
-            Ok((handle.clone(), input.typ.clone()))
+            Ok((value, input.typ.clone()))
         })
         .collect()
 }
 
-pub(crate) fn resolve_arg_type<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+pub(crate) fn resolve_arg_type(
+    scope: &mut RootScope<'_>,
     arg_type: Option<&Type>,
-    arg: RootedPtr<'scope>,
+    arg: RootedPtr,
 ) -> Result<Type, EngineError> {
     let infer_from_value = |ty_hint: Option<&Type>| -> Result<Type, EngineError> {
         match ty_hint {

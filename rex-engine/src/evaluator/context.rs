@@ -12,143 +12,47 @@ use crate::{
     builder::registry::{NativeId, NativeResolution},
     env::{RootedEnvironment, ScopedEnvironment},
     error::EngineError,
-    evaluator::{application_result_type, eval::eval_typed_expr, runtime_core::RuntimeCore},
-    memory::heap::{Handle, Heap, RootScope, RootedPtr},
+    evaluator::runtime_core::RuntimeCore,
+    memory::heap::{RootScope, RootedPtr},
     util::is_function_type,
 };
 
-/// Public context supplied to handle-based host callbacks.
-///
-/// The evaluator invokes those callbacks only after releasing its locked
-/// synchronous heap cycle. The context therefore exposes the shared [`Heap`]
-/// for allocating rooted [`Handle`] values, along with immutable runtime state
-/// and type information. It never exposes an internal moving pointer.
+/// Heap-independent context supplied to host callbacks.
 #[derive(Clone)]
 pub struct Context<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) inner: InternalCtx<State>,
-    heap: Heap,
+    state: Arc<State>,
+    type_system: Arc<TypeSystem>,
 }
 
 impl<State> Context<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(inner: InternalCtx<State>, heap: Heap) -> Self {
-        Self { inner, heap }
-    }
-
-    /// Shared heap for allocating or inspecting public rooted values.
-    ///
-    /// Heap operations may lock and collect. They are safe in a host callback
-    /// because the evaluator releases its own heap guard before invoking it.
-    pub fn heap(&self) -> &Heap {
-        &self.heap
+    pub(crate) fn new(runtime: &RuntimeCore<State>) -> Self {
+        Self {
+            state: Arc::clone(&runtime.state),
+            type_system: Arc::clone(&runtime.type_system),
+        }
     }
 
     pub fn state(&self) -> &State {
-        self.inner.runtime.state.as_ref()
+        self.state.as_ref()
     }
 
     pub fn type_system(&self) -> &TypeSystem {
-        self.inner.runtime.type_system.as_ref()
+        self.type_system.as_ref()
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct InternalCtx<State = ()>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    runtime: RuntimeCore<State>,
-}
-
-pub(crate) enum ClassMethodPlan<'scope> {
+pub(crate) enum ClassMethodPlan {
     Evaluate {
-        env: ScopedEnvironment<'scope>,
+        env: ScopedEnvironment,
         expr: TypedExpr,
     },
-    Deferred(RootedPtr<'scope>),
-}
-
-impl<State> InternalCtx<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub(crate) fn new(runtime: &RuntimeCore<State>) -> Self {
-        Self {
-            runtime: runtime.clone(),
-        }
-    }
-
-    /// Resume one Rex callback from engine-owned host action machinery.
-    ///
-    /// This is the internal callback bridge used by [`run_host_action`](super::host_action::run_host_action).
-    /// Host-managed action values, such as `std.io.IO`, may store Rex callbacks
-    /// in `map`, `ap`, or `bind` nodes. When the host action runner reaches one
-    /// of those nodes, it needs to evaluate exactly one ordinary Rex function
-    /// application against already-produced Rex values. This helper constructs a
-    /// small synthetic typed application expression rooted in the current heap
-    /// and hands that expression back to the normal evaluator.
-    ///
-    /// The important constraint is that this function resumes a callback once;
-    /// it must not be used as a recursive action interpreter. In particular, a
-    /// monadic runner must not call this function and then immediately recurse
-    /// into itself to execute the callback's returned action. That shape rebuilds
-    /// user-authored recursion in Rust async call frames, so a deeply nested Rex
-    /// `bind` chain could overflow the Rust stack despite the evaluator's own
-    /// iterative machinery.
-    ///
-    /// The intended pattern is the one used by `run_host_action`: keep the host
-    /// control flow in an explicit loop with an explicit continuation stack. A
-    /// `map` callback may continue within the same loop because it produces an
-    /// ordinary value; a `bind` callback produces the next action handle and the
-    /// runner returns that handle to its outer loop instead of recursively
-    /// awaiting another action run. Keeping this helper crate-private makes that
-    /// discipline enforceable: embedders get a narrow host-action API rather
-    /// than a general "apply arbitrary Rex function" escape hatch.
-    pub(crate) async fn resume_callback_once(
-        &self,
-        func: Handle,
-        func_type: Type,
-        args: Vec<(Handle, Type)>,
-        heap: &Heap,
-    ) -> Result<Handle, EngineError> {
-        func.ensure_heap(heap)?;
-        let func_name = Symbol::intern("__rex_apply_func");
-        let mut env = RootedEnvironment::new().extend(func_name.clone(), func);
-        let mut expr = TypedExpr::new(
-            func_type.clone(),
-            rex_typesystem::types::TypedExprKind::Var {
-                name: func_name,
-                overloads: Vec::new(),
-            },
-        );
-        let mut cur_type = func_type;
-
-        for (idx, (arg, arg_type)) in args.into_iter().enumerate() {
-            arg.ensure_heap(heap)?;
-            let arg_name = Symbol::intern(&format!("__rex_apply_arg_{idx}"));
-            env = env.extend(arg_name.clone(), arg);
-            let arg_expr = TypedExpr::new(
-                arg_type.clone(),
-                rex_typesystem::types::TypedExprKind::Var {
-                    name: arg_name,
-                    overloads: Vec::new(),
-                },
-            );
-            let result_type = application_result_type(&cur_type, &arg_type)?;
-            expr = TypedExpr::new(
-                result_type.clone(),
-                rex_typesystem::types::TypedExprKind::App(Arc::new(expr), Arc::new(arg_expr)),
-            );
-            cur_type = result_type;
-        }
-
-        eval_typed_expr(self.runtime.clone(), heap, env, Arc::new(expr), Vec::new()).await
-    }
+    Deferred(RootedPtr),
 }
 
 impl<State> RuntimeCore<State>
@@ -183,12 +87,12 @@ where
         self.typeclasses.resolve(&info.class, name, &param_type)
     }
 
-    pub(crate) fn resolve_class_method_plan<'scope>(
+    pub(crate) fn resolve_class_method_plan(
         &self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         name: &Symbol,
         typ: &Type,
-    ) -> Result<ClassMethodPlan<'scope>, EngineError> {
+    ) -> Result<ClassMethodPlan, EngineError> {
         let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
             Ok(res) => res,
             Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
@@ -204,7 +108,7 @@ where
         };
         let specialized = typed.as_ref().apply(&s);
         Ok(ClassMethodPlan::Evaluate {
-            env: def_env.to_scoped_environment(scope)?,
+            env: def_env.to_scoped_environment(),
             expr: specialized,
         })
     }
@@ -218,12 +122,12 @@ where
         Ok((native_id, name.clone(), arity))
     }
 
-    pub(crate) fn resolve_native<'scope>(
+    pub(crate) fn resolve_native(
         &self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         name: &Symbol,
         typ: &Type,
-    ) -> Result<RootedPtr<'scope>, EngineError> {
+    ) -> Result<RootedPtr, EngineError> {
         match self.natives.resolve(name, typ)? {
             NativeResolution::Unique { native_id, arity } => {
                 let root = scope.alloc_root_native(

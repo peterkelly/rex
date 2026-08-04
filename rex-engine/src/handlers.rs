@@ -1,4 +1,5 @@
 use crate::{
+    Value,
     builder::{
         core::NativeRegistration,
         export::{ExportTarget, HostFnAsync, HostFnSync, NativeFuture},
@@ -6,41 +7,43 @@ use crate::{
     },
     error::EngineError,
     evaluator::{
-        context::{Context, InternalCtx},
-        native_callable::{NativeCallScheduling, NativeHandleCallable},
+        context::Context,
+        native_callable::{HostValueCallable, NativeCallScheduling},
         runtime_core::RuntimeCore,
     },
     memory::{
-        handle_promotion::HandlePromoter,
-        heap::{Handle, Heap, RootScope, RootedPtr},
+        heap::{RootScope, RootedPtr},
         traits::{FromRex, IntoRex},
     },
     modules::ROOT_MODULE_NAME,
-    util::{normalize_name, split_fun, type_expr_from_type, validate_native_export_scheme},
+    util::{normalize_name, split_fun, type_expr_from_type, validate_host_value_export_scheme},
 };
 use futures::{FutureExt, future::BoxFuture};
 use rex_ast::Span;
 use rex_ast::{DeclareFnDecl, NameRef, Symbol, TypeConstraint, Var};
-use rex_typesystem::types::{RexType, Scheme, Type};
+use rex_typesystem::{
+    types::{RexType, Scheme, Type, Types},
+    unification::unify,
+};
 use std::{future::Future, sync::Arc};
 
 pub trait RexDefault<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    fn rex_default(ctx: Context<State>) -> Result<Handle, EngineError>;
+    fn rex_default(ctx: Context<State>) -> Result<Value, EngineError>;
 }
 
-pub(crate) type NativeHandleFuture = BoxFuture<'static, Result<Handle, EngineError>>;
+pub(crate) type NativeValueFuture = NativeFuture;
 
 pub type SyncNativeCallable<State> = Arc<
-    dyn for<'a> Fn(Context<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
+    dyn for<'a> Fn(Context<State>, &'a Type, Vec<Value>) -> Result<Value, EngineError>
         + Send
         + Sync
         + 'static,
 >;
 pub type AsyncNativeCallable<State> =
-    Arc<dyn Fn(Context<State>, Type, Vec<Handle>) -> NativeFuture + Send + Sync + 'static>;
+    Arc<dyn Fn(Context<State>, Type, Vec<Value>) -> NativeFuture + Send + Sync + 'static>;
 
 #[derive(Debug, Clone, Copy)]
 struct NativeCallableSig;
@@ -120,8 +123,8 @@ macro_rules! define_handler_impl {
                 export_name: &str,
             ) -> Result<(), EngineError> {
                 let name_sym = normalize_name(export_name);
-                let func: NativeHandleCallable<State> = Arc::new(
-                    move |engine, _: Type, args: Vec<Handle>| {
+                let func: HostValueCallable<State> = Arc::new(
+                    move |engine, _: Type, args: Vec<Value>| {
                         let result = (|| {
                             if args.len() != $arity {
                                 return Err(EngineError::NativeArity {
@@ -131,7 +134,7 @@ macro_rules! define_handler_impl {
                                 });
                             }
                             let value = self(engine.state())?;
-                            value.into_rex(engine.heap())
+                            value.into_rex()
                         })();
                         async move { result }.boxed()
                     },
@@ -163,8 +166,8 @@ macro_rules! define_handler_impl {
                 export_name: &str,
             ) -> Result<(), EngineError> {
                 let name_sym = normalize_name(export_name);
-                let func: NativeHandleCallable<State> = Arc::new(
-                    move |engine, _: Type, args: Vec<Handle>| {
+                let func: HostValueCallable<State> = Arc::new(
+                    move |engine, _: Type, args: Vec<Value>| {
                         let result = (|| {
                             if args.len() != $arity {
                                 return Err(EngineError::NativeArity {
@@ -173,12 +176,14 @@ macro_rules! define_handler_impl {
                                     got: args.len(),
                                 });
                             }
-                            $(let $arg_name = {
-                                let handle = &args[$idx];
-                                $arg_ty::from_rex(&handle)?
-                            };)*
+                            let mut args = args.into_iter();
+                            $(let $arg_name = $arg_ty::from_rex(args.next().ok_or_else(|| EngineError::NativeArity {
+                                name: name_sym.clone(),
+                                expected: $arity,
+                                got: $idx,
+                            })?)?;)*
                             let value = self(engine.state(), $($arg_name),+)?;
-                            value.into_rex(engine.heap())
+                            value.into_rex()
                         })();
                         async move { result }.boxed()
                     },
@@ -212,9 +217,9 @@ where
         export_name: &str,
     ) -> Result<(), EngineError> {
         let (scheme, arity, func) = self;
-        validate_native_export_scheme(&scheme, arity)?;
-        let callable: NativeHandleCallable<State> = Arc::new(move |engine, typ, args| {
-            let result = func(engine, &typ, &args);
+        validate_host_value_export_scheme(&scheme, arity)?;
+        let callable: HostValueCallable<State> = Arc::new(move |engine, typ, args| {
+            let result = func(engine, &typ, args);
             async move { result }.boxed()
         });
         let registration = NativeRegistration::sync(scheme, arity, callable);
@@ -243,8 +248,8 @@ macro_rules! define_async_handler_impl {
             ) -> Result<(), EngineError> {
                 let f = Arc::new(self);
                 let name_sym = normalize_name(export_name);
-                let func: NativeHandleCallable<State> = Arc::new(
-                    move |engine, _: Type, args: Vec<Handle>| -> NativeHandleFuture {
+                let func: HostValueCallable<State> = Arc::new(
+                    move |engine, _: Type, args: Vec<Value>| -> NativeValueFuture {
                         let f = Arc::clone(&f);
                         let name_sym = name_sym.clone();
                         let args = (|| {
@@ -260,7 +265,7 @@ macro_rules! define_async_handler_impl {
                         async move {
                             args?;
                             let value = f(engine.state()).await?;
-                            value.into_rex(engine.heap())
+                            value.into_rex()
                         }
                         .boxed()
                     },
@@ -293,8 +298,8 @@ macro_rules! define_async_handler_impl {
             ) -> Result<(), EngineError> {
                 let f = Arc::new(self);
                 let name_sym = normalize_name(export_name);
-                let func: NativeHandleCallable<State> = Arc::new(
-                    move |engine, _: Type, args: Vec<Handle>| -> NativeHandleFuture {
+                let func: HostValueCallable<State> = Arc::new(
+                    move |engine, _: Type, args: Vec<Value>| -> NativeValueFuture {
                         let f = Arc::clone(&f);
                         let name_sym = name_sym.clone();
                         let args = (|| {
@@ -305,10 +310,12 @@ macro_rules! define_async_handler_impl {
                                     got: args.len(),
                                 });
                             }
-                            $(let $arg_name = {
-                                let handle = &args[$idx];
-                                $arg_ty::from_rex(&handle)?
-                            };)*
+                            let mut args = args.into_iter();
+                            $(let $arg_name = $arg_ty::from_rex(args.next().ok_or_else(|| EngineError::NativeArity {
+                                name: name_sym.clone(),
+                                expected: $arity,
+                                got: $idx,
+                            })?)?;)*
                             Ok(($($arg_name,)+))
                         })();
                         match args {
@@ -316,7 +323,7 @@ macro_rules! define_async_handler_impl {
                                 let future = f(engine.state(), $($arg_name),+);
                                 async move {
                                     let value = future.await?;
-                                    value.into_rex(engine.heap())
+                                    value.into_rex()
                                 }
                                 .boxed()
                             }
@@ -353,29 +360,28 @@ where
         export_name: &str,
     ) -> Result<(), EngineError> {
         let (scheme, arity, func) = self;
-        validate_native_export_scheme(&scheme, arity)?;
-        let callable: NativeHandleCallable<State> = func;
+        validate_host_value_export_scheme(&scheme, arity)?;
+        let callable: HostValueCallable<State> = func;
         let registration = NativeRegistration::r#async(scheme, arity, callable);
         engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
     }
 }
 
-// A short-lived request produced inside evaluator code. Its scope-rooted
-// arguments cannot cross the synchronous cycle boundary; `promote` is the
-// only conversion into the scheduler-owned form below.
-pub(crate) struct NativeCallRequest<'scope> {
+// A short-lived request produced inside evaluator code. It is converted to
+// owned host values before it leaves the active runtime scope.
+pub(crate) struct NativeCallRequest {
     native_id: NativeId,
     scheduling: NativeCallScheduling,
     typ: Type,
-    args: Vec<RootedPtr<'scope>>,
+    args: Vec<RootedPtr>,
 }
 
-impl<'scope> NativeCallRequest<'scope> {
+impl NativeCallRequest {
     pub(crate) fn new(
         native_id: NativeId,
         scheduling: NativeCallScheduling,
         typ: Type,
-        args: Vec<RootedPtr<'scope>>,
+        args: Vec<RootedPtr>,
     ) -> Self {
         Self {
             native_id,
@@ -385,36 +391,55 @@ impl<'scope> NativeCallRequest<'scope> {
         }
     }
 
-    pub(crate) fn promote<'heap>(
+    pub(crate) fn prepare<State>(
         self,
-        scope: &mut RootScope<'heap, 'scope>,
-        promoter: &HandlePromoter<'_>,
-    ) -> Result<NativeCall, EngineError> {
+        scope: &mut RootScope<'_>,
+        runtime: &RuntimeCore<State>,
+    ) -> Result<NativeCall, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
         let Self {
             native_id,
             scheduling,
             typ,
             args,
         } = self;
-        let args = promoter.promote_all(scope, &args)?;
+        let typ = resolve_call_type(scope, &typ, &args)?;
+        let (argument_types, result_type) = decompose_call_type(&typ, args.len())?;
+        let args = args
+            .into_iter()
+            .zip(&argument_types)
+            .map(|(root, expected)| {
+                scope.export_value(root, expected, runtime.type_system.as_ref())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(NativeCall {
             native_id,
             scheduling,
             typ,
             args,
+            result_type,
         })
     }
 }
 
-// A host call that is safe to queue or suspend because every argument is a
-// registered `Handle` root. This is deliberately distinct from evaluator-owned
-// `PersistentPtr` state.
+// A host call that is safe to queue or suspend because all arguments are owned
+// values and no runtime or heap capability escapes with it.
 pub(crate) struct NativeCall {
     native_id: NativeId,
     scheduling: NativeCallScheduling,
     typ: Type,
-    args: Vec<Handle>,
+    args: Vec<Value>,
+    result_type: Type,
 }
+
+pub(crate) struct NativeCompletion {
+    pub(crate) value: Value,
+    pub(crate) expected: Type,
+}
+
+pub(crate) type NativeCompletionFuture = BoxFuture<'static, Result<NativeCompletion, EngineError>>;
 
 impl NativeCall {
     pub(crate) fn scheduling(&self) -> NativeCallScheduling {
@@ -424,34 +449,69 @@ impl NativeCall {
     pub(crate) fn invoke<State>(
         self,
         runtime: &RuntimeCore<State>,
-        heap: &Heap,
-    ) -> Result<NativeHandleFuture, EngineError>
+    ) -> Result<NativeCompletionFuture, EngineError>
     where
         State: Clone + Send + Sync + 'static,
     {
-        let callable = match runtime.native_callable(self.native_id)? {
-            crate::evaluator::native_callable::NativeCallable::Host { callable, .. } => callable,
-            crate::evaluator::native_callable::NativeCallable::Scheduler(_) => {
-                return Err(EngineError::Internal(
-                    "scheduler native queued through host native ABI".into(),
-                ));
+        match runtime.native_callable(self.native_id)? {
+            crate::evaluator::native_callable::NativeCallable::Host { callable, .. } => {
+                let ctx = Context::new(runtime);
+                let future = (callable)(ctx, self.typ, self.args);
+                let future = match self.scheduling {
+                    NativeCallScheduling::Immediate => future,
+                    NativeCallScheduling::Deferred => runtime.async_call_policy.prepare(future),
+                };
+                let expected = self.result_type;
+                Ok(async move {
+                    Ok(NativeCompletion {
+                        value: future.await?,
+                        expected,
+                    })
+                }
+                .boxed())
             }
-        };
-        let ctx = InternalCtx::new(runtime);
-        let wrapped = Context::new(ctx, heap.clone());
-        let future = (callable)(wrapped, self.typ, self.args);
-        let result_heap = heap.clone();
-        let future = async move {
-            let value = future.await?;
-            value.ensure_heap(&result_heap)?;
-            Ok(value)
+            crate::evaluator::native_callable::NativeCallable::Constant(_) => Err(
+                EngineError::Internal("constant queued through host native ABI".into()),
+            ),
+            crate::evaluator::native_callable::NativeCallable::Scheduler(_) => Err(
+                EngineError::Internal("scheduler native queued through host native ABI".into()),
+            ),
         }
-        .boxed();
-        Ok(match self.scheduling {
-            NativeCallScheduling::Immediate => future,
-            NativeCallScheduling::Deferred => runtime.async_call_policy.prepare(future),
-        })
     }
+}
+
+fn resolve_call_type(
+    scope: &mut RootScope<'_>,
+    typ: &Type,
+    args: &[RootedPtr],
+) -> Result<Type, EngineError> {
+    let mut resolved = typ.clone();
+    for (index, arg) in args.iter().enumerate() {
+        let (argument_types, _) = decompose_call_type(&resolved, args.len())?;
+        let expected = &argument_types[index];
+        if expected.ftv().is_empty() {
+            continue;
+        }
+        let actual = scope.infer_type(*arg)?;
+        let subst = unify(expected, &actual).map_err(|_| EngineError::NativeType {
+            expected: expected.to_string(),
+            got: actual.to_string(),
+        })?;
+        resolved = resolved.apply(&subst);
+    }
+    Ok(resolved)
+}
+
+fn decompose_call_type(typ: &Type, arity: usize) -> Result<(Vec<Type>, Type), EngineError> {
+    let mut arguments = Vec::with_capacity(arity);
+    let mut result = typ.clone();
+    for _ in 0..arity {
+        let (argument, rest) =
+            split_fun(&result).ok_or_else(|| EngineError::NotCallable(result.to_string()))?;
+        arguments.push(argument);
+        result = rest;
+    }
+    Ok((arguments, result))
 }
 
 macro_rules! native_fn_type {

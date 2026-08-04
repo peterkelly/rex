@@ -27,7 +27,7 @@ async fn compile_err(code: &str) -> EngineError {
     };
     match evaluator.run(compiled, Default::default()).await {
         Ok(v) => {
-            let value_type = v.type_name().unwrap_or("<invalid handle>");
+            let value_type = v.value_type_name();
             panic!("expected error, got value type: {value_type}\ncode:\n{code}");
         }
         Err(e) => e,

@@ -1,7 +1,7 @@
 mod common;
 
 use rex::{
-    engine::{Builder, EngineError, Handle, Module, ValueDisplayOptions},
+    engine::{Builder, EngineError, Module, Value, ValueDisplayOptions},
     typesystem::{BuiltinTypeId, Scheme, Type},
 };
 
@@ -22,19 +22,12 @@ fn checked_usize_arg(name: &str, value: i32) -> Result<usize, EngineError> {
         .map_err(|_| EngineError::Custom(format!("{name}: negative argument {value}")))
 }
 
-fn data_values(heap: &rex::engine::Heap) -> Result<Vec<Handle>, EngineError> {
-    (0..10).map(|value| heap.alloc_i32(100 + value)).collect()
+fn data_values() -> Vec<Value> {
+    (0..10).map(|value| Value::I32(100 + value)).collect()
 }
 
 fn binary_values() -> Vec<u8> {
     (100..110).collect()
-}
-
-fn data_u8_values(heap: &rex::engine::Heap) -> Result<Vec<Handle>, EngineError> {
-    binary_values()
-        .into_iter()
-        .map(|value| heap.alloc_u8(value))
-        .collect()
 }
 
 fn builder_with_list_shape_helpers() -> Builder<()> {
@@ -49,11 +42,11 @@ fn builder_with_list_shape_helpers() -> Builder<()> {
             vec![],
             Type::fun(i32_ty.clone(), Type::fun(i32_ty.clone(), list_ty.clone())),
         );
-        module.export_native("make_slice", make_slice_scheme, 2, |engine, _, args| {
+        module.export_native("make_slice", make_slice_scheme, 2, |_engine, _, args| {
             let start = checked_usize_arg("make_slice", args[0].as_i32()?)?;
             let end = checked_usize_arg("make_slice", args[1].as_i32()?)?;
-            let data = engine.heap().alloc_data(data_values(engine.heap())?)?;
-            engine.heap().alloc_list_slice(start, end, data)
+            let values = data_values();
+            Ok(Value::List(values[start..end].to_vec()))
         })?;
 
         let make_hybrid_scheme = Scheme::new(
@@ -64,19 +57,15 @@ fn builder_with_list_shape_helpers() -> Builder<()> {
                 Type::fun(i32_ty.clone(), Type::fun(i32_ty.clone(), list_ty.clone())),
             ),
         );
-        module.export_native("make_hybrid", make_hybrid_scheme, 3, |engine, _, args| {
+        module.export_native("make_hybrid", make_hybrid_scheme, 3, |_engine, _, args| {
             let cons_len = checked_usize_arg("make_hybrid", args[0].as_i32()?)?;
             let slice_start = checked_usize_arg("make_hybrid", args[1].as_i32()?)?;
             let slice_end = checked_usize_arg("make_hybrid", args[2].as_i32()?)?;
-            let data = engine.heap().alloc_data(data_values(engine.heap())?)?;
-            let mut tail = engine
-                .heap()
-                .alloc_list_slice(slice_start, slice_end, data)?;
-            for value in (0..cons_len).rev() {
-                let head = engine.heap().alloc_i32(value as i32)?;
-                tail = engine.heap().alloc_cons(head, tail)?;
-            }
-            Ok(tail)
+            let mut values = (0..cons_len)
+                .map(|value| Value::I32(value as i32))
+                .collect::<Vec<_>>();
+            values.extend_from_slice(&data_values()[slice_start..slice_end]);
+            Ok(Value::List(values))
         })?;
 
         let make_binary_slice_scheme = Scheme::new(
@@ -91,11 +80,10 @@ fn builder_with_list_shape_helpers() -> Builder<()> {
             "make_binary_slice",
             make_binary_slice_scheme,
             2,
-            |engine, _, args| {
+            |_engine, _, args| {
                 let start = checked_usize_arg("make_binary_slice", args[0].as_i32()?)?;
                 let end = checked_usize_arg("make_binary_slice", args[1].as_i32()?)?;
-                let data = engine.heap().alloc_binary_data(binary_values())?;
-                engine.heap().alloc_list_slice(start, end, data)
+                Ok(Value::Bytes(binary_values()[start..end].to_vec()))
             },
         )?;
 
@@ -111,11 +99,10 @@ fn builder_with_list_shape_helpers() -> Builder<()> {
             "make_data_u8_slice",
             make_data_u8_slice_scheme,
             2,
-            |engine, _, args| {
+            |_engine, _, args| {
                 let start = checked_usize_arg("make_data_u8_slice", args[0].as_i32()?)?;
                 let end = checked_usize_arg("make_data_u8_slice", args[1].as_i32()?)?;
-                let data = engine.heap().alloc_data(data_u8_values(engine.heap())?)?;
-                engine.heap().alloc_list_slice(start, end, data)
+                Ok(Value::Bytes(binary_values()[start..end].to_vec()))
             },
         )?;
 
@@ -134,24 +121,21 @@ fn builder_with_list_shape_helpers() -> Builder<()> {
             "make_binary_hybrid",
             make_binary_hybrid_scheme,
             3,
-            |engine, _, args| {
+            |_engine, _, args| {
                 let cons_len = checked_usize_arg("make_binary_hybrid", args[0].as_i32()?)?;
                 let slice_start = checked_usize_arg("make_binary_hybrid", args[1].as_i32()?)?;
                 let slice_end = checked_usize_arg("make_binary_hybrid", args[2].as_i32()?)?;
-                let data = engine.heap().alloc_binary_data(binary_values())?;
-                let mut tail = engine
-                    .heap()
-                    .alloc_list_slice(slice_start, slice_end, data)?;
-                for value in (0..cons_len).rev() {
-                    let value = u8::try_from(value).map_err(|_| {
-                        EngineError::Custom(format!(
-                            "make_binary_hybrid: cons prefix too large {value}"
-                        ))
-                    })?;
-                    let head = engine.heap().alloc_u8(value)?;
-                    tail = engine.heap().alloc_cons(head, tail)?;
-                }
-                Ok(tail)
+                let mut values = (0..cons_len)
+                    .map(|value| {
+                        u8::try_from(value).map_err(|_| {
+                            EngineError::Custom(format!(
+                                "make_binary_hybrid: cons prefix too large {value}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                values.extend_from_slice(&binary_values()[slice_start..slice_end]);
+                Ok(Value::Bytes(values))
             },
         )?;
 
@@ -170,24 +154,21 @@ fn builder_with_list_shape_helpers() -> Builder<()> {
             "make_data_u8_hybrid",
             make_data_u8_hybrid_scheme,
             3,
-            |engine, _, args| {
+            |_engine, _, args| {
                 let cons_len = checked_usize_arg("make_data_u8_hybrid", args[0].as_i32()?)?;
                 let slice_start = checked_usize_arg("make_data_u8_hybrid", args[1].as_i32()?)?;
                 let slice_end = checked_usize_arg("make_data_u8_hybrid", args[2].as_i32()?)?;
-                let data = engine.heap().alloc_data(data_u8_values(engine.heap())?)?;
-                let mut tail = engine
-                    .heap()
-                    .alloc_list_slice(slice_start, slice_end, data)?;
-                for value in (0..cons_len).rev() {
-                    let value = u8::try_from(value).map_err(|_| {
-                        EngineError::Custom(format!(
-                            "make_data_u8_hybrid: cons prefix too large {value}"
-                        ))
-                    })?;
-                    let head = engine.heap().alloc_u8(value)?;
-                    tail = engine.heap().alloc_cons(head, tail)?;
-                }
-                Ok(tail)
+                let mut values = (0..cons_len)
+                    .map(|value| {
+                        u8::try_from(value).map_err(|_| {
+                            EngineError::Custom(format!(
+                                "make_data_u8_hybrid: cons prefix too large {value}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                values.extend_from_slice(&binary_values()[slice_start..slice_end]);
+                Ok(Value::Bytes(values))
             },
         )?;
 
@@ -216,7 +197,7 @@ async fn assert_vec_u8_eval(code: &str, expected: &[u8]) {
         .unwrap_or_else(|err| panic!("expected ok, got error: {err}"));
     assert_eq!(ty, u8_list_type());
     assert_eq!(
-        <Vec<u8> as rex::engine::FromRex>::from_rex(&handle).expect("Vec<u8> should decode"),
+        <Vec<u8> as rex::engine::FromRex>::from_rex(handle).expect("Vec<u8> should decode"),
         expected
     );
 }

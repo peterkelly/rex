@@ -1,7 +1,4 @@
-use crate::{
-    builder::export::NativeFuture, error::EngineError, handlers::NativeHandleFuture,
-    modules::PRELUDE_MODULE_NAME,
-};
+use crate::{builder::export::NativeFuture, error::EngineError, modules::PRELUDE_MODULE_NAME};
 use std::{
     fmt,
     sync::{
@@ -260,7 +257,7 @@ impl AsyncCallPolicy {
 
     /// Apply the policy after an async host call has been admitted by the
     /// evaluator scheduler and produced its future.
-    pub(crate) fn prepare(&self, future: NativeHandleFuture) -> NativeHandleFuture {
+    pub(crate) fn prepare(&self, future: NativeFuture) -> NativeFuture {
         match self {
             Self::Inline => future,
             Self::Executor(executor) => executor.spawn(future),

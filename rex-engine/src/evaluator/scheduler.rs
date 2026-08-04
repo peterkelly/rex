@@ -2,8 +2,7 @@ use crate::{
     config::{NativeAsyncPermit, ParallelismController},
     error::EngineError,
     evaluator::{native_callable::NativeCallScheduling, runtime_core::RuntimeCore},
-    handlers::{NativeCall, NativeHandleFuture},
-    memory::heap::{Handle, Heap},
+    handlers::{NativeCall, NativeCompletion, NativeCompletionFuture},
     stack::FrameId,
 };
 use futures::future::poll_fn;
@@ -19,11 +18,11 @@ pub(crate) struct EvalScheduler<P> {
     ready_work_limit: usize,
 }
 
-/// Host-owned scheduling state that never enters a locked evaluator cycle.
+/// Host-owned scheduling state that never receives access to the evaluator heap.
 ///
-/// Queued calls, running futures, permits, and completed handles can all run
-/// arbitrary destructors. Keeping them here ensures those destructors run only
-/// after the heap mutex has been released.
+/// Queued calls, running futures, permits, and completed values contain only
+/// host-owned data. Their destructors may run while the evaluator retains
+/// exclusive ownership of its independent heap state.
 pub(crate) struct HostScheduler {
     pending_native: Vec<PendingNative>,
     immediate_native: VecDeque<QueuedNative>,
@@ -63,6 +62,14 @@ impl<P> EvalScheduler<P> {
         !self.ready.is_empty() || !self.deferred_ready.is_empty()
     }
 
+    pub(crate) fn visit_values(&self, visit: &mut impl FnMut(&P)) {
+        for item in self.ready.iter().chain(self.deferred_ready.iter()) {
+            if let Some(returned) = &item.returned {
+                visit(&returned.value);
+            }
+        }
+    }
+
     fn enforce_ready_limit(&mut self) {
         // ready_work_limit is only an internal evaluator queue-pressure
         // control. It does not reserve external compute capacity and should
@@ -87,25 +94,6 @@ impl<P> EvalScheduler<P> {
             };
             self.ready.push_back(item);
         }
-    }
-
-    pub(crate) fn map_values<Q, E>(
-        self,
-        map: &mut impl FnMut(P) -> Result<Q, E>,
-    ) -> Result<EvalScheduler<Q>, E> {
-        Ok(EvalScheduler {
-            ready: self
-                .ready
-                .into_iter()
-                .map(|item| item.map_value(map))
-                .collect::<Result<_, _>>()?,
-            deferred_ready: self
-                .deferred_ready
-                .into_iter()
-                .map(|item| item.map_value(map))
-                .collect::<Result<_, _>>()?,
-            ready_work_limit: self.ready_work_limit,
-        })
     }
 }
 
@@ -167,26 +155,20 @@ impl HostScheduler {
         }
     }
 
-    fn activate_next_immediate_native<State>(
-        &mut self,
-        runtime: &RuntimeCore<State>,
-        heap: &Heap,
-    ) -> bool
+    fn activate_next_immediate_native<State>(&mut self, runtime: &RuntimeCore<State>) -> bool
     where
         State: Clone + Send + Sync + 'static,
     {
         let Some(queued) = self.immediate_native.pop_front() else {
             return false;
         };
-        self.pending_native
-            .push(queued.activate_immediate(runtime, heap));
+        self.pending_native.push(queued.activate_immediate(runtime));
         true
     }
 
     fn activate_next_permitted_deferred_native<State>(
         &mut self,
         runtime: &RuntimeCore<State>,
-        heap: &Heap,
     ) -> bool
     where
         State: Clone + Send + Sync + 'static,
@@ -200,8 +182,7 @@ impl HostScheduler {
         let Some(queued) = self.deferred_native.pop_front() else {
             return false;
         };
-        self.pending_native
-            .push(queued.activate_deferred(runtime, heap));
+        self.pending_native.push(queued.activate_deferred(runtime));
         true
     }
 
@@ -209,15 +190,12 @@ impl HostScheduler {
         &mut self,
         cx: &mut TaskContext<'_>,
         runtime: &RuntimeCore<State>,
-        heap: &Heap,
     ) -> Result<bool, EngineError>
     where
         State: Clone + Send + Sync + 'static,
     {
         match self.try_acquire_next_native_permit(cx) {
-            Poll::Ready(Ok(true)) => {
-                Ok(self.activate_next_permitted_deferred_native(runtime, heap))
-            }
+            Poll::Ready(Ok(true)) => Ok(self.activate_next_permitted_deferred_native(runtime)),
             Poll::Ready(Ok(false)) | Poll::Pending => Ok(false),
             Poll::Ready(Err(err)) => Err(err),
         }
@@ -235,7 +213,7 @@ impl HostScheduler {
     fn take_pending_native_completion(
         &mut self,
         index: usize,
-    ) -> Result<(FrameId, Handle), EngineError> {
+    ) -> Result<(FrameId, NativeCompletion), EngineError> {
         if index >= self.pending_native.len() {
             return Err(EngineError::Internal(
                 "pending native completion index out of bounds".into(),
@@ -248,12 +226,14 @@ impl HostScheduler {
 pub(crate) enum NativePoll {
     Idle,
     Progress,
-    Completed { frame: FrameId, handle: Handle },
+    Completed {
+        frame: FrameId,
+        completion: NativeCompletion,
+    },
 }
 
 pub(crate) async fn poll_pending_native<State>(
     runtime: &RuntimeCore<State>,
-    heap: &Heap,
     scheduler: &mut HostScheduler,
     wait: bool,
 ) -> Result<NativePoll, EngineError>
@@ -267,10 +247,9 @@ where
         return Ok(NativePoll::Idle);
     }
 
-    let mut progressed = scheduler.activate_next_immediate_native(runtime, heap);
+    let mut progressed = scheduler.activate_next_immediate_native(runtime);
     progressed |=
-        poll_fn(|cx| Poll::Ready(scheduler.admit_available_deferred_native(cx, runtime, heap)))
-            .await?;
+        poll_fn(|cx| Poll::Ready(scheduler.admit_available_deferred_native(cx, runtime))).await?;
     if !scheduler.has_pending_native() {
         if !wait || (!scheduler.has_immediate_native() && !scheduler.has_deferred_native()) {
             return Ok(if progressed {
@@ -286,7 +265,7 @@ where
             Poll::Pending => Poll::Pending,
         })
         .await?;
-        let activated = scheduler.activate_next_permitted_deferred_native(runtime, heap);
+        let activated = scheduler.activate_next_permitted_deferred_native(runtime);
         return Ok(if activated {
             NativePoll::Progress
         } else {
@@ -344,20 +323,20 @@ where
         });
     };
     let NativeWaitEvent::Completion(index) = event else {
-        let activated = scheduler.activate_next_permitted_deferred_native(runtime, heap);
+        let activated = scheduler.activate_next_permitted_deferred_native(runtime);
         return Ok(if activated {
             NativePoll::Progress
         } else {
             NativePoll::Idle
         });
     };
-    let (frame, handle) = scheduler.take_pending_native_completion(index)?;
-    Ok(NativePoll::Completed { frame, handle })
+    let (frame, completion) = scheduler.take_pending_native_completion(index)?;
+    Ok(NativePoll::Completed { frame, completion })
 }
 
 enum PendingNativeState {
-    Polling(NativeHandleFuture),
-    Ready(Result<Handle, EngineError>),
+    Polling(NativeCompletionFuture),
+    Ready(Result<NativeCompletion, EngineError>),
 }
 
 struct PendingNative {
@@ -373,7 +352,11 @@ struct QueuedNative {
 }
 
 impl PendingNative {
-    fn new(frame: FrameId, future: NativeHandleFuture, permit: Option<NativeAsyncPermit>) -> Self {
+    fn new(
+        frame: FrameId,
+        future: NativeCompletionFuture,
+        permit: Option<NativeAsyncPermit>,
+    ) -> Self {
         Self {
             frame,
             state: PendingNativeState::Polling(future),
@@ -381,7 +364,7 @@ impl PendingNative {
         }
     }
 
-    fn ready(frame: FrameId, result: Result<Handle, EngineError>) -> Self {
+    fn ready(frame: FrameId, result: Result<NativeCompletion, EngineError>) -> Self {
         Self {
             frame,
             state: PendingNativeState::Ready(result),
@@ -402,9 +385,9 @@ impl PendingNative {
         }
     }
 
-    fn into_completion(self) -> Result<(FrameId, Handle), EngineError> {
+    fn into_completion(self) -> Result<(FrameId, NativeCompletion), EngineError> {
         match self.state {
-            PendingNativeState::Ready(result) => result.map(|handle| (self.frame, handle)),
+            PendingNativeState::Ready(result) => Ok((self.frame, result?)),
             PendingNativeState::Polling(_) => Err(EngineError::Internal(
                 "pending native future completed without a ready result".into(),
             )),
@@ -421,17 +404,17 @@ impl QueuedNative {
         }
     }
 
-    fn activate_immediate<State>(self, runtime: &RuntimeCore<State>, heap: &Heap) -> PendingNative
+    fn activate_immediate<State>(self, runtime: &RuntimeCore<State>) -> PendingNative
     where
         State: Clone + Send + Sync + 'static,
     {
-        match self.call.invoke(runtime, heap) {
+        match self.call.invoke(runtime) {
             Ok(future) => PendingNative::new(self.frame, future, None),
             Err(error) => PendingNative::ready(self.frame, Err(error)),
         }
     }
 
-    fn activate_deferred<State>(self, runtime: &RuntimeCore<State>, heap: &Heap) -> PendingNative
+    fn activate_deferred<State>(self, runtime: &RuntimeCore<State>) -> PendingNative
     where
         State: Clone + Send + Sync + 'static,
     {
@@ -443,7 +426,7 @@ impl QueuedNative {
                 )),
             );
         };
-        match self.call.invoke(runtime, heap) {
+        match self.call.invoke(runtime) {
             Ok(future) => PendingNative::new(self.frame, future, Some(permit)),
             Err(error) => PendingNative::ready(self.frame, Err(error)),
         }
@@ -473,23 +456,5 @@ impl<P> EvalWorkItem<P> {
             frame,
             returned: Some(EvalReturned { child, value }),
         }
-    }
-
-    pub(crate) fn map_value<Q, E>(
-        self,
-        map: &mut impl FnMut(P) -> Result<Q, E>,
-    ) -> Result<EvalWorkItem<Q>, E> {
-        Ok(EvalWorkItem {
-            frame: self.frame,
-            returned: self
-                .returned
-                .map(|returned| {
-                    Ok(EvalReturned {
-                        child: returned.child,
-                        value: map(returned.value)?,
-                    })
-                })
-                .transpose()?,
-        })
     }
 }

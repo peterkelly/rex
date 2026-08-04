@@ -1,5 +1,5 @@
 use crate::{
-    env::{PersistentEnvironment, RootedEnvironment, ScopedEnvironment},
+    env::{RootedEnvironment, ScopedEnvironment},
     error::EngineError,
     evaluator::{
         application_result_type,
@@ -9,13 +9,9 @@ use crate::{
         runtime_core::RuntimeCore,
         scheduler::{EvalScheduler, EvalWorkItem, HostScheduler, NativePoll, poll_pending_native},
     },
-    handlers::{NativeCall, NativeCallRequest},
+    handlers::{NativeCall, NativeCallRequest, NativeCompletion},
     memory::{
-        handle_promotion::{HandlePromoter, with_promotable_root_scope},
-        heap::{
-            Handle, Heap, PersistentPtr, PersistentRootStore, RootScope, RootedCallable,
-            RootedClosure, RootedPtr,
-        },
+        heap::{HeapState, RootScope, RootedCallable, RootedClosure, RootedPtr},
         lists::ListItems,
     },
     native_fn::NativeApplyResult,
@@ -34,18 +30,21 @@ use rex_typesystem::{
     types::{BuiltinTypeId, Type, TypeKind, TypedExpr, TypedExprKind, Types},
     unification::{Subst, compose_subst, unify},
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
-pub(crate) enum EvalControl<'scope> {
+pub(crate) enum EvalControl {
     Push {
         expr: Arc<TypedExpr>,
-        env: ScopedEnvironment<'scope>,
+        env: ScopedEnvironment,
     },
-    PushFrame(Box<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>),
+    PushFrame(Box<Frame<RootedPtr, ScopedEnvironment>>),
     Schedule(Vec<FrameId>),
     Wait,
-    AwaitNative(NativeCallRequest<'scope>),
-    Return(RootedPtr<'scope>),
+    AwaitNative(NativeCallRequest),
+    Return(RootedPtr),
 }
 
 struct EvalState<P, E> {
@@ -53,262 +52,96 @@ struct EvalState<P, E> {
     scheduler: EvalScheduler<P>,
 }
 
-type PersistentState = EvalState<PersistentPtr, PersistentEnvironment>;
-type ScopedState<'scope> = EvalState<RootedPtr<'scope>, ScopedEnvironment<'scope>>;
+type ScopedState = EvalState<RootedPtr, ScopedEnvironment>;
 
-struct PersistentEvalState {
-    roots: PersistentRootStore,
-    state: PersistentState,
+struct LiveRootMapper<'a> {
+    live: &'a mut HashSet<RootedPtr>,
 }
 
-struct ScopedEvalState<'scope> {
-    roots: PersistentRootStore,
-    state: ScopedState<'scope>,
-}
-
-struct PersistFrameMapper<'a, 'heap, 'scope> {
-    roots: &'a mut PersistentRootStore,
-    scope: &'a mut RootScope<'heap, 'scope>,
-}
-
-impl<'a, 'heap, 'scope> FrameValueMapper<RootedPtr<'scope>, ScopedEnvironment<'scope>>
-    for PersistFrameMapper<'a, 'heap, 'scope>
-{
-    type Value = PersistentPtr;
-    type Environment = PersistentEnvironment;
+impl FrameValueMapper<RootedPtr, ScopedEnvironment> for LiveRootMapper<'_> {
+    type Value = RootedPtr;
+    type Environment = ScopedEnvironment;
     type Error = EngineError;
 
-    fn map_value(&mut self, value: RootedPtr<'scope>) -> Result<Self::Value, Self::Error> {
-        self.roots.insert(self.scope, value)
+    fn map_value(&mut self, value: RootedPtr) -> Result<Self::Value, Self::Error> {
+        self.live.insert(value);
+        Ok(value)
     }
 
     fn map_environment(
         &mut self,
-        env: ScopedEnvironment<'scope>,
+        env: ScopedEnvironment,
     ) -> Result<Self::Environment, Self::Error> {
-        PersistentEnvironment::persist(env, self.roots, self.scope)
+        env.visit_values(&mut |value| {
+            self.live.insert(value);
+        });
+        Ok(env)
     }
 }
 
-struct ResolveFrameMapper<'a, 'heap, 'scope> {
-    roots: &'a PersistentRootStore,
-    scope: &'a mut RootScope<'heap, 'scope>,
-}
-
-impl<'a, 'heap, 'scope> FrameValueMapper<PersistentPtr, PersistentEnvironment>
-    for ResolveFrameMapper<'a, 'heap, 'scope>
-{
-    type Value = RootedPtr<'scope>;
-    type Environment = ScopedEnvironment<'scope>;
-    type Error = EngineError;
-
-    fn map_value(&mut self, value: PersistentPtr) -> Result<Self::Value, Self::Error> {
-        let rooted = self.roots.resolve(self.scope, &value)?;
-        Ok(rooted)
+fn collect_machine_if_needed(
+    runtime: &RuntimeCore<impl Clone + Send + Sync + 'static>,
+    scope: &mut RootScope<'_>,
+    state: &mut ScopedState,
+) -> Result<(), EngineError> {
+    if !scope.collection_needed() {
+        return Ok(());
     }
 
-    fn map_environment(
-        &mut self,
-        env: PersistentEnvironment,
-    ) -> Result<Self::Environment, Self::Error> {
-        env.resolve(self.roots, self.scope)
-    }
-}
-
-fn combine_root_cleanup_error(error: EngineError, cleanup_error: EngineError) -> EngineError {
-    EngineError::Internal(format!(
-        "evaluator failed: {error}; persistent root cleanup also failed: {cleanup_error}"
-    ))
-}
-
-fn clear_roots_after_error<'heap, 'scope>(
-    scope: &mut RootScope<'heap, 'scope>,
-    roots: PersistentRootStore,
-    error: EngineError,
-) -> EngineError {
-    match roots.clear(scope) {
-        Ok(()) => error,
-        Err(cleanup_error) => combine_root_cleanup_error(error, cleanup_error),
-    }
-}
-
-fn clear_persistent_state_after_error<'heap, 'scope>(
-    scope: &mut RootScope<'heap, 'scope>,
-    state: PersistentEvalState,
-    error: EngineError,
-) -> EngineError {
-    clear_roots_after_error(scope, state.roots, error)
-}
-
-/// Owns persistent evaluator roots only while the heap is unlocked.
-///
-/// The state is taken out before entering a locked cycle and restored only
-/// after that cycle returns. This makes destructor-based cleanup safe here,
-/// even though [`PersistentRootStore`] itself must never acquire the heap lock
-/// from `Drop`. In particular, cancelling the outer evaluation future while it
-/// is awaiting host work still unregisters every evaluator-owned root.
-struct SuspendedEvalState<'heap> {
-    heap: &'heap Heap,
-    state: Option<PersistentEvalState>,
-}
-
-impl<'heap> SuspendedEvalState<'heap> {
-    fn new(heap: &'heap Heap, state: PersistentEvalState) -> Self {
-        Self {
-            heap,
-            state: Some(state),
-        }
-    }
-
-    fn get(&self) -> &PersistentEvalState {
-        match &self.state {
-            Some(state) => state,
-            None => panic!("suspended evaluator state must be present outside a locked cycle"),
-        }
-    }
-
-    fn get_mut(&mut self) -> &mut PersistentEvalState {
-        match &mut self.state {
-            Some(state) => state,
-            None => panic!("suspended evaluator state must be present outside a locked cycle"),
-        }
-    }
-
-    fn take(&mut self) -> PersistentEvalState {
-        match self.state.take() {
-            Some(state) => state,
-            None => panic!("suspended evaluator state must be present before a locked cycle"),
-        }
-    }
-
-    fn restore(&mut self, state: PersistentEvalState) {
-        assert!(
-            self.state.replace(state).is_none(),
-            "locked evaluator cycle returned while suspended state was still present"
-        );
-    }
-
-    fn finish_with_error(mut self, error: EngineError) -> EngineError {
-        let state = self.take();
-        match self.clear(state) {
-            Ok(()) => error,
-            Err(cleanup_error) => combine_root_cleanup_error(error, cleanup_error),
-        }
-    }
-
-    fn clear(&self, state: PersistentEvalState) -> Result<(), EngineError> {
-        let roots = state.roots;
-        self.heap.with_root_scope(|scope| roots.clear(scope))
-    }
-}
-
-impl Drop for SuspendedEvalState<'_> {
-    fn drop(&mut self) {
-        if let Some(state) = self.state.take() {
-            let _ = self.clear(state);
-        }
-    }
+    let mut live = HashSet::new();
+    let frames = std::mem::take(&mut state.frames);
+    let mut mapper = LiveRootMapper { live: &mut live };
+    state.frames = frames.map_frames(|frame| frame.map_values(&mut mapper))?;
+    state.scheduler.visit_values(&mut |value| {
+        live.insert(*value);
+    });
+    runtime.typeclasses.visit_values(&mut |value| {
+        live.insert(value);
+    });
+    runtime.natives.visit_values(&mut |value| {
+        live.insert(value);
+    });
+    scope.collect_if_needed(&live)
 }
 
 pub(crate) async fn eval_typed_expr<State>(
     runtime: RuntimeCore<State>,
-    heap: &Heap,
+    heap: &mut HeapState,
     rooted_env: RootedEnvironment,
     expr: Arc<TypedExpr>,
-    input_args: Vec<(Handle, Type)>,
-) -> Result<Handle, EngineError>
+    input_args: Vec<(crate::Value, Type)>,
+) -> Result<RootedPtr, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
     eval_typed_expr_inner(runtime, heap, rooted_env, expr, input_args).await
 }
 
-fn persist_eval_state<'heap, 'scope>(
-    scope: &mut RootScope<'heap, 'scope>,
-    state: ScopedState<'scope>,
-) -> Result<PersistentEvalState, EngineError> {
-    let mut roots = scope.persistent_root_store()?;
-    let EvalState { frames, scheduler } = state;
-
-    let converted = (|| {
-        let frames = {
-            let mut mapper = PersistFrameMapper {
-                roots: &mut roots,
-                scope,
-            };
-            frames.map_frames(|frame| frame.map_values(&mut mapper))?
-        };
-        let scheduler = scheduler.map_values(&mut |value| roots.insert(scope, value))?;
-        Ok::<_, EngineError>((frames, scheduler))
-    })();
-
-    let (frames, scheduler) = match converted {
-        Ok(converted) => converted,
-        Err(error) => {
-            return Err(clear_roots_after_error(scope, roots, error));
-        }
-    };
-
-    Ok(PersistentEvalState {
-        roots,
-        state: EvalState { frames, scheduler },
-    })
-}
-
-fn resolve_eval_state<'heap, 'scope>(
-    scope: &mut RootScope<'heap, 'scope>,
-    state: PersistentEvalState,
-) -> Result<ScopedEvalState<'scope>, EngineError> {
-    let PersistentEvalState { roots, state } = state;
-    let EvalState { frames, scheduler } = state;
-
-    let converted = (|| {
-        let frames = {
-            let mut mapper = ResolveFrameMapper {
-                roots: &roots,
-                scope,
-            };
-            frames.map_frames(|frame| frame.map_values(&mut mapper))?
-        };
-        let scheduler = scheduler.map_values(&mut |value| {
-            let rooted = roots.resolve(scope, &value)?;
-            Ok::<_, EngineError>(rooted)
-        })?;
-        Ok::<_, EngineError>((frames, scheduler))
-    })();
-
-    let (frames, scheduler) = match converted {
-        Ok(converted) => converted,
-        Err(error) => {
-            return Err(clear_roots_after_error(scope, roots, error));
-        }
-    };
-    Ok(ScopedEvalState {
-        roots,
-        state: EvalState { frames, scheduler },
-    })
-}
-
 async fn eval_typed_expr_inner<State>(
     runtime: RuntimeCore<State>,
-    heap: &Heap,
+    heap: &mut HeapState,
     rooted_env: RootedEnvironment,
     expr: Arc<TypedExpr>,
-    input_args: Vec<(Handle, Type)>,
-) -> Result<Handle, EngineError>
+    input_args: Vec<(crate::Value, Type)>,
+) -> Result<RootedPtr, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
     let ready_work_limit = runtime.parallelism_controller.ready_work_limit();
     let mut host_scheduler = HostScheduler::new(runtime.parallelism_controller.clone());
-    let state = heap.with_root_scope(|scope| {
-        let env = rooted_env.to_scoped_environment(scope)?;
+    let mut state = heap.machine_root_scope(|scope| {
+        let env = rooted_env.to_scoped_environment();
         let (env, expr) = if input_args.is_empty() {
             (env, expr)
         } else {
             let args = input_args
-                .iter()
-                .map(|(handle, typ)| Ok((scope.root_handle(handle)?, typ.clone())))
+                .into_iter()
+                .map(|(value, typ)| {
+                    Ok((
+                        scope.alloc_value(value, &typ, runtime.type_system.as_ref())?,
+                        typ,
+                    ))
+                })
                 .collect::<Result<Vec<_>, EngineError>>()?;
             let (env, expr) =
                 synthetic_rooted_application_expr_from_head(env, expr.as_ref().clone(), &args)?;
@@ -317,75 +150,43 @@ where
         let mut frames = FrameStore::default();
         let root_frame = frames.insert(frame_for_expr(None, expr, env));
         let scheduler = EvalScheduler::new(root_frame, ready_work_limit);
-        persist_eval_state(scope, EvalState { frames, scheduler })
+        Ok::<_, EngineError>(EvalState { frames, scheduler })
     })?;
-    let mut suspended = SuspendedEvalState::new(heap, state);
     let mut boundary = EvalBoundary::MoreInternalWork;
 
     loop {
         let wait_for_host = boundary.wait_for_host();
 
-        suspended
-            .get_mut()
-            .state
+        state
             .scheduler
             .set_ready_work_limit(runtime.parallelism_controller.ready_work_limit());
-        let native_poll =
-            match poll_pending_native(&runtime, heap, &mut host_scheduler, wait_for_host).await {
-                Ok(native_poll) => native_poll,
-                Err(error) => return Err(suspended.finish_with_error(error)),
-            };
+        let native_poll = poll_pending_native(&runtime, &mut host_scheduler, wait_for_host).await?;
         let completed_native = match native_poll {
             NativePoll::Progress => {
-                boundary = match EvalBoundary::from_state(suspended.get(), &host_scheduler) {
-                    Ok(boundary) => boundary,
-                    Err(error) => return Err(suspended.finish_with_error(error)),
-                };
+                boundary = EvalBoundary::from_state(&state, &host_scheduler)?;
                 continue;
             }
-            NativePoll::Completed { frame, handle } => Some((frame, handle)),
+            NativePoll::Completed { frame, completion } => Some((frame, completion)),
             NativePoll::Idle if !wait_for_host => None,
             NativePoll::Idle => {
-                let error = EngineError::Internal("eval scheduler ran out of host work".into());
-                return Err(suspended.finish_with_error(error));
+                return Err(EngineError::Internal(
+                    "eval scheduler ran out of host work".into(),
+                ));
             }
         };
 
-        let completed_native_ref = completed_native
-            .as_ref()
-            .map(|(frame, handle)| (*frame, handle));
-        let mut state_for_cycle = Some(suspended.take());
-        let outcome = with_promotable_root_scope(heap, |scope, promoter| {
-            let state = state_for_cycle.take().ok_or_else(|| {
-                EngineError::Internal("locked evaluator cycle missing persistent state".into())
-            })?;
-            run_locked_eval_cycle(&runtime, scope, promoter, state, completed_native_ref)
-        });
-        let outcome = match outcome {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                if let Some(state) = state_for_cycle {
-                    suspended.restore(state);
-                    return Err(suspended.finish_with_error(error));
-                }
-                return Err(error);
-            }
-        };
+        let outcome = heap.machine_root_scope(|scope| {
+            collect_machine_if_needed(&runtime, scope, &mut state)?;
+            run_runtime_cycle(&runtime, scope, &mut state, completed_native)
+        })?;
         match outcome {
-            LockedCycleOutcome::Continue {
-                state: next_state,
-                queued_native,
-            } => {
-                suspended.restore(next_state);
+            RuntimeCycleOutcome::Continue { queued_native } => {
                 if let Some((frame, call)) = queued_native {
                     host_scheduler.schedule_native(frame, call);
                 }
-                boundary = match EvalBoundary::from_state(suspended.get(), &host_scheduler) {
-                    Ok(boundary) => boundary,
-                    Err(error) => return Err(suspended.finish_with_error(error)),
-                };
+                boundary = EvalBoundary::from_state(&state, &host_scheduler)?;
             }
-            LockedCycleOutcome::Completed(result) => return Ok(result),
+            RuntimeCycleOutcome::Completed(result) => return Ok(result),
         }
     }
 }
@@ -402,10 +203,10 @@ impl EvalBoundary {
     }
 
     fn from_state(
-        state: &PersistentEvalState,
+        state: &ScopedState,
         host_scheduler: &HostScheduler,
     ) -> Result<Self, EngineError> {
-        if state.state.scheduler.has_ready_work() {
+        if state.scheduler.has_ready_work() {
             Ok(Self::MoreInternalWork)
         } else if host_scheduler.has_queued_native_work() {
             Ok(Self::HostWork)
@@ -422,87 +223,59 @@ impl EvalBoundary {
 // Boxing `Continue` would add an allocation to every evaluator work item; the
 // small `Completed` variant is taken only once at the end of evaluation.
 #[allow(clippy::large_enum_variant)]
-enum LockedCycleOutcome {
+enum RuntimeCycleOutcome {
     Continue {
-        state: PersistentEvalState,
         queued_native: Option<(FrameId, NativeCall)>,
     },
-    Completed(Handle),
+    Completed(RootedPtr),
 }
 
-enum ScopedCycleOutcome<'scope> {
+enum ScopedCycleOutcome {
     Continue {
-        native_request: Option<(FrameId, NativeCallRequest<'scope>)>,
+        native_request: Option<(FrameId, NativeCallRequest)>,
     },
-    Completed(RootedPtr<'scope>),
+    Completed(RootedPtr),
 }
 
-fn run_locked_eval_cycle<'heap, 'scope, State>(
+fn run_runtime_cycle<'heap, State>(
     runtime: &RuntimeCore<State>,
-    scope: &mut RootScope<'heap, 'scope>,
-    promoter: &HandlePromoter<'_>,
-    state: PersistentEvalState,
-    completed_native: Option<(FrameId, &Handle)>,
-) -> Result<LockedCycleOutcome, EngineError>
+    scope: &mut RootScope<'heap>,
+    state: &mut ScopedState,
+    completed_native: Option<(FrameId, NativeCompletion)>,
+) -> Result<RuntimeCycleOutcome, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    let ScopedEvalState {
-        roots: previous_roots,
-        mut state,
-    } = resolve_eval_state(scope, state)?;
-
-    let outcome = match run_scoped_eval_cycle(runtime, scope, &mut state, completed_native) {
-        Ok(outcome) => outcome,
-        Err(error) => return Err(clear_roots_after_error(scope, previous_roots, error)),
-    };
+    let outcome = run_scoped_eval_cycle(runtime, scope, state, completed_native)?;
 
     match outcome {
-        ScopedCycleOutcome::Completed(value) => {
-            previous_roots.clear(scope)?;
-            let result = promoter.promote(scope, value)?;
-            Ok(LockedCycleOutcome::Completed(result))
-        }
+        ScopedCycleOutcome::Completed(value) => Ok(RuntimeCycleOutcome::Completed(value)),
         ScopedCycleOutcome::Continue { native_request } => {
-            let state = match persist_eval_state(scope, state) {
-                Ok(state) => state,
-                Err(error) => {
-                    return Err(clear_roots_after_error(scope, previous_roots, error));
-                }
-            };
-            if let Err(error) = previous_roots.clear(scope) {
-                return Err(clear_persistent_state_after_error(scope, state, error));
-            }
-
             let queued_native = match native_request {
-                Some((frame, call)) => match call.promote(scope, promoter) {
-                    Ok(call) => Some((frame, call)),
-                    Err(error) => {
-                        return Err(clear_persistent_state_after_error(scope, state, error));
-                    }
-                },
+                Some((frame, call)) => Some((frame, call.prepare(scope, runtime)?)),
                 None => None,
             };
-            Ok(LockedCycleOutcome::Continue {
-                state,
-                queued_native,
-            })
+            Ok(RuntimeCycleOutcome::Continue { queued_native })
         }
     }
 }
 
-fn run_scoped_eval_cycle<'heap, 'scope, State>(
+fn run_scoped_eval_cycle<'heap, State>(
     runtime: &RuntimeCore<State>,
-    scope: &mut RootScope<'heap, 'scope>,
-    state: &mut ScopedState<'scope>,
-    completed_native: Option<(FrameId, &Handle)>,
-) -> Result<ScopedCycleOutcome<'scope>, EngineError>
+    scope: &mut RootScope<'heap>,
+    state: &mut ScopedState,
+    completed_native: Option<(FrameId, NativeCompletion)>,
+) -> Result<ScopedCycleOutcome, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
     let EvalState { frames, scheduler } = state;
-    if let Some((frame, handle)) = completed_native {
-        let value = scope.root_handle(handle)?;
+    if let Some((frame, completion)) = completed_native {
+        let value = scope.alloc_value(
+            completion.value,
+            &completion.expected,
+            runtime.type_system.as_ref(),
+        )?;
         scheduler.schedule_next(EvalWorkItem::receive(frame, frame, value));
     }
 
@@ -558,11 +331,11 @@ where
     Ok(ScopedCycleOutcome::Continue { native_request })
 }
 
-pub(crate) fn frame_for_expr<'scope>(
+pub(crate) fn frame_for_expr(
     parent: Option<FrameId>,
     expr: Arc<TypedExpr>,
-    env: ScopedEnvironment<'scope>,
-) -> Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>> {
+    env: ScopedEnvironment,
+) -> Frame<RootedPtr, ScopedEnvironment> {
     let kind = Arc::clone(&expr.kind);
     match kind.as_ref() {
         TypedExprKind::Bool(_)
@@ -681,13 +454,13 @@ pub(crate) fn frame_for_expr<'scope>(
     }
 }
 
-fn eval_enter<'scope, State>(
+fn eval_enter<State>(
     runtime: &RuntimeCore<State>,
-    scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
+    scope: &mut RootScope<'_>,
+    frames: &mut FrameStore<Frame<RootedPtr, ScopedEnvironment>>,
     frame_id: FrameId,
-    frame: Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
-) -> Result<EvalControl<'scope>, EngineError>
+    frame: Frame<RootedPtr, ScopedEnvironment>,
+) -> Result<EvalControl, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -714,6 +487,13 @@ where
                         frames.replace(frame_id, Frame::Var(frame))?;
                         Ok(EvalControl::Push { expr, env })
                     }
+                    EvalVarResult::PushNative(task) => Ok(EvalControl::PushFrame(Box::new(
+                        Frame::NativeCall(FrNativeCall {
+                            parent: Some(frame_id),
+                            state: FrNativeCallState::Enter,
+                            task,
+                        }),
+                    ))),
                     EvalVarResult::AwaitNative(future) => {
                         frame.state = FrValueState::Enter;
                         frames.replace(frame_id, Frame::Var(frame))?;
@@ -821,10 +601,10 @@ where
     }
 }
 
-fn eval_literal_enter<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn eval_literal_enter(
+    scope: &mut RootScope<'_>,
     frame: FrLiteral,
-) -> Result<EvalControl<'scope>, EngineError> {
+) -> Result<EvalControl, EngineError> {
     let root = match frame.expr.kind.as_ref() {
         TypedExprKind::Bool(value) => scope.alloc_root_bool(*value)?,
         TypedExprKind::Uint(value) => alloc_uint_literal_as(scope, *value, &frame.expr.typ)?,
@@ -838,12 +618,12 @@ fn eval_literal_enter<'scope>(
     Ok(EvalControl::Return(root))
 }
 
-fn eval_sequence_enter<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
+fn eval_sequence_enter(
+    scope: &mut RootScope<'_>,
+    frames: &mut FrameStore<Frame<RootedPtr, ScopedEnvironment>>,
     frame_id: FrameId,
-    mut frame: FrSequence<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
-) -> Result<EvalControl<'scope>, EngineError> {
+    mut frame: FrSequence<RootedPtr, ScopedEnvironment>,
+) -> Result<EvalControl, EngineError> {
     let exprs = sequence_exprs(&frame.expr)?;
     if exprs.is_empty() {
         let root = alloc_sequence_values(scope, &frame.expr, Vec::new())?;
@@ -864,11 +644,11 @@ fn eval_sequence_enter<'scope>(
     Ok(EvalControl::Schedule(children))
 }
 
-fn eval_record_update_updates_enter<'scope>(
-    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
+fn eval_record_update_updates_enter(
+    frames: &mut FrameStore<Frame<RootedPtr, ScopedEnvironment>>,
     frame_id: FrameId,
-    mut frame: FrRecordUpdate<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
-) -> Result<EvalControl<'scope>, EngineError> {
+    mut frame: FrRecordUpdate<RootedPtr, ScopedEnvironment>,
+) -> Result<EvalControl, EngineError> {
     let exprs = record_update_exprs_for_keys(&frame, &frame.update_keys)?;
     frame.state = FrRecordUpdateState::EvalUpdate;
     frame.update_children = Vec::with_capacity(exprs.len());
@@ -884,11 +664,11 @@ fn eval_record_update_updates_enter<'scope>(
     Ok(EvalControl::Schedule(children))
 }
 
-fn eval_app_enter<'scope>(
-    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
+fn eval_app_enter(
+    frames: &mut FrameStore<Frame<RootedPtr, ScopedEnvironment>>,
     frame_id: FrameId,
-    mut frame: FrApp<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
-) -> Result<EvalControl<'scope>, EngineError> {
+    mut frame: FrApp<RootedPtr, ScopedEnvironment>,
+) -> Result<EvalControl, EngineError> {
     let mut spine = Vec::new();
     let mut head = Arc::clone(&frame.expr);
     while let TypedExprKind::App(func, arg) = head.kind.as_ref() {
@@ -962,10 +742,10 @@ fn receive_sequence_value<P: Copy>(
     Ok(())
 }
 
-fn receive_app_child_value<'scope>(
-    frame: &mut FrApp<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
+fn receive_app_child_value(
+    frame: &mut FrApp<RootedPtr, ScopedEnvironment>,
     child: FrameId,
-    value: RootedPtr<'scope>,
+    value: RootedPtr,
 ) -> Result<(), EngineError> {
     if frame.head_child == Some(child) {
         if frame.func.is_some() {
@@ -1044,11 +824,11 @@ fn sequence_kind(expr: &TypedExpr) -> Result<&'static str, EngineError> {
     }
 }
 
-fn alloc_sequence_values<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn alloc_sequence_values(
+    scope: &mut RootScope<'_>,
     expr: &TypedExpr,
-    values: Vec<RootedPtr<'scope>>,
-) -> Result<RootedPtr<'scope>, EngineError> {
+    values: Vec<RootedPtr>,
+) -> Result<RootedPtr, EngineError> {
     match expr.kind.as_ref() {
         TypedExprKind::Tuple(_) => scope.alloc_root_tuple(values),
         TypedExprKind::List(_) => scope.alloc_root_list(values),
@@ -1079,15 +859,15 @@ fn record_update_exprs_for_keys<P, E>(
     }
 }
 
-fn eval_receive<'scope, State>(
+fn eval_receive<State>(
     runtime: &RuntimeCore<State>,
-    scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
+    scope: &mut RootScope<'_>,
+    frames: &mut FrameStore<Frame<RootedPtr, ScopedEnvironment>>,
     frame_id: FrameId,
-    frame: Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
+    frame: Frame<RootedPtr, ScopedEnvironment>,
     child: FrameId,
-    value: RootedPtr<'scope>,
-) -> Result<EvalControl<'scope>, EngineError>
+    value: RootedPtr,
+) -> Result<EvalControl, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -1283,14 +1063,14 @@ where
     }
 }
 
-fn eval_apply_overloaded_arg<'scope, State>(
+fn eval_apply_overloaded_arg<State>(
     runtime: &RuntimeCore<State>,
-    scope: &mut RootScope<'_, 'scope>,
-    mut over: OverloadedFn<RootedPtr<'scope>>,
-    arg: RootedPtr<'scope>,
+    scope: &mut RootScope<'_>,
+    mut over: OverloadedFn<RootedPtr>,
+    arg: RootedPtr,
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
-) -> Result<EvalApplyResult<'scope>, EngineError>
+) -> Result<EvalApplyResult, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -1347,14 +1127,14 @@ where
         .map(EvalApplyResult::AwaitNative)
 }
 
-fn eval_apply_arg<'scope, State>(
+fn eval_apply_arg<State>(
     runtime: &RuntimeCore<State>,
-    scope: &mut RootScope<'_, 'scope>,
-    func: RootedPtr<'scope>,
-    arg: RootedPtr<'scope>,
+    scope: &mut RootScope<'_>,
+    func: RootedPtr,
+    arg: RootedPtr,
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
-) -> Result<EvalApplyResult<'scope>, EngineError>
+) -> Result<EvalApplyResult, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -1400,14 +1180,14 @@ where
     }
 }
 
-fn continue_app_after_apply<'scope, State>(
+fn continue_app_after_apply<State>(
     runtime: &RuntimeCore<State>,
-    scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
+    scope: &mut RootScope<'_>,
+    frames: &mut FrameStore<Frame<RootedPtr, ScopedEnvironment>>,
     frame_id: FrameId,
-    mut frame: FrApp<RootedPtr<'scope>, ScopedEnvironment<'scope>>,
-    applied: Option<RootedPtr<'scope>>,
-) -> Result<EvalControl<'scope>, EngineError>
+    mut frame: FrApp<RootedPtr, ScopedEnvironment>,
+    applied: Option<RootedPtr>,
+) -> Result<EvalControl, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -1483,13 +1263,13 @@ where
     }
 }
 
-fn eval_resolve_var<'scope, State>(
+fn eval_resolve_var<State>(
     runtime: &RuntimeCore<State>,
-    scope: &mut RootScope<'_, 'scope>,
-    env: &ScopedEnvironment<'scope>,
+    scope: &mut RootScope<'_>,
+    env: &ScopedEnvironment,
     name: &Symbol,
     typ: &Type,
-) -> Result<EvalVarResult<'scope>, EngineError>
+) -> Result<EvalVarResult, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -1498,7 +1278,11 @@ where
             .root_as_native(ptr)?
             .filter(|native| native.arity == 0 && native.applied.is_empty());
         if let Some(native) = native {
-            native.call_zero(runtime).map(EvalVarResult::AwaitNative)
+            match native.call_zero(runtime, scope)? {
+                NativeApplyResult::Value(value) => Ok(EvalVarResult::Value(value)),
+                NativeApplyResult::Task(task) => Ok(EvalVarResult::PushNative(task)),
+                NativeApplyResult::Pending(call) => Ok(EvalVarResult::AwaitNative(call)),
+            }
         } else {
             Ok(EvalVarResult::Value(ptr))
         }
@@ -1516,21 +1300,25 @@ where
             .root_as_native(ctx_root)?
             .filter(|native| native.arity == 0 && native.applied.is_empty());
         if let Some(native) = native {
-            native.call_zero(runtime).map(EvalVarResult::AwaitNative)
+            match native.call_zero(runtime, scope)? {
+                NativeApplyResult::Value(value) => Ok(EvalVarResult::Value(value)),
+                NativeApplyResult::Task(task) => Ok(EvalVarResult::PushNative(task)),
+                NativeApplyResult::Pending(call) => Ok(EvalVarResult::AwaitNative(call)),
+            }
         } else {
             Ok(EvalVarResult::Value(ctx_root))
         }
     }
 }
 
-fn apply_record_update_values<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    base_ptr: RootedPtr<'scope>,
-    update_vals: BTreeMap<Symbol, RootedPtr<'scope>>,
-) -> Result<RootedPtr<'scope>, EngineError> {
-    enum RecordUpdateTarget<'a> {
-        Dict(BTreeMap<Symbol, RootedPtr<'a>>),
-        Adt(Symbol, BTreeMap<Symbol, RootedPtr<'a>>),
+fn apply_record_update_values(
+    scope: &mut RootScope<'_>,
+    base_ptr: RootedPtr,
+    update_vals: BTreeMap<Symbol, RootedPtr>,
+) -> Result<RootedPtr, EngineError> {
+    enum RecordUpdateTarget {
+        Dict(BTreeMap<Symbol, RootedPtr>),
+        Adt(Symbol, BTreeMap<Symbol, RootedPtr>),
     }
 
     let target = match scope.type_name(base_ptr)? {
@@ -1576,11 +1364,11 @@ pub(crate) fn unexpected_child_result<T>(frame: &'static str) -> Result<T, Engin
     )))
 }
 
-fn match_pattern_ptr<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn match_pattern_ptr(
+    scope: &mut RootScope<'_>,
     pat: &Pattern,
-    value: RootedPtr<'scope>,
-) -> Result<Option<BTreeMap<Symbol, RootedPtr<'scope>>>, EngineError> {
+    value: RootedPtr,
+) -> Result<Option<BTreeMap<Symbol, RootedPtr>>, EngineError> {
     match pat {
         Pattern::Wildcard(..) => Ok(Some(BTreeMap::new())),
         Pattern::Var(var) => {
@@ -1673,11 +1461,11 @@ fn match_pattern_ptr<'scope>(
     }
 }
 
-fn match_list_patterns<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn match_list_patterns(
+    scope: &mut RootScope<'_>,
     patterns: &[Pattern],
-    values: ListItems<RootedPtr<'scope>>,
-) -> Result<Option<BTreeMap<Symbol, RootedPtr<'scope>>>, EngineError> {
+    values: ListItems<RootedPtr>,
+) -> Result<Option<BTreeMap<Symbol, RootedPtr>>, EngineError> {
     if patterns.len() != values.len() {
         return Ok(None);
     }
@@ -1696,11 +1484,11 @@ fn match_list_patterns<'scope>(
     Ok(Some(bindings))
 }
 
-fn match_patterns<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn match_patterns(
+    scope: &mut RootScope<'_>,
     patterns: &[Pattern],
-    values: &[RootedPtr<'scope>],
-) -> Result<Option<BTreeMap<Symbol, RootedPtr<'scope>>>, EngineError> {
+    values: &[RootedPtr],
+) -> Result<Option<BTreeMap<Symbol, RootedPtr>>, EngineError> {
     let mut bindings = BTreeMap::new();
     for (index, p) in patterns.iter().enumerate() {
         let value = values[index];
@@ -1725,11 +1513,11 @@ fn runtime_ctor_matches(actual: &Symbol, expected: &Symbol) -> bool {
             .unwrap_or(expected.as_ref())
 }
 
-fn alloc_uint_literal_as<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn alloc_uint_literal_as(
+    scope: &mut RootScope<'_>,
     value: u64,
     typ: &Type,
-) -> Result<RootedPtr<'scope>, EngineError> {
+) -> Result<RootedPtr, EngineError> {
     match typ.as_ref() {
         TypeKind::Var(_) => Ok(scope.alloc_root_i32(i32::try_from(value).map_err(|_| {
             EngineError::NativeType {
@@ -1807,11 +1595,11 @@ fn alloc_uint_literal_as<'scope>(
     }
 }
 
-fn alloc_int_literal_as<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn alloc_int_literal_as(
+    scope: &mut RootScope<'_>,
     value: i64,
     typ: &Type,
-) -> Result<RootedPtr<'scope>, EngineError> {
+) -> Result<RootedPtr, EngineError> {
     match typ.as_ref() {
         TypeKind::Var(_) => Ok(scope.alloc_root_i32(i32::try_from(value).map_err(|_| {
             EngineError::NativeType {
@@ -1889,11 +1677,11 @@ fn alloc_int_literal_as<'scope>(
     }
 }
 
-fn alloc_float_literal_as<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn alloc_float_literal_as(
+    scope: &mut RootScope<'_>,
     value: f64,
     typ: &Type,
-) -> Result<RootedPtr<'scope>, EngineError> {
+) -> Result<RootedPtr, EngineError> {
     match typ.as_ref() {
         TypeKind::Var(_) => scope.alloc_root_f32(value as f32),
         TypeKind::Con(tc) => match tc.builtin_id() {
@@ -1911,30 +1699,31 @@ fn alloc_float_literal_as<'scope>(
     }
 }
 
-enum EvalApplyResult<'scope> {
-    Value(RootedPtr<'scope>),
+enum EvalApplyResult {
+    Value(RootedPtr),
     Push {
         expr: Arc<TypedExpr>,
-        env: ScopedEnvironment<'scope>,
+        env: ScopedEnvironment,
     },
-    PushNative(NativeTask<RootedPtr<'scope>>),
-    AwaitNative(NativeCallRequest<'scope>),
+    PushNative(NativeTask<RootedPtr>),
+    AwaitNative(NativeCallRequest),
 }
 
-enum EvalVarResult<'scope> {
-    Value(RootedPtr<'scope>),
+enum EvalVarResult {
+    Value(RootedPtr),
     Push {
         expr: Arc<TypedExpr>,
-        env: ScopedEnvironment<'scope>,
+        env: ScopedEnvironment,
     },
-    AwaitNative(NativeCallRequest<'scope>),
+    PushNative(NativeTask<RootedPtr>),
+    AwaitNative(NativeCallRequest),
 }
 
-fn project_pointer<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn project_pointer(
+    scope: &mut RootScope<'_>,
     field: &Symbol,
-    pointer: RootedPtr<'scope>,
-) -> Result<RootedPtr<'scope>, EngineError> {
+    pointer: RootedPtr,
+) -> Result<RootedPtr, EngineError> {
     if let Ok(index) = field.as_ref().parse::<usize>() {
         if scope.type_name(pointer)? != "tuple" {
             return Err(EngineError::UnknownField {
@@ -1980,11 +1769,11 @@ fn project_pointer<'scope>(
         })
 }
 
-fn synthetic_rooted_application_expr_from_head<'scope>(
-    mut env: ScopedEnvironment<'scope>,
+fn synthetic_rooted_application_expr_from_head(
+    mut env: ScopedEnvironment,
     head: TypedExpr,
-    args: &[(RootedPtr<'scope>, Type)],
-) -> Result<(ScopedEnvironment<'scope>, TypedExpr), EngineError> {
+    args: &[(RootedPtr, Type)],
+) -> Result<(ScopedEnvironment, TypedExpr), EngineError> {
     let mut expr = head;
     let mut cur_type = expr.typ.clone();
 
@@ -2012,138 +1801,8 @@ fn synthetic_rooted_application_expr_from_head<'scope>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        Builder, Module,
-        compiler::CompileOptions,
-        config::{NativeAsyncPermit, ParallelismController},
-    };
+    use crate::memory::heap::HeapState;
     use rex_ast::{Span, Var};
-    use std::{
-        sync::atomic::{AtomicUsize, Ordering},
-        task::{Context as TaskContext, Poll},
-    };
-
-    struct HeapInspectingParallelismController {
-        heap: Heap,
-        checks: Arc<AtomicUsize>,
-    }
-
-    impl ParallelismController for HeapInspectingParallelismController {
-        fn ready_work_limit(&self) -> usize {
-            assert!(
-                self.heap.is_unlocked_for_test(),
-                "ready_work_limit was invoked while the evaluator held the heap lock"
-            );
-            self.checks.fetch_add(1, Ordering::SeqCst);
-            64
-        }
-
-        fn poll_acquire_native_async(
-            &self,
-            _cx: &mut TaskContext<'_>,
-        ) -> Poll<Result<NativeAsyncPermit, EngineError>> {
-            Poll::Ready(Ok(NativeAsyncPermit::noop()))
-        }
-    }
-
-    #[tokio::test]
-    async fn host_scheduler_limits_are_sampled_outside_the_heap_lock() {
-        let mut builder = Builder::with_prelude(()).unwrap();
-        let checks = Arc::new(AtomicUsize::new(0));
-        builder.set_parallelism_controller(Arc::new(HeapInspectingParallelismController {
-            heap: builder.heap().clone(),
-            checks: Arc::clone(&checks),
-        }));
-
-        let compiler = builder.build_compiler();
-        let parsed = rex_parser::parse("1 + 2").unwrap();
-        let (program, evaluator) = compiler
-            .compile_program(
-                &parsed,
-                CompileOptions::for_module("test.heap_lock").unwrap(),
-            )
-            .await
-            .unwrap();
-        let result = evaluator.run(program, Default::default()).await.unwrap();
-
-        assert_eq!(result.as_i32().unwrap(), 3);
-        assert!(checks.load(Ordering::SeqCst) > 1);
-    }
-
-    async fn run_failing_program(builder: Builder, source: &str) -> (Heap, EngineError) {
-        let heap = builder.heap().clone();
-        let compiler = builder.build_compiler();
-        let parsed = rex_parser::parse(source).expect("test program should parse");
-        let (program, evaluator) = compiler
-            .compile_program(
-                &parsed,
-                CompileOptions::for_module("test.root_cleanup").unwrap(),
-            )
-            .await
-            .expect("test program should compile");
-        let error = evaluator
-            .run(program, Default::default())
-            .await
-            .expect_err("test program should fail during evaluation");
-        (heap, error)
-    }
-
-    #[tokio::test]
-    async fn host_error_releases_persistent_evaluator_roots() {
-        let mut builder = Builder::new(());
-        let mut module = Module::global();
-        module
-            .export("fail", |_: &()| {
-                Err::<i32, _>(EngineError::Custom("expected failure".into()))
-            })
-            .unwrap();
-        builder.inject_module(module).unwrap();
-
-        let (heap, error) = run_failing_program(builder, "fail").await;
-
-        assert!(matches!(error, EngineError::Custom(message) if message == "expected failure"));
-        assert_eq!(heap.registered_root_count_for_test().unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn locked_cycle_error_releases_persistent_evaluator_roots() {
-        let builder = Builder::with_prelude(()).unwrap();
-
-        let (heap, error) = run_failing_program(builder, "mean ([] is List f64)").await;
-
-        assert!(matches!(error, EngineError::EmptySequence));
-        assert_eq!(heap.registered_root_count_for_test().unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn cancelling_evaluation_releases_persistent_evaluator_roots() {
-        let mut builder = Builder::new(());
-        let mut module = Module::global();
-        module
-            .export_async("wait_forever", |_: &()| async {
-                futures::future::pending::<()>().await;
-                Ok(0i32)
-            })
-            .unwrap();
-        builder.inject_module(module).unwrap();
-        let heap = builder.heap().clone();
-        let compiler = builder.build_compiler();
-        let parsed = rex_parser::parse("(wait_forever, true)").unwrap();
-        let (program, evaluator) = compiler
-            .compile_program(
-                &parsed,
-                CompileOptions::for_module("test.root_cleanup").unwrap(),
-            )
-            .await
-            .unwrap();
-        let mut evaluation = Box::pin(evaluator.run(program, Default::default()));
-
-        assert!(futures::poll!(evaluation.as_mut()).is_pending());
-        assert!(heap.registered_root_count_for_test().unwrap() > 0);
-        drop(evaluation);
-
-        assert_eq!(heap.registered_root_count_for_test().unwrap(), 0);
-    }
 
     fn wildcard() -> Pattern {
         Pattern::Wildcard(Span::default())
@@ -2151,37 +1810,32 @@ mod tests {
 
     #[test]
     fn binary_list_length_and_wildcard_patterns_do_not_allocate_elements() {
-        let heap = Heap::new();
+        let mut heap = HeapState::new();
         let list = heap
-            .alloc_binary_list(vec![10, 20, 30, 40])
+            .machine_root_scope(|scope| scope.alloc_root_binary_list(vec![10, 20, 30, 40]))
             .expect("binary list should allocate");
-        heap.set_extreme_stress(true)
-            .expect("collection setting should succeed");
-        let collections_before = heap
-            .collection_count()
-            .expect("collection count should be available");
+        heap.set_extreme_stress(true);
+        let collections_before = heap.collection_count();
 
         let empty = Pattern::List(Span::default(), Vec::new());
-        heap.with_root_scope(|scope| {
-            let list = scope.root_handle(&list)?;
+        heap.root_scope(|scope| {
             assert!(
                 match_pattern_ptr(scope, &empty, list)
                     .expect("pattern matching should not error")
                     .is_none()
             );
-            Ok(())
+            Ok::<(), EngineError>(())
         })
         .unwrap();
 
         let wrong_len = Pattern::List(Span::default(), vec![wildcard()]);
-        heap.with_root_scope(|scope| {
-            let list = scope.root_handle(&list)?;
+        heap.root_scope(|scope| {
             assert!(
                 match_pattern_ptr(scope, &wrong_len, list)
                     .expect("pattern matching should not error")
                     .is_none()
             );
-            Ok(())
+            Ok::<(), EngineError>(())
         })
         .unwrap();
 
@@ -2189,8 +1843,7 @@ mod tests {
             Span::default(),
             vec![wildcard(), wildcard(), wildcard(), wildcard()],
         );
-        heap.with_root_scope(|scope| {
-            let list = scope.root_handle(&list)?;
+        heap.root_scope(|scope| {
             assert_eq!(
                 match_pattern_ptr(scope, &exact_wildcards, list)
                     .expect("pattern matching should not error")
@@ -2198,12 +1851,11 @@ mod tests {
                     .len(),
                 0
             );
-            Ok(())
+            Ok::<(), EngineError>(())
         })
         .unwrap();
         assert_eq!(
-            heap.collection_count()
-                .expect("collection count should be available"),
+            heap.collection_count(),
             collections_before,
             "matching must not allocate a heap cell for each byte"
         );
@@ -2211,16 +1863,14 @@ mod tests {
 
     #[test]
     fn nested_binary_list_bindings_survive_collection() {
-        let heap = Heap::new();
-        let first = heap
-            .alloc_binary_list(vec![10])
-            .expect("first binary list should allocate");
-        let second = heap
-            .alloc_binary_list(vec![20])
-            .expect("second binary list should allocate");
+        let mut heap = HeapState::new();
         let outer = heap
-            .alloc_list(vec![first, second])
-            .expect("outer list should allocate");
+            .machine_root_scope(|scope| {
+                let first = scope.alloc_root_binary_list(vec![10])?;
+                let second = scope.alloc_root_binary_list(vec![20])?;
+                scope.alloc_root_list(vec![first, second])
+            })
+            .expect("nested binary lists should allocate");
         let x = Symbol::intern("x");
         let y = Symbol::intern("y");
         let pattern = Pattern::List(
@@ -2231,13 +1881,9 @@ mod tests {
             ],
         );
 
-        heap.set_extreme_stress(true)
-            .expect("collection setting should succeed");
-        let collections_before = heap
-            .collection_count()
-            .expect("collection count should be available");
-        heap.with_root_scope(|scope| {
-            let outer = scope.root_handle(&outer)?;
+        heap.set_extreme_stress(true);
+        let collections_before = heap.collection_count();
+        heap.root_scope(|scope| {
             let bindings = match_pattern_ptr(scope, &pattern, outer)
                 .expect("pattern matching should not error")
                 .expect("nested list pattern should match");
@@ -2245,13 +1891,11 @@ mod tests {
             assert_eq!(scope.root_as_u8(x).expect("x should be a u8"), 10);
             let y = *bindings.get(&y).expect("y should be bound");
             assert_eq!(scope.root_as_u8(y).expect("y should be a u8"), 20);
-            Ok(())
+            Ok::<(), EngineError>(())
         })
         .unwrap();
         assert_eq!(
-            heap.collection_count()
-                .expect("collection count should be available")
-                - collections_before,
+            heap.collection_count() - collections_before,
             2,
             "only the two bound bytes should be materialized"
         );

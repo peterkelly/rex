@@ -1,13 +1,13 @@
 mod common;
 
 use rex::{
-    engine::Builder,
+    engine::{Builder, Value},
     typesystem::{BuiltinTypeId, Type, TypeKind},
 };
 
 #[tokio::test]
 async fn let_rec_self_recursive_factorial() {
-    let (heap, handle, ty) = common::eval_source(
+    let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
         r#"
         let rec
@@ -24,13 +24,13 @@ async fn let_rec_self_recursive_factorial() {
     .await
     .unwrap();
     common::assert_i32_or_var(&ty);
-    let expected = heap.alloc_i32(720).unwrap();
+    let expected = Value::I32(720);
     common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_self_recursive_fibonacci() {
-    let (heap, handle, ty) = common::eval_source(
+    let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
         r#"
         let rec
@@ -46,13 +46,13 @@ async fn let_rec_self_recursive_fibonacci() {
     .await
     .unwrap();
     common::assert_i32_or_var(&ty);
-    let expected = heap.alloc_i32(21).unwrap();
+    let expected = Value::I32(21);
     common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_mutual_even_odd() {
-    let (heap, handle, ty) = common::eval_source(
+    let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
         r#"
         let rec
@@ -74,17 +74,18 @@ async fn let_rec_mutual_even_odd() {
         ])
     );
 
-    let t0 = heap.alloc_bool(true).unwrap();
-    let t1 = heap.alloc_bool(false).unwrap();
-    let t2 = heap.alloc_bool(false).unwrap();
-    let t3 = heap.alloc_bool(true).unwrap();
-    let expected = heap.alloc_tuple(vec![t0, t1, t2, t3]).unwrap();
+    let expected = Value::Tuple(vec![
+        Value::Bool(true),
+        Value::Bool(false),
+        Value::Bool(false),
+        Value::Bool(true),
+    ]);
     common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_mutual_three_function_group() {
-    let (heap, handle, ty) = common::eval_source(
+    let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
         r#"
         let rec
@@ -105,16 +106,13 @@ async fn let_rec_mutual_three_function_group() {
         common::assert_i32_or_var(item);
     }
 
-    let a = heap.alloc_i32(0).unwrap();
-    let b = heap.alloc_i32(1).unwrap();
-    let c = heap.alloc_i32(2).unwrap();
-    let expected = heap.alloc_tuple(vec![a, b, c]).unwrap();
+    let expected = Value::Tuple(vec![Value::I32(0), Value::I32(1), Value::I32(2)]);
     common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_function_is_still_polymorphic() {
-    let (heap, handle, ty) = common::eval_source(
+    let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
         r#"
         let rec
@@ -131,15 +129,13 @@ async fn let_rec_function_is_still_polymorphic() {
     assert_eq!(items.len(), 2);
     common::assert_i32_or_var(&items[0]);
     assert_eq!(items[1], Type::builtin(BuiltinTypeId::Bool));
-    let one = heap.alloc_i32(1).unwrap();
-    let tru = heap.alloc_bool(true).unwrap();
-    let expected = heap.alloc_tuple(vec![one, tru]).unwrap();
+    let expected = Value::Tuple(vec![Value::I32(1), Value::Bool(true)]);
     common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_allows_sequential_value_bindings() {
-    let (heap, handle, ty) = common::eval_source(
+    let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
         r#"
         let rec
@@ -152,13 +148,13 @@ async fn let_rec_allows_sequential_value_bindings() {
     .await
     .unwrap();
     common::assert_i32_or_var(&ty);
-    let expected = heap.alloc_i32(2).unwrap();
+    let expected = Value::I32(2);
     common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_value_may_reference_earlier_function() {
-    let (heap, handle, ty) = common::eval_source(
+    let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
         r#"
         let rec
@@ -171,13 +167,13 @@ async fn let_rec_value_may_reference_earlier_function() {
     .await
     .unwrap();
     common::assert_i32_or_var(&ty);
-    let expected = heap.alloc_i32(5).unwrap();
+    let expected = Value::I32(5);
     common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_function_may_reference_later_value() {
-    let (heap, handle, ty) = common::eval_source(
+    let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
         r#"
         let rec
@@ -190,7 +186,7 @@ async fn let_rec_function_may_reference_later_value() {
     .await
     .unwrap();
     common::assert_i32_or_var(&ty);
-    let expected = heap.alloc_i32(41).unwrap();
+    let expected = Value::I32(41);
     common::assert_handles_eq(&handle, &expected);
 }
 

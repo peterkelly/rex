@@ -2,9 +2,7 @@
 
 use rex::{
     ast::CompilationUnit,
-    engine::{
-        Builder, CompileOptions, EngineError, Handle, Heap, Module, Value, ValueDisplayOptions,
-    },
+    engine::{Builder, CompileOptions, EngineError, Module, Value, ValueDisplayOptions},
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type, TypeError, TypeKind},
 };
@@ -56,7 +54,7 @@ pub fn inject_globals<State: Clone + Send + Sync + 'static>(
 pub async fn run_program<State>(
     builder: Builder<State>,
     program: &CompilationUnit,
-) -> Result<(Handle, Type), EngineError>
+) -> Result<(Value, Type), EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -72,38 +70,60 @@ where
 pub async fn eval_source<State>(
     builder: Builder<State>,
     source: &str,
-) -> Result<(Heap, Handle, Type), EngineError>
+) -> Result<((), Value, Type), EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
     let program = parse_rex(source).unwrap();
-    let heap = builder.heap().clone();
     let (handle, ty) = run_program(builder, &program).await?;
-    Ok((heap, handle, ty))
+    Ok(((), handle, ty))
 }
 
-pub fn tuple_items(value: &Handle) -> Vec<Handle> {
-    let Value::Tuple(items) = value.value().unwrap() else {
-        panic!("expected tuple, got {}", value.type_name().unwrap());
+pub fn tuple_items(value: &Value) -> Vec<Value> {
+    let Value::Tuple(items) = value else {
+        panic!("expected tuple, got {}", value.value_type_name());
     };
-    items
+    items.clone()
 }
 
-pub fn list_elements(list: &Handle) -> Vec<Handle> {
-    list.as_list().unwrap()
+pub fn list_elements(list: &Value) -> Vec<Value> {
+    match list {
+        Value::List(items) => items.clone(),
+        Value::Bytes(bytes) => bytes.iter().copied().map(Value::U8).collect(),
+        other => panic!("expected list, got {}", other.value_type_name()),
+    }
 }
 
-pub fn list_from_handles(heap: &Heap, values: Vec<Handle>) -> Result<Handle, EngineError> {
-    heap.alloc_list(values)
+pub fn list_from_values(values: Vec<Value>) -> Value {
+    Value::List(values)
 }
 
-pub fn assert_handles_eq(lhs: &Handle, rhs: &Handle) {
-    assert!(
-        lhs.value_eq(rhs).unwrap(),
+pub fn assert_values_eq(lhs: &Value, rhs: &Value) {
+    assert_eq!(
+        lhs,
+        rhs,
         "left: {}, right: {}",
         lhs.display().unwrap(),
         rhs.display().unwrap()
     );
+}
+
+pub trait TestValue {
+    fn rendered(&self) -> String;
+}
+
+impl TestValue for Value {
+    fn rendered(&self) -> String {
+        self.display_with(ValueDisplayOptions {
+            include_numeric_suffixes: true,
+            ..ValueDisplayOptions::default()
+        })
+        .unwrap()
+    }
+}
+
+pub fn assert_handles_eq(lhs: &impl TestValue, rhs: &impl TestValue) {
+    assert_eq!(lhs.rendered(), rhs.rendered());
 }
 
 pub fn is_i32_or_var(ty: &Type) -> bool {

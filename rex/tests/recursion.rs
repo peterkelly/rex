@@ -1,17 +1,16 @@
 mod common;
 
 use rex::{
-    engine::Builder,
+    engine::{Builder, Value},
     typesystem::{BuiltinTypeId, Type},
 };
 
 async fn assert_i32_result(source: &str, expected: i32) {
-    let (heap, handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), source)
+    let (_, handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), source)
         .await
         .unwrap();
     common::assert_i32_or_var(&ty);
-    let expected = heap.alloc_i32(expected).unwrap();
-    common::assert_handles_eq(&handle, &expected);
+    common::assert_handles_eq(&handle, &Value::I32(expected));
 }
 
 async fn assert_even_odd_tuple(source: &str) {
@@ -22,18 +21,19 @@ async fn assert_even_odd_tuple(source: &str) {
         bool_ty.clone(),
         bool_ty,
     ]);
-    let (heap, handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), source)
+    let (_, handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), source)
         .await
         .unwrap();
     assert_eq!(
         ty, expected_ty,
         "eval returned unexpected type for: {source}"
     );
-    let t0 = heap.alloc_bool(true).unwrap();
-    let t1 = heap.alloc_bool(false).unwrap();
-    let t2 = heap.alloc_bool(false).unwrap();
-    let t3 = heap.alloc_bool(true).unwrap();
-    let expected = heap.alloc_tuple(vec![t0, t1, t2, t3]).unwrap();
+    let expected = Value::Tuple(vec![
+        Value::Bool(true),
+        Value::Bool(false),
+        Value::Bool(false),
+        Value::Bool(true),
+    ]);
     common::assert_handles_eq(&handle, &expected);
 }
 

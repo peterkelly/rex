@@ -5,7 +5,7 @@ Rex is designed as a small pipeline you can embed at whatever stage you need:
 1. `rex-parser`: source → `CompilationUnit { decls, body }`
 2. `rex-typesystem`: HM inference + type classes → `TypedExpr` (plus predicates/type)
 3. `rex-engine`: build host modules, compile typed code into `CompiledProgram`, then run it →
-   `rex_engine::Handle`
+   `rex_engine::Value`
 
 This document focuses on common embedding patterns.
 
@@ -34,7 +34,7 @@ Evaluation API:
 
 The whole builder/compiler/evaluator lineage is single-use. `Builder::build_compiler()` consumes
 the builder, `Compiler::compile_program` and `Compiler::infer_*` consume the compiler, and
-`Evaluator::run` consumes the evaluator, the compiled program, and a `BTreeMap<String, Handle>` of
+`Evaluator::run` consumes the evaluator, the compiled program, and a `BTreeMap<String, Value>` of
 inputs. Programs are compiled with Rex's singular external interface semantics: an explicit
 `fn main ...` defines named runtime inputs, while a final expression without `main` is treated as
 an implicit zero-input `main`.
@@ -86,19 +86,17 @@ Phase-specific errors:
 
 ### Runtime Values and Heap Ownership
 
-Rex uses a moving copying collector, but embedders never receive a heap location. `Heap` is a
-cloneable, thread-safe allocation capability, and `Handle` is a registered root. A handle remains
-valid across later allocations, collections, thread transfers, and `await` points; callers do not
-refresh it manually.
+Rex uses a moving copying collector, but the heap is entirely private and has one owner. External
+`main` inputs and evaluation results are owned `Value` trees containing no heap references.
+Composite variants recursively contain `Value`; closures, native functions, overloaded functions,
+and uninitialized cells cannot cross this boundary and produce a conversion error.
 
-External `main` inputs must be handles from the evaluator's own heap. Use `Evaluator::heap()` to
-allocate them before consuming the evaluator with `run`; a handle from another heap is rejected
-with an engine error. Evaluation results and composite children returned by `Handle::value()` are
-also rooted handles.
+`Value::List` represents ordinary lists. `Value::Bytes` is the required representation for Rex
+`List U8`, including empty lists and lists whose internal representation mixes cons cells and
+vector-backed slices. `Bytes` is an embedding optimization, not a distinct Rex language type.
 
-Public heap allocation and handle inspection operations acquire the heap mutex, and allocation may
-collect. This is safe at the embedding boundary. Internally, the evaluator does not expose `Heap`
-to its locked synchronous cycle and invokes host callbacks only after releasing that lock. See
+Host functions receive owned values before they start and return owned values that are validated
+and imported only after completion. Async host futures therefore contain no heap capability. See
 [Memory Management](MEMORY_MANAGEMENT.md) for the complete internal ownership model.
 
 Compile parsed Rex sources with `Compiler::compile_program` and pass the resulting
@@ -277,11 +275,11 @@ compiler.
 `export_async` handlers follow the same rule, but return
 `Future<Output = Result<T, EngineError>>`.
 
-Both forms execute after the evaluator releases its heap mutex. Arguments are promoted to rooted
-handles before the call is queued, and the result remains a handle until a later locked evaluator
-cycle roots it. Synchronous handlers resume through an immediately-ready native completion; they
-do not consume async-native permits or pass through `AsyncCallPolicy`. They run on the evaluator
-task, so blocking or long-running work belongs in an asynchronous export.
+Both forms receive owned arguments copied from the evaluator heap. The returned owned value is
+validated and imported in a later evaluator cycle. Synchronous handlers resume through an
+immediately-ready native completion; they do not consume async-native permits or pass through
+`AsyncCallPolicy`. They run on the evaluator task, so blocking or long-running work belongs in an
+asynchronous export.
 
 ```rust,ignore
 use rex::{
@@ -347,7 +345,7 @@ If you need to construct exports separately (for example to build a module from 
 you can use:
 
 - `Export::from_handler` / `Export::from_async_handler` (typed handlers)
-- `Export::from_native` / `Export::from_native_async` (handle-based native handlers)
+- `Export::from_native` / `Export::from_native_async` (value-based native handlers)
 
 Then add them via `Module::add_export`, or push them into `Module::exports` directly if you are
 assembling the module programmatically.
@@ -416,7 +414,7 @@ In that example:
 - `Left` and `Right` are imported as constructor values.
 - `render_label` is imported as a value.
 
-### 3a) Runtime-Defined Signatures (`Handle` APIs)
+### 3a) Runtime-Defined Signatures (`Value` APIs)
 
 If your host determines function signatures/behavior at runtime, use the native module export
 APIs and provide an explicit `Scheme` + arity:
@@ -427,23 +425,22 @@ APIs and provide an explicit `Scheme` + arity:
 These callbacks receive `Context<State>` (not just `&State`), so they can:
 
 - read state via `ctx.state()`
-- allocate new values via `ctx.heap()`
 - inspect typed call information via the explicit `&Type` / `Type` callback parameter
 
 Async native callbacks receive owned argument vectors and return `Send + 'static` futures. The
-host scheduler owns and polls those futures outside the heap lock while evaluator frames survive
-separately through evaluator-owned persistent roots.
-Synchronous native callbacks use the same `Context`/`Handle` boundary and completion machinery,
+host scheduler owns and polls those futures while the evaluator retains exclusive heap ownership.
+`Context` retains only shared host state and type-system metadata; it does not retain evaluator
+registries, runtime roots, or another indirect heap capability.
+Synchronous native callbacks use the same `Context`/`Value` boundary and completion machinery,
 but produce an immediately-ready result. They are not subject to async admission or executor
 policy and should remain short and nonblocking.
 
-A callback may return a clone of an argument or a value allocated through `ctx.heap()`. Any
-returned `Handle` must belong to that same heap; returning a handle from an independently created
-heap fails evaluation rather than copying the value implicitly.
+A callback owns its `Vec<Value>` arguments and may move an argument directly into its result. It
+may also construct a new owned `Value`; it cannot inspect or allocate in the evaluator heap.
 
 ```rust,ignore
 use futures::FutureExt;
-use rex_engine::{Builder, Context, Handle, Module};
+use rex_engine::{Builder, Context, Module, Value};
 use rex::typesystem::{BuiltinTypeId, Scheme, Type};
 
 let mut builder = Builder::with_prelude(())?;
@@ -451,12 +448,12 @@ let mut builder = Builder::with_prelude(())?;
 let mut m = Module::new("acme.dynamic");
 let scheme = Scheme::new(vec![], vec![], Type::fun(Type::builtin(BuiltinTypeId::I32), Type::builtin(BuiltinTypeId::I32)));
 
-m.export_native("id_handle", scheme.clone(), 1, |_ctx: Context<()>, _typ: &Type, args: &[Handle]| {
-    Ok(args[0].clone())
+m.export_native("id_value", scheme.clone(), 1, |_ctx: Context<()>, _typ: &Type, mut args: Vec<Value>| {
+    Ok(args.remove(0))
 })?;
 
-m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32)), 0, |ctx: Context<()>, _typ: Type, _args: Vec<Handle>| {
-    async move { ctx.heap().alloc_i32(42) }.boxed()
+m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32)), 0, |_ctx: Context<()>, _typ: Type, _args: Vec<Value>| {
+    async move { Ok(Value::I32(42)) }.boxed()
 })?;
 
 builder.inject_module(m)?;
@@ -583,9 +580,8 @@ injected functions.
 - Use `Builder::with_prelude(())?` if you do not need host state.
 - If you do, pass your state struct into `Builder::new(state)` or `Builder::with_prelude(state)`.
 - `export` / `export_async` callbacks receive `&State` as their first parameter.
-- Handle-based native APIs (`export_native*`) receive
-  `Context<State>` so
-  they can allocate public handles through the heap and read `ctx.state()`.
+- Value-based native APIs (`export_native*`) receive `Context<State>` so they can read
+  `ctx.state()`; the context deliberately exposes no heap access.
 
 ```rust,ignore
 use rex_engine::{Builder, Module};
@@ -780,6 +776,9 @@ globals.export("inc", |_state, x: i32| { Ok(x + 1) })?;
 builder.inject_module(globals)?;
 ```
 
+Owned constants are converted and imported once when their module is installed. Reading a constant
+does not invoke a host callback or repeat the `Value` boundary conversion.
+
 ### Integer Literal Overloading with Host Natives
 
 Integer literals are overloaded (`Integral a`) and can specialize at call sites. This works for
@@ -847,10 +846,9 @@ portable and avoids assuming a particular runtime, which is important for wasm e
 polling is fine for futures that are naturally non-blocking, but CPU-heavy or blocking work should
 be moved onto an executor supplied by the embedding application.
 
-Admission, callback invocation, and future polling all occur outside the locked evaluator cycle.
-Arguments and completed results remain registered `Handle` roots throughout suspension, so an
-async callback may retain its arguments or allocate through its `Context` without depending on a
-pre-collection heap location.
+Admission, callback invocation, and future polling occur without lending out the evaluator heap.
+Arguments and completed results are owned `Value`s throughout suspension, so an async callback may
+retain or move them without depending on a heap location.
 
 Use `set_parallelism_controller` to decide when async host callbacks may be invoked. A
 `ParallelismController` grants a `NativeAsyncPermit` for each admitted
@@ -932,7 +930,7 @@ field annotation is required. Such leaf types inherit the default no-op family c
 ```rust,ignore
 use rex::{
     Rex,
-    engine::{Builder, EngineError, FromRex, Handle, Heap, IntoRex},
+    engine::{Builder, EngineError, FromRex, IntoRex, Value},
     typesystem::{RexType, Type},
 };
 
@@ -946,14 +944,14 @@ impl RexType for AtomRef {
 }
 
 impl IntoRex for AtomRef {
-    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
-        self.0.into_rex(heap)
+    fn into_rex(self) -> Result<Value, EngineError> {
+        self.0.into_rex()
     }
 }
 
 impl FromRex for AtomRef {
-    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
-        Ok(Self(i32::from_rex(handle)?))
+    fn from_rex(value: Value) -> Result<Self, EngineError> {
+        Ok(Self(i32::from_rex(value)?))
     }
 }
 

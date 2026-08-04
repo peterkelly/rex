@@ -13,11 +13,11 @@ use rex::{
 // Each pair below keeps the same declarations and changes only their order.
 
 async fn assert_i32_result(source: &str, expected: i32) {
-    let (heap, handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), source)
+    let (_heap, handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), source)
         .await
         .unwrap();
     common::assert_i32_or_var(&ty);
-    let expected = heap.alloc_i32(expected).unwrap();
+    let expected = rex::engine::Value::I32(expected);
     common::assert_handles_eq(&handle, &expected);
 }
 
@@ -29,18 +29,19 @@ async fn assert_even_odd_tuple(source: &str) {
         bool_ty.clone(),
         bool_ty,
     ]);
-    let (heap, handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), source)
+    let (_heap, handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), source)
         .await
         .unwrap();
     assert_eq!(
         ty, expected_ty,
         "eval returned unexpected type for: {source}"
     );
-    let t0 = heap.alloc_bool(true).unwrap();
-    let t1 = heap.alloc_bool(false).unwrap();
-    let t2 = heap.alloc_bool(false).unwrap();
-    let t3 = heap.alloc_bool(true).unwrap();
-    let expected = heap.alloc_tuple(vec![t0, t1, t2, t3]).unwrap();
+    let expected = rex::engine::Value::Tuple(vec![
+        rex::engine::Value::Bool(true),
+        rex::engine::Value::Bool(false),
+        rex::engine::Value::Bool(false),
+        rex::engine::Value::Bool(true),
+    ]);
     common::assert_handles_eq(&handle, &expected);
 }
 

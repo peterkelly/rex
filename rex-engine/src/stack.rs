@@ -15,10 +15,8 @@ pub(crate) struct FrameId(usize);
 
 /// Evaluator-owned storage for control frames.
 ///
-/// The generic frame representation distinguishes scope-rooted frames used
-/// during one locked synchronous cycle from persistent frames whose values are
-/// `PersistentPtr` tokens. Completed frames are removed promptly; their
-/// identifiers are never reused.
+/// Frames retain stable evaluator root tokens across asynchronous host waits.
+/// Completed frames are removed promptly; their identifiers are never reused.
 pub(crate) struct FrameStore<F> {
     next_id: usize,
     frames: BTreeMap<FrameId, F>,

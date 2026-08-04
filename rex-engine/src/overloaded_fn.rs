@@ -23,8 +23,4 @@ impl<P> OverloadedFn<P> {
             applied_types,
         }
     }
-
-    pub(crate) fn name(&self) -> &Symbol {
-        &self.name
-    }
 }

@@ -1,7 +1,7 @@
 use futures::{FutureExt, channel::oneshot};
 use rex_engine::{
     AsyncCallExecutor, AsyncCallPolicy, Builder, CompileOptions, EngineError, ExecutionBounds,
-    FromRex, Handle, Module, NativeAsyncPermit, NativeFuture, ParallelismController,
+    Module, NativeAsyncPermit, NativeFuture, ParallelismController, Value,
 };
 use rex_parser::parse as parse_rex;
 use rex_typesystem::types::{BuiltinTypeId, Scheme, Type};
@@ -17,7 +17,7 @@ use std::time::Duration;
 async fn eval_value<State>(
     source: &str,
     builder: Builder<State>,
-) -> Result<(Handle, Type), EngineError>
+) -> Result<(Value, Type), EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -33,7 +33,7 @@ where
 
 async fn eval_i32(source: &str, builder: Builder<()>) -> i32 {
     let (value, _typ) = eval_value(source, builder).await.unwrap();
-    i32::from_rex(&value).unwrap()
+    value.as_i32().unwrap()
 }
 
 async fn wait_for_count(count: &AtomicUsize, expected: usize) -> bool {
@@ -57,6 +57,14 @@ struct GateParts {
     started_tx: mpsc::Sender<i32>,
     releases: Arc<Mutex<VecDeque<oneshot::Receiver<()>>>>,
     control: GateControl,
+}
+
+struct DropCounter(Arc<AtomicUsize>);
+
+impl Drop for DropCounter {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 struct DynamicPermitController {
@@ -285,12 +293,12 @@ fn builder_with_gate_and_even_gate(
     (builder, value_parts.control, even_parts.control)
 }
 
-async fn eval_with_gates(source: &str, gate_count: usize) -> (Handle, Type, Vec<i32>) {
+async fn eval_with_gates(source: &str, gate_count: usize) -> (Value, Type, Vec<i32>) {
     let (builder, gate) = builder_with_gate(gate_count);
     eval_with_gate_control(source, builder, gate, gate_count).await
 }
 
-async fn eval_with_even_gates(source: &str, gate_count: usize) -> (Handle, Type, Vec<i32>) {
+async fn eval_with_even_gates(source: &str, gate_count: usize) -> (Value, Type, Vec<i32>) {
     let (builder, gate) = builder_with_even_gate(gate_count);
     eval_with_gate_control(source, builder, gate, gate_count).await
 }
@@ -300,7 +308,7 @@ async fn eval_with_gate_control(
     builder: Builder<()>,
     gate: GateControl,
     gate_count: usize,
-) -> (Handle, Type, Vec<i32>) {
+) -> (Value, Type, Vec<i32>) {
     let source = source.to_string();
     let eval_task = tokio::spawn(async move { eval_value(&source, builder).await });
     assert!(
@@ -337,21 +345,21 @@ async fn eval_with_gate_control(
 
 async fn eval_gated_i32(source: &str, gate_count: usize) -> (i32, Vec<i32>) {
     let (value, _ty, started_values) = eval_with_gates(source, gate_count).await;
-    (i32::from_rex(&value).unwrap(), started_values)
+    (value.as_i32().unwrap(), started_values)
 }
 
-fn handle_as_i32_list(value: &Handle) -> Vec<i32> {
+fn handle_as_i32_list(value: &Value) -> Vec<i32> {
     value
         .as_list()
         .unwrap()
         .iter()
-        .map(|item| i32::from_rex(item).unwrap())
+        .map(|item| item.as_i32().unwrap())
         .collect()
 }
 
 fn extreme_stress_builder() -> Builder<()> {
-    let builder = Builder::with_prelude(()).unwrap();
-    builder.heap().set_extreme_stress(true).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
+    builder.set_extreme_gc_stress(true);
     builder
 }
 
@@ -394,8 +402,8 @@ async fn tuple_evaluation_starts_all_async_children() {
         ])
     );
     let values = value.as_tuple().unwrap();
-    assert_eq!(i32::from_rex(&values[0]).unwrap(), 1);
-    assert_eq!(i32::from_rex(&values[1]).unwrap(), 2);
+    assert_eq!(values[0].as_i32().unwrap(), 1);
+    assert_eq!(values[1].as_i32().unwrap(), 2);
 }
 
 #[tokio::test]
@@ -644,7 +652,7 @@ async fn dict_map_preserves_keys_when_callbacks_complete_out_of_order() {
         .expect("gated dict_map evaluation task panicked")
         .expect("gated dict_map evaluation failed");
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_eq!(i32::from_rex(&value).unwrap(), 123);
+    assert_eq!(value.as_i32().unwrap(), 123);
 }
 
 #[tokio::test]
@@ -691,8 +699,8 @@ async fn sibling_map_and_filter_fan_out_their_callbacks() {
         ])
     );
     let values = value.as_tuple().unwrap();
-    assert_eq!(i32::from_rex(&values[0]).unwrap(), 3);
-    assert_eq!(i32::from_rex(&values[1]).unwrap(), 1);
+    assert_eq!(values[0].as_i32().unwrap(), 3);
+    assert_eq!(values[1].as_i32().unwrap(), 1);
 }
 
 #[tokio::test]
@@ -981,6 +989,60 @@ async fn dynamic_native_async_permits_delay_host_callback_invocation() {
 }
 
 #[tokio::test]
+async fn cancelling_evaluation_drops_pending_owned_host_future() {
+    let started = Arc::new(AtomicUsize::new(0));
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let (_release_tx, release_rx) = oneshot::channel::<()>();
+    let release = Arc::new(Mutex::new(Some(release_rx)));
+
+    let mut builder = Builder::with_prelude(()).unwrap();
+    let controller = DynamicPermitController::new(1);
+    builder.set_parallelism_controller(controller.clone());
+    let mut module = Module::global();
+    module
+        .export_async("wait_for_release", {
+            let started = Arc::clone(&started);
+            let dropped = Arc::clone(&dropped);
+            let release = Arc::clone(&release);
+            move |_: &(), value: i32| {
+                let started = Arc::clone(&started);
+                let guard = DropCounter(Arc::clone(&dropped));
+                let release = release
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("missing cancellation gate");
+                async move {
+                    let _guard = guard;
+                    started.fetch_add(1, Ordering::SeqCst);
+                    release.await.unwrap();
+                    Ok(value)
+                }
+            }
+        })
+        .unwrap();
+    builder.inject_module(module).unwrap();
+
+    let eval_task = tokio::spawn(async move { eval_i32("wait_for_release 1", builder).await });
+    assert!(
+        wait_for_count(&started, 1).await,
+        "pending host future was not polled"
+    );
+
+    eval_task.abort();
+    assert!(eval_task.await.unwrap_err().is_cancelled());
+    assert!(
+        wait_for_count(&dropped, 1).await,
+        "cancelling evaluation did not drop the host future"
+    );
+    assert_eq!(
+        controller.active.load(Ordering::SeqCst),
+        0,
+        "cancelling evaluation did not release its async permit"
+    );
+}
+
+#[tokio::test]
 async fn pending_async_bound_delays_invoking_host_callbacks() {
     let invoked = Arc::new(AtomicUsize::new(0));
     let started = Arc::new(AtomicUsize::new(0));
@@ -1070,10 +1132,9 @@ async fn pending_async_bound_delays_invoking_host_callbacks() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn concurrent_host_allocations_survive_repeated_collections() {
+async fn concurrent_host_values_survive_repeated_collections() {
     const HOST_CALLS: usize = 4;
     const STRESS_ROUNDS: usize = 8;
-    const ALLOC_PASSES: i32 = 16;
 
     for round in 0..STRESS_ROUNDS {
         let GateParts {
@@ -1094,7 +1155,7 @@ async fn concurrent_host_allocations_survive_repeated_collections() {
                 let invoked = Arc::clone(&invoked);
                 let started = Arc::clone(&started);
                 let releases = Arc::clone(&releases);
-                move |engine, _, args: Vec<Handle>| {
+                move |_ctx, _, args: Vec<Value>| {
                     let call_id = invoked.fetch_add(1, Ordering::SeqCst);
                     let retained = args.first().cloned();
                     let started = Arc::clone(&started);
@@ -1112,33 +1173,15 @@ async fn concurrent_host_allocations_survive_repeated_collections() {
                         let retained = retained.ok_or_else(|| {
                             EngineError::Internal("missing stress_copy argument".into())
                         })?;
-                        for pass in 0..ALLOC_PASSES {
-                            let noise = (round as i32 * 10_000) + (call_id as i32 * 100) + pass;
-                            let number = engine.heap().alloc_i32(noise)?;
-                            let label = engine.heap().alloc_string(format!(
-                                "round {round}, call {call_id}, pass {pass}"
-                            ))?;
-                            let pair = engine.heap().alloc_tuple(vec![number, label])?;
-                            let _garbage = engine.heap().alloc_list(vec![pair])?;
-                            tokio::task::yield_now().await;
-                        }
-
-                        let copied = retained
-                            .as_list()?
-                            .into_iter()
-                            .map(|value| {
-                                let value = value.as_i32()?;
-                                engine.heap().alloc_i32(value)
-                            })
-                            .collect::<Result<Vec<_>, EngineError>>()?;
-                        engine.heap().alloc_list(copied)
+                        tokio::task::yield_now().await;
+                        Ok(retained)
                     }
                     .boxed()
                 }
             })
             .unwrap();
         builder.inject_module(module).unwrap();
-        builder.heap().set_extreme_stress(true).unwrap();
+        builder.set_extreme_gc_stress(true);
 
         let eval_task = tokio::spawn(async move {
             eval_i32(
@@ -1267,7 +1310,7 @@ async fn extreme_stress_handles_host_callbacks_and_conversions() {
         )
         .unwrap();
     builder.inject_module(module).unwrap();
-    builder.heap().set_extreme_stress(true).unwrap();
+    builder.set_extreme_gc_stress(true);
 
     let result = eval_i32(
         r#"
@@ -1288,7 +1331,7 @@ async fn extreme_stress_handles_host_callbacks_and_conversions() {
 }
 
 #[tokio::test]
-async fn extreme_stress_handles_native_returning_nested_data() {
+async fn extreme_stress_imports_native_owned_nested_data() {
     let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     let i32_ty = Type::builtin(BuiltinTypeId::I32);
@@ -1299,7 +1342,7 @@ async fn extreme_stress_handles_native_returning_nested_data() {
         Type::fun(i32_ty.clone(), Type::list(row_ty)),
     );
     module
-        .export_native("make_nested", scheme, 1, |engine, _, args| {
+        .export_native("make_nested", scheme, 1, |_ctx, _, args| {
             let count = args
                 .first()
                 .ok_or_else(|| EngineError::Internal("missing make_nested argument".into()))?
@@ -1312,28 +1355,14 @@ async fn extreme_stress_handles_native_returning_nested_data() {
 
             let mut rows = Vec::new();
             for i in 1..=count {
-                let mut values = Vec::new();
-                for offset in 0..4 {
-                    let item = engine.heap().alloc_i32(i + offset)?;
-                    let label = engine.heap().alloc_string(format!("{i}:{offset}"))?;
-                    let _ = engine.heap().alloc_tuple(vec![item.clone(), label])?;
-                    values.push(item);
-                }
-                let array = engine.heap().alloc_list(values)?;
-                let base = engine.heap().alloc_i32(i)?;
-                let row = engine.heap().alloc_tuple(vec![base, array])?;
-                for noise in 0..4 {
-                    let value = engine.heap().alloc_i32(i * 100 + noise)?;
-                    let _ = engine.heap().alloc_tuple(vec![row.clone(), value])?;
-                }
-                rows.push(row);
+                let values = (0..4).map(|offset| Value::I32(i + offset)).collect();
+                rows.push(Value::Tuple(vec![Value::I32(i), Value::List(values)]));
             }
-
-            engine.heap().alloc_list(rows)
+            Ok(Value::List(rows))
         })
         .unwrap();
     builder.inject_module(module).unwrap();
-    builder.heap().set_extreme_stress(true).unwrap();
+    builder.set_extreme_gc_stress(true);
 
     let result = eval_i32(
         r#"
@@ -1413,7 +1442,7 @@ async fn extreme_stress_handles_repeated_typeclass_resolution() {
 }
 
 #[tokio::test]
-async fn extreme_stress_handles_async_native_handles_across_awaits() {
+async fn extreme_stress_handles_async_native_values_across_awaits() {
     let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     let list_i32 = Type::list(Type::builtin(BuiltinTypeId::I32));
@@ -1424,29 +1453,24 @@ async fn extreme_stress_handles_async_native_handles_across_awaits() {
             "async_sum_after_alloc",
             scheme,
             1,
-            |engine, _, args: Vec<Handle>| {
+            |_ctx, _, args: Vec<Value>| {
                 async move {
                     let retained = args.first().cloned().ok_or_else(|| {
                         EngineError::Internal("missing async_sum_after_alloc argument".into())
                     })?;
                     tokio::task::yield_now().await;
-                    for value in 0..64 {
-                        let value = engine.heap().alloc_i32(value)?;
-                        let tuple = engine.heap().alloc_tuple(vec![value.clone(), value])?;
-                        let _ = engine.heap().alloc_list(vec![tuple])?;
-                    }
                     let mut sum = 0;
                     for value in retained.as_list()? {
-                        sum += i32::from_rex(&value)?;
+                        sum += value.as_i32()?;
                     }
-                    engine.heap().alloc_i32(sum)
+                    Ok(Value::I32(sum))
                 }
                 .boxed()
             },
         )
         .unwrap();
     builder.inject_module(module).unwrap();
-    builder.heap().set_extreme_stress(true).unwrap();
+    builder.set_extreme_gc_stress(true);
 
     let result = eval_i32(
         r#"

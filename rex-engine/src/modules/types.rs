@@ -4,10 +4,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::{EngineError, modules::ModuleId};
 use rex_ast::Symbol;
-use rex_typesystem::types::Type;
-
-use crate::{EngineError, Handle, modules::ModuleId};
 
 use super::{CompilationPackage, Module};
 
@@ -296,20 +294,6 @@ impl ModuleExports {
 #[derive(Clone)]
 pub struct VirtualModule {
     pub package: CompilationPackage,
-}
-
-/// Loaded module cached by the module system after compilation and evaluation.
-///
-/// A module instance stores its canonical identity, export table, runtime
-/// initialization handle, inferred initialization type, and optional source
-/// fingerprint so later imports can reuse the completed module safely.
-#[derive(Clone)]
-pub struct ModuleInstance {
-    pub id: ModuleId,
-    pub exports: ModuleExports,
-    pub init_value: Handle,
-    pub init_type: Type,
-    pub source_fingerprint: Option<String>,
 }
 
 pub fn module_key_for_module(id: &ModuleId) -> ModuleKey {

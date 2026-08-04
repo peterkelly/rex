@@ -71,7 +71,7 @@ use rex_typesystem::{
 use uuid::Uuid;
 
 use crate::{
-    Context, EngineError,
+    EngineError,
     builder::core::{Builder, StaticModuleImporter},
     evaluator::{
         native_callable::SchedulerNativeResult,
@@ -84,7 +84,7 @@ use crate::{
         },
     },
     memory::{
-        heap::{Handle, Heap, RootScope, RootedPtr},
+        heap::{RootScope, RootedPtr},
         lists::ListItems,
     },
     modules::{
@@ -260,31 +260,6 @@ where
     Ok(())
 }
 
-fn list_from_handles(heap: &Heap, values: Vec<Handle>) -> Result<Handle, EngineError> {
-    heap.alloc_list(values)
-}
-
-fn option_from_handle(heap: &Heap, value: Option<Handle>) -> Result<Handle, EngineError> {
-    match value {
-        Some(value) => heap.alloc_adt(Symbol::intern("Some"), vec![value]),
-        None => heap.alloc_adt(Symbol::intern("None"), vec![]),
-    }
-}
-
-fn option_handle(value: &Handle) -> Result<Option<Handle>, EngineError> {
-    let (tag, args) = value.as_adt()?;
-    if tag.as_ref() == "Some" && args.len() == 1 {
-        Ok(Some(args[0].clone()))
-    } else if tag.as_ref() == "None" && args.is_empty() {
-        Ok(None)
-    } else {
-        Err(EngineError::NativeType {
-            expected: "Option".into(),
-            got: value.type_name()?.into(),
-        })
-    }
-}
-
 fn integer_overflow(typ: &'static str) -> EngineError {
     EngineError::from(format!("integer overflow ({typ})"))
 }
@@ -299,20 +274,6 @@ fn checked_integer_error(value: i128, min: i128, max: i128, typ: &'static str) -
     } else {
         debug_assert!(value > max);
         integer_overflow(typ)
-    }
-}
-
-fn result_handle(value: &Handle) -> Result<Result<Handle, Handle>, EngineError> {
-    let (tag, args) = value.as_adt()?;
-    if tag.as_ref() == "Ok" && args.len() == 1 {
-        Ok(Ok(args[0].clone()))
-    } else if tag.as_ref() == "Err" && args.len() == 1 {
-        Ok(Err(args[0].clone()))
-    } else {
-        Err(EngineError::NativeType {
-            expected: "Result".into(),
-            got: value.type_name()?.into(),
-        })
     }
 }
 
@@ -370,20 +331,20 @@ fn result_types(typ: &Type) -> Result<(Type, Type), EngineError> {
     }
 }
 
-fn option_from_root<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    value: Option<RootedPtr<'scope>>,
-) -> Result<RootedPtr<'scope>, EngineError> {
+fn option_from_root(
+    scope: &mut RootScope<'_>,
+    value: Option<RootedPtr>,
+) -> Result<RootedPtr, EngineError> {
     match value {
         Some(v) => scope.alloc_root_adt(Symbol::intern("Some"), vec![v]),
         None => scope.alloc_root_adt(Symbol::intern("None"), vec![]),
     }
 }
 
-fn option_value<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    root: RootedPtr<'scope>,
-) -> Result<Option<RootedPtr<'scope>>, EngineError> {
+fn option_value(
+    scope: &mut RootScope<'_>,
+    root: RootedPtr,
+) -> Result<Option<RootedPtr>, EngineError> {
     let (tag, args) = scope.root_as_adt(root)?;
     if tag.as_ref() == "Some" && args.len() == 1 {
         Ok(Some(args[0]))
@@ -397,10 +358,10 @@ fn option_value<'scope>(
     }
 }
 
-fn result_value<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    root: RootedPtr<'scope>,
-) -> Result<Result<RootedPtr<'scope>, RootedPtr<'scope>>, EngineError> {
+fn result_value(
+    scope: &mut RootScope<'_>,
+    root: RootedPtr,
+) -> Result<Result<RootedPtr, RootedPtr>, EngineError> {
     let (tag, args) = scope.root_as_adt(root)?;
     if tag.as_ref() == "Ok" && args.len() == 1 {
         Ok(Ok(args[0]))
@@ -414,10 +375,10 @@ fn result_value<'scope>(
     }
 }
 
-fn result_from_root<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    value: Result<RootedPtr<'scope>, RootedPtr<'scope>>,
-) -> Result<RootedPtr<'scope>, EngineError> {
+fn result_from_root(
+    scope: &mut RootScope<'_>,
+    value: Result<RootedPtr, RootedPtr>,
+) -> Result<RootedPtr, EngineError> {
     match value {
         Ok(v) => scope.alloc_root_adt(Symbol::intern("Ok"), vec![v]),
         Err(v) => scope.alloc_root_adt(Symbol::intern("Err"), vec![v]),
@@ -464,20 +425,16 @@ fn tuple_elem_type(typ: &Type) -> Result<Type, EngineError> {
     }
 }
 
-fn extremum_handle_by_type(
-    heap: &Heap,
+fn extremum_root_by_type(
+    scope: &mut RootScope<'_>,
     elem_ty: &Type,
-    values: Vec<Handle>,
+    values: Vec<RootedPtr>,
     choose: std::cmp::Ordering,
-) -> Result<Handle, EngineError> {
+) -> Result<RootedPtr, EngineError> {
     let mut values = values.into_iter();
     let mut best = values.next().ok_or(EngineError::EmptySequence)?;
     for value in values {
-        let ord = heap.with_root_scope(|scope| {
-            let value = scope.root_handle(&value)?;
-            let best = scope.root_handle(&best)?;
-            cmp_rooted_by_type(scope, elem_ty, value, best)
-        })?;
+        let ord = cmp_rooted_by_type(scope, elem_ty, value, best)?;
         if ord == choose {
             best = value;
         }
@@ -508,36 +465,40 @@ fn checked_endpoint(name: Symbol, index: i32, len: usize) -> Result<usize, Engin
 }
 
 fn list_range_from_items(
-    heap: &Heap,
-    items: Vec<Handle>,
+    scope: &mut RootScope<'_>,
+    items: Vec<RootedPtr>,
     start: usize,
     end: usize,
-) -> Result<Handle, EngineError> {
+) -> Result<RootedPtr, EngineError> {
     if start > end || end > items.len() {
         return Err(EngineError::Internal(format!(
             "invalid list item range {start}..{end} for len {}",
             items.len()
         )));
     }
-    heap.alloc_list(items[start..end].to_vec())
+    scope.alloc_root_list(items[start..end].to_vec())
 }
 
-fn zip_tuple2_handles(
-    heap: &Heap,
-    xs: Vec<Handle>,
-    ys: Vec<Handle>,
-) -> Result<Vec<Handle>, EngineError> {
-    xs.into_iter()
-        .zip(ys)
-        .map(|(x, y)| heap.alloc_tuple(vec![x, y]))
-        .collect()
+fn zip_tuple2_roots(
+    scope: &mut RootScope<'_>,
+    xs: Vec<RootedPtr>,
+    ys: Vec<RootedPtr>,
+) -> Result<Vec<RootedPtr>, EngineError> {
+    let mut pairs = Vec::with_capacity(xs.len().min(ys.len()));
+    for (left, right) in xs.into_iter().zip(ys) {
+        pairs.push(scope.alloc_root_tuple(vec![left, right])?);
+    }
+    Ok(pairs)
 }
 
-fn unzip_tuple2_handles(pairs: Vec<Handle>) -> Result<(Vec<Handle>, Vec<Handle>), EngineError> {
+fn unzip_tuple2_roots(
+    scope: &mut RootScope<'_>,
+    pairs: Vec<RootedPtr>,
+) -> Result<(Vec<RootedPtr>, Vec<RootedPtr>), EngineError> {
     let mut left = Vec::new();
     let mut right = Vec::new();
     for pair in pairs {
-        let elems = pair.as_tuple()?;
+        let elems = scope.root_as_tuple(pair)?;
         let len = elems.len();
         if len != 2 {
             return Err(EngineError::NativeType {
@@ -545,8 +506,8 @@ fn unzip_tuple2_handles(pairs: Vec<Handle>) -> Result<(Vec<Handle>, Vec<Handle>)
                 got: format!("tuple{len}"),
             });
         }
-        left.push(elems[0].clone());
-        right.push(elems[1].clone());
+        left.push(elems[0]);
+        right.push(elems[1]);
     }
     Ok((left, right))
 }
@@ -555,11 +516,11 @@ fn as_nonneg_usize(n: i32) -> usize {
     if n <= 0 { 0 } else { n as usize }
 }
 
-fn cmp_rooted_by_type<'scope>(
-    scope: &RootScope<'_, 'scope>,
+fn cmp_rooted_by_type(
+    scope: &RootScope<'_>,
     typ: &Type,
-    lhs: RootedPtr<'scope>,
-    rhs: RootedPtr<'scope>,
+    lhs: RootedPtr,
+    rhs: RootedPtr,
 ) -> Result<std::cmp::Ordering, EngineError> {
     let mismatch = |expected: &str| EngineError::NativeType {
         expected: expected.to_string(),
@@ -638,23 +599,23 @@ fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
     for (ctor, scheme) in list_adt.constructor_schemes() {
         match ctor.as_ref() {
             "Empty" => {
-                engine.export_native(ctor.to_string(), scheme, 0, |engine, _, args| {
+                engine.export_native(ctor.to_string(), scheme, 0, |scope, _, args| {
                     if !args.is_empty() {
                         return Err(EngineError::Internal(
                             "Empty constructor received arguments".into(),
                         ));
                     }
-                    engine.heap().alloc_empty()
+                    scope.alloc_root_empty()
                 })?;
             }
             "Cons" => {
-                engine.export_native(ctor.to_string(), scheme, 2, |engine, _, args| {
+                engine.export_native(ctor.to_string(), scheme, 2, |scope, _, args| {
                     let [head, tail] = args else {
                         return Err(EngineError::Internal(
                             "Cons constructor received wrong arity".into(),
                         ));
                     };
-                    engine.heap().alloc_cons(head.clone(), tail.clone())
+                    scope.alloc_root_cons(*head, *tail)
                 })?;
             }
             _ => {}
@@ -907,24 +868,24 @@ fn inject_order_ops<State: Clone + Send + Sync + 'static>(
         ),
     ] {
         let scheme = f32_bool.clone();
-        engine.export_native(name, scheme, 2, move |engine, _, args| {
-            let a = args[0].as_f32()?;
-            let b = args[1].as_f32()?;
+        engine.export_native(name, scheme, 2, move |scope, _, args| {
+            let a = scope.root_as_f32(args[0])?;
+            let b = scope.root_as_f32(args[1])?;
             let ord = a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
                 expected: "f32".into(),
                 got: "nan".into(),
             })?;
-            engine.heap().alloc_bool(pred(ord))
+            scope.alloc_root_bool(pred(ord))
         })?;
     }
-    engine.export_native("prim_cmp", f32_cmp, 2, |engine, _, args| {
-        let a = args[0].as_f32()?;
-        let b = args[1].as_f32()?;
+    engine.export_native("prim_cmp", f32_cmp, 2, |scope, _, args| {
+        let a = scope.root_as_f32(args[0])?;
+        let b = scope.root_as_f32(args[1])?;
         let ord = a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
             expected: "f32".into(),
             got: "nan".into(),
         })?;
-        engine.heap().alloc_i32(cmp_to_i32(ord))
+        scope.alloc_root_i32(cmp_to_i32(ord))
     })?;
 
     let f64_ty = Type::builtin(BuiltinTypeId::F64);
@@ -953,24 +914,24 @@ fn inject_order_ops<State: Clone + Send + Sync + 'static>(
         ),
     ] {
         let scheme = f64_bool.clone();
-        engine.export_native(name, scheme, 2, move |engine, _, args| {
-            let a = args[0].as_f64()?;
-            let b = args[1].as_f64()?;
+        engine.export_native(name, scheme, 2, move |scope, _, args| {
+            let a = scope.root_as_f64(args[0])?;
+            let b = scope.root_as_f64(args[1])?;
             let ord = a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
                 expected: "f64".into(),
                 got: "nan".into(),
             })?;
-            engine.heap().alloc_bool(pred(ord))
+            scope.alloc_root_bool(pred(ord))
         })?;
     }
-    engine.export_native("prim_cmp", f64_cmp, 2, |engine, _, args| {
-        let a = args[0].as_f64()?;
-        let b = args[1].as_f64()?;
+    engine.export_native("prim_cmp", f64_cmp, 2, |scope, _, args| {
+        let a = scope.root_as_f64(args[0])?;
+        let b = scope.root_as_f64(args[1])?;
         let ord = a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
             expected: "f64".into(),
             got: "nan".into(),
         })?;
-        engine.heap().alloc_i32(cmp_to_i32(ord))
+        scope.alloc_root_i32(cmp_to_i32(ord))
     })?;
 
     Ok(())
@@ -1227,10 +1188,10 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
                     Type::builtin(BuiltinTypeId::F64),
                     Type::option($dst_ty),
                 ));
-                engine.export_native($name, scheme, 1, move |ctx, _t, args| {
-                    let x = args[0].as_f64()?;
-                    let converted = $convert(&ctx, x)?;
-                    option_from_handle(ctx.heap(), converted)
+                engine.export_native($name, scheme, 1, move |scope, _t, args| {
+                    let x = scope.root_as_f64(args[0])?;
+                    let converted = $convert(scope, x)?;
+                    option_from_root(scope, converted)
                 })?;
             }};
         }
@@ -1238,9 +1199,9 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_u8",
             Type::builtin(BuiltinTypeId::U8),
-            |ctx: &Context<State>, x: f64| -> Result<Option<Handle>, EngineError> {
+            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= u8::MIN as f64 && x <= u8::MAX as f64 {
-                    Ok(Some(ctx.heap().alloc_u8(x as u8)?))
+                    Ok(Some(scope.alloc_root_u8(x as u8)?))
                 } else {
                     Ok(None)
                 }
@@ -1249,10 +1210,10 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_u16",
             Type::builtin(BuiltinTypeId::U16),
-            |ctx: &Context<State>, x: f64| -> Result<Option<Handle>, EngineError> {
+            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= u16::MIN as f64 && x <= u16::MAX as f64
                 {
-                    Ok(Some(ctx.heap().alloc_u16(x as u16)?))
+                    Ok(Some(scope.alloc_root_u16(x as u16)?))
                 } else {
                     Ok(None)
                 }
@@ -1261,10 +1222,10 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_u32",
             Type::builtin(BuiltinTypeId::U32),
-            |ctx: &Context<State>, x: f64| -> Result<Option<Handle>, EngineError> {
+            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= u32::MIN as f64 && x <= u32::MAX as f64
                 {
-                    Ok(Some(ctx.heap().alloc_u32(x as u32)?))
+                    Ok(Some(scope.alloc_root_u32(x as u32)?))
                 } else {
                     Ok(None)
                 }
@@ -1273,10 +1234,10 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_u64",
             Type::builtin(BuiltinTypeId::U64),
-            |ctx: &Context<State>, x: f64| -> Result<Option<Handle>, EngineError> {
+            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= u64::MIN as f64 && x <= u64::MAX as f64
                 {
-                    Ok(Some(ctx.heap().alloc_u64(x as u64)?))
+                    Ok(Some(scope.alloc_root_u64(x as u64)?))
                 } else {
                     Ok(None)
                 }
@@ -1285,9 +1246,9 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_i8",
             Type::builtin(BuiltinTypeId::I8),
-            |ctx: &Context<State>, x: f64| -> Result<Option<Handle>, EngineError> {
+            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= i8::MIN as f64 && x <= i8::MAX as f64 {
-                    Ok(Some(ctx.heap().alloc_i8(x as i8)?))
+                    Ok(Some(scope.alloc_root_i8(x as i8)?))
                 } else {
                     Ok(None)
                 }
@@ -1296,10 +1257,10 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_i16",
             Type::builtin(BuiltinTypeId::I16),
-            |ctx: &Context<State>, x: f64| -> Result<Option<Handle>, EngineError> {
+            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= i16::MIN as f64 && x <= i16::MAX as f64
                 {
-                    Ok(Some(ctx.heap().alloc_i16(x as i16)?))
+                    Ok(Some(scope.alloc_root_i16(x as i16)?))
                 } else {
                     Ok(None)
                 }
@@ -1308,10 +1269,10 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_i32",
             Type::builtin(BuiltinTypeId::I32),
-            |ctx: &Context<State>, x: f64| -> Result<Option<Handle>, EngineError> {
+            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= i32::MIN as f64 && x <= i32::MAX as f64
                 {
-                    Ok(Some(ctx.heap().alloc_i32(x as i32)?))
+                    Ok(Some(scope.alloc_root_i32(x as i32)?))
                 } else {
                     Ok(None)
                 }
@@ -1320,10 +1281,10 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_i64",
             Type::builtin(BuiltinTypeId::I64),
-            |ctx: &Context<State>, x: f64| -> Result<Option<Handle>, EngineError> {
+            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= i64::MIN as f64 && x <= i64::MAX as f64
                 {
-                    Ok(Some(ctx.heap().alloc_i64(x as i64)?))
+                    Ok(Some(scope.alloc_root_i64(x as i64)?))
                 } else {
                     Ok(None)
                 }
@@ -1332,9 +1293,9 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_f32",
             Type::builtin(BuiltinTypeId::F32),
-            |ctx: &Context<State>, x: f64| -> Result<Option<Handle>, EngineError> {
+            |scope: &mut RootScope<'_>, x: f64| -> Result<Option<RootedPtr>, EngineError> {
                 if x.is_finite() && x >= f32::MIN as f64 && x <= f32::MAX as f64 {
-                    Ok(Some(ctx.heap().alloc_f32(x as f32)?))
+                    Ok(Some(scope.alloc_root_f32(x as f32)?))
                 } else {
                     Ok(None)
                 }
@@ -1412,13 +1373,13 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         let string_ty = Type::builtin(BuiltinTypeId::String);
         let uuid_ty = Type::builtin(BuiltinTypeId::Uuid);
         let scheme = scheme!(Type::fun(&string_ty, Type::option(uuid_ty)));
-        engine.export_native("prim_parse_uuid", scheme, 1, |ctx, _, args| {
-            let s = args[0].as_string()?;
+        engine.export_native("prim_parse_uuid", scheme, 1, |scope, _, args| {
+            let s = scope.root_as_string(args[0])?;
             let parsed = Uuid::parse_str(&s)
                 .ok()
-                .map(|uuid| ctx.heap().alloc_uuid(uuid))
+                .map(|uuid| scope.alloc_root_uuid(uuid))
                 .transpose()?;
-            option_from_handle(ctx.heap(), parsed)
+            option_from_root(scope, parsed)
         })?;
     }
 
@@ -1426,14 +1387,14 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         let string_ty = Type::builtin(BuiltinTypeId::String);
         let dt_ty = Type::builtin(BuiltinTypeId::DateTime);
         let scheme = scheme!(Type::fun(&string_ty, Type::option(dt_ty)));
-        engine.export_native("prim_parse_datetime", scheme, 1, |ctx, _, args| {
-            let s = args[0].as_string()?;
+        engine.export_native("prim_parse_datetime", scheme, 1, |scope, _, args| {
+            let s = scope.root_as_string(args[0])?;
             let parsed = DateTime::parse_from_rfc3339(&s)
                 .ok()
                 .map(|dt| dt.with_timezone(&Utc))
-                .map(|dt| ctx.heap().alloc_datetime(dt))
+                .map(|dt| scope.alloc_root_datetime(dt))
                 .transpose()?;
-            option_from_handle(ctx.heap(), parsed)
+            option_from_root(scope, parsed)
         })?;
     }
 
@@ -1465,9 +1426,9 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             object: Symbol::intern("Object"),
         };
 
-        fn to_serde_json<'scope>(
-            scope: &mut RootScope<'_, 'scope>,
-            value: RootedPtr<'scope>,
+        fn to_serde_json(
+            scope: &mut RootScope<'_>,
+            value: RootedPtr,
             tags: &Tags,
         ) -> Option<serde_json::Value> {
             let (tag, args) = scope.root_as_adt(value).ok()?;
@@ -1514,15 +1475,12 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             None
         }
 
-        engine.export_native("prim_json_stringify", scheme, 1, move |engine, _, args| {
-            let json = engine.heap().with_root_scope(|scope| {
-                let value = scope.root_handle(&args[0])?;
-                Ok(to_serde_json(scope, value, &tags))
-            })?;
+        engine.export_native("prim_json_stringify", scheme, 1, move |scope, _, args| {
+            let json = to_serde_json(scope, args[0], &tags);
             let Some(json) = json else {
-                return engine.heap().alloc_string("<non-std.json.Value>".into());
+                return scope.alloc_root_string("<non-std.json.Value>".into());
             };
-            engine.heap().alloc_string(json.to_string())
+            scope.alloc_root_string(json.to_string())
         })?;
     }
 
@@ -1559,17 +1517,17 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         fn to_json_value(
             v: &serde_json::Value,
             tags: &Tags,
-            heap: &Heap,
-        ) -> Result<Handle, EngineError> {
+            scope: &mut RootScope<'_>,
+        ) -> Result<RootedPtr, EngineError> {
             match v {
-                serde_json::Value::Null => heap.alloc_adt(tags.null.clone(), vec![]),
+                serde_json::Value::Null => scope.alloc_root_adt(tags.null.clone(), vec![]),
                 serde_json::Value::Bool(b) => {
-                    let value = heap.alloc_bool(*b)?;
-                    heap.alloc_adt(tags.bool_.clone(), vec![value])
+                    let value = scope.alloc_root_bool(*b)?;
+                    scope.alloc_root_adt(tags.bool_.clone(), vec![value])
                 }
                 serde_json::Value::String(s) => {
-                    let value = heap.alloc_string(s.clone())?;
-                    heap.alloc_adt(tags.string.clone(), vec![value])
+                    let value = scope.alloc_root_string(s.clone())?;
+                    scope.alloc_root_adt(tags.string.clone(), vec![value])
                 }
                 serde_json::Value::Number(n) => {
                     let Some(f) = n.as_f64() else {
@@ -1577,48 +1535,54 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                             "expected JSON number representable as f64".into(),
                         ));
                     };
-                    let value = heap.alloc_f64(f)?;
-                    heap.alloc_adt(tags.number.clone(), vec![value])
+                    let value = scope.alloc_root_f64(f)?;
+                    scope.alloc_root_adt(tags.number.clone(), vec![value])
                 }
                 serde_json::Value::Array(xs) => {
                     let mut out = Vec::with_capacity(xs.len());
                     for x in xs {
-                        let value = to_json_value(x, tags, heap)?;
+                        let value = to_json_value(x, tags, scope)?;
                         out.push(value);
                     }
-                    let list = heap.alloc_list(out)?;
-                    heap.alloc_adt(tags.array.clone(), vec![list])
+                    let list = scope.alloc_root_list(out)?;
+                    scope.alloc_root_adt(tags.array.clone(), vec![list])
                 }
                 serde_json::Value::Object(obj) => {
                     let mut out = BTreeMap::new();
                     for (k, v) in obj {
-                        let value = to_json_value(v, tags, heap)?;
+                        let value = to_json_value(v, tags, scope)?;
                         out.insert(Symbol::intern(k.as_str()), value);
                     }
-                    let dict = heap.alloc_dict(out)?;
-                    heap.alloc_adt(tags.object.clone(), vec![dict])
+                    let dict = scope.alloc_root_dict(out)?;
+                    scope.alloc_root_adt(tags.object.clone(), vec![dict])
                 }
             }
         }
 
-        fn result_ok(heap: &Heap, v: Handle) -> Result<Handle, EngineError> {
-            heap.alloc_adt(Symbol::intern("Ok"), vec![v])
+        fn result_ok(
+            scope: &mut RootScope<'_>,
+            value: RootedPtr,
+        ) -> Result<RootedPtr, EngineError> {
+            scope.alloc_root_adt(Symbol::intern("Ok"), vec![value])
         }
 
-        fn result_err(heap: &Heap, msg: String) -> Result<Handle, EngineError> {
-            let msg = heap.alloc_string(msg)?;
-            heap.alloc_adt(Symbol::intern("Err"), vec![msg])
+        fn result_err(
+            scope: &mut RootScope<'_>,
+            message: String,
+        ) -> Result<RootedPtr, EngineError> {
+            let message = scope.alloc_root_string(message)?;
+            scope.alloc_root_adt(Symbol::intern("Err"), vec![message])
         }
 
-        engine.export_native("prim_json_parse", scheme, 1, move |ctx, _, args| {
-            let s = args[0].as_string()?;
+        engine.export_native("prim_json_parse", scheme, 1, move |scope, _, args| {
+            let s = scope.root_as_string(args[0])?;
             let parsed: serde_json::Value = match serde_json::from_str(&s) {
                 Ok(v) => v,
-                Err(e) => return result_err(ctx.heap(), e.to_string()),
+                Err(e) => return result_err(scope, e.to_string()),
             };
-            match to_json_value(&parsed, &tags, ctx.heap()) {
-                Ok(v) => result_ok(ctx.heap(), v),
-                Err(err) => result_err(ctx.heap(), err.to_string()),
+            match to_json_value(&parsed, &tags, scope) {
+                Ok(value) => result_ok(scope, value),
+                Err(err) => result_err(scope, err.to_string()),
             }
         })?;
     }
@@ -2311,9 +2275,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::list(a), Type::builtin(BuiltinTypeId::I32))
         );
-        engine.export_native("length", scheme, 1, |engine, _, args| {
-            let values = args[0].as_list()?;
-            engine.heap().alloc_i32(values.len() as i32)
+        engine.export_native("length", scheme, 1, |scope, _, args| {
+            let values = scope.root_as_list(args[0])?;
+            scope.alloc_root_i32(values.len() as i32)
         })?;
     }
 
@@ -2321,10 +2285,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::option(a), Type::builtin(BuiltinTypeId::I32))
         );
-        engine.export_native("length", scheme, 1, |engine, _, args| {
-            engine
-                .heap()
-                .alloc_i32(option_handle(&args[0])?.is_some() as i32)
+        engine.export_native("length", scheme, 1, |scope, _, args| {
+            let length = option_value(scope, args[0])?.is_some() as i32;
+            scope.alloc_root_i32(length)
         })?;
     }
 
@@ -2335,11 +2298,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(a), Type::list(a)),
             )
         );
-        engine.export_native("first", scheme, 2, |engine, _, args| {
-            let n = args[0].as_i32()?;
-            let values = args[1].as_list()?;
+        engine.export_native("first", scheme, 2, |scope, _, args| {
+            let n = scope.root_as_i32(args[0])?;
+            let values = scope.root_as_list(args[1])?;
             let end = checked_endpoint(Symbol::intern("first"), n, values.len())?;
-            list_range_from_items(engine.heap(), values, 0, end)
+            list_range_from_items(scope, values, 0, end)
         })?;
     }
 
@@ -2350,13 +2313,13 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(a), Type::list(a)),
             )
         );
-        engine.export_native("last", scheme, 2, |engine, _, args| {
-            let n = args[0].as_i32()?;
-            let values = args[1].as_list()?;
+        engine.export_native("last", scheme, 2, |scope, _, args| {
+            let n = scope.root_as_i32(args[0])?;
+            let values = scope.root_as_list(args[1])?;
             let len = values.len();
             let n = checked_endpoint(Symbol::intern("last"), n, len)?;
             let start = len - n;
-            list_range_from_items(engine.heap(), values, start, len)
+            list_range_from_items(scope, values, start, len)
         })?;
     }
 
@@ -2370,10 +2333,10 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 ),
             )
         );
-        engine.export_native("slice", scheme, 3, |engine, _, args| {
-            let n = args[0].as_i32()?;
-            let m = args[1].as_i32()?;
-            let values = args[2].as_list()?;
+        engine.export_native("slice", scheme, 3, |scope, _, args| {
+            let n = scope.root_as_i32(args[0])?;
+            let m = scope.root_as_i32(args[1])?;
+            let values = scope.root_as_list(args[2])?;
             let start = checked_endpoint(Symbol::intern("slice"), n, values.len())?;
             let end = checked_endpoint(Symbol::intern("slice"), m, values.len())?;
             if end < start {
@@ -2381,7 +2344,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     "invalid slice range: end {m} is before start {n}"
                 )));
             }
-            list_range_from_items(engine.heap(), values, start, end)
+            list_range_from_items(scope, values, start, end)
         })?;
     }
 
@@ -2392,12 +2355,12 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(a), Type::list(a)),
             )
         );
-        engine.export_native("prim_take", scheme, 2, |engine, _, args| {
-            let n = args[0].as_i32()?;
+        engine.export_native("prim_take", scheme, 2, |scope, _, args| {
+            let n = scope.root_as_i32(args[0])?;
             let n = as_nonneg_usize(n);
-            let values = args[1].as_list()?;
+            let values = scope.root_as_list(args[1])?;
             let end = values.len().min(n);
-            list_range_from_items(engine.heap(), values, 0, end)
+            list_range_from_items(scope, values, 0, end)
         })?;
     }
 
@@ -2408,13 +2371,13 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(a), Type::list(a)),
             )
         );
-        engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
-            let n = args[0].as_i32()?;
+        engine.export_native("prim_skip", scheme, 2, |scope, _, args| {
+            let n = scope.root_as_i32(args[0])?;
             let n = as_nonneg_usize(n);
-            let values = args[1].as_list()?;
+            let values = scope.root_as_list(args[1])?;
             let len = values.len();
             let start = len.min(n);
-            list_range_from_items(engine.heap(), values, start, len)
+            list_range_from_items(scope, values, start, len)
         })?;
     }
 
@@ -2425,14 +2388,14 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(a), a),
             )
         );
-        engine.export_native("prim_get", scheme, 2, |_, call_type, args| {
+        engine.export_native("prim_get", scheme, 2, |scope, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
             let list_ty = arg_tys[1].clone();
             let _elem_ty = list_elem_type(&list_ty)?;
-            let idx = args[0].as_i32()?;
-            let values = args[1].as_list()?;
+            let idx = scope.root_as_i32(args[0])?;
+            let values = scope.root_as_list(args[1])?;
             let idx = checked_index(Symbol::intern("prim_get"), idx, values.len())?;
-            Ok(values[idx].clone())
+            Ok(values[idx])
         })?;
     }
 
@@ -2443,20 +2406,20 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::tuple(vec![a; size]), a),
             )
         );
-        engine.export_native("prim_get", scheme, 2, move |_, call_type, args| {
+        engine.export_native("prim_get", scheme, 2, move |scope, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
             let tuple_ty = arg_tys[1].clone();
             let _elem_ty = tuple_elem_type(&tuple_ty)?;
-            let idx = args[0].as_i32()?;
+            let idx = scope.root_as_i32(args[0])?;
             let idx_usize = checked_index(Symbol::intern("prim_get"), idx, size)?;
-            let xs = args[1].as_tuple()?;
+            let xs = scope.root_as_tuple(args[1])?;
             if xs.len() != size {
                 return Err(EngineError::NativeType {
                     expected: format!("tuple{}", size),
                     got: format!("tuple{}", xs.len()),
                 });
             }
-            Ok(xs[idx_usize].clone())
+            Ok(xs[idx_usize])
         })?;
     }
 
@@ -2467,11 +2430,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::fun(Type::list(b), Type::list(Type::tuple(vec![a, b]))),
             )
         );
-        engine.export_native("prim_zip", scheme, 2, |engine, _, args| {
-            let xs = args[0].as_list()?;
-            let ys = args[1].as_list()?;
-            let zipped = zip_tuple2_handles(engine.heap(), xs, ys)?;
-            list_from_handles(engine.heap(), zipped)
+        engine.export_native("prim_zip", scheme, 2, |scope, _, args| {
+            let xs = scope.root_as_list(args[0])?;
+            let ys = scope.root_as_list(args[1])?;
+            let zipped = zip_tuple2_roots(scope, xs, ys)?;
+            scope.alloc_root_list(zipped)
         })?;
     }
 
@@ -2482,12 +2445,12 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 Type::tuple(vec![Type::list(a), Type::list(b)]),
             )
         );
-        engine.export_native("prim_unzip", scheme, 1, |engine, _, args| {
-            let pairs = args[0].as_list()?;
-            let (left, right) = unzip_tuple2_handles(pairs)?;
-            let left = list_from_handles(engine.heap(), left)?;
-            let right = list_from_handles(engine.heap(), right)?;
-            engine.heap().alloc_tuple(vec![left, right])
+        engine.export_native("prim_unzip", scheme, 1, |scope, _, args| {
+            let pairs = scope.root_as_list(args[0])?;
+            let (left, right) = unzip_tuple2_roots(scope, pairs)?;
+            let left = scope.alloc_root_list(left)?;
+            let right = scope.alloc_root_list(right)?;
+            scope.alloc_root_tuple(vec![left, right])
         })?;
     }
 
@@ -2495,12 +2458,12 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::list(a), a)
         );
-        engine.export_native("min", scheme, 1, |engine, call_type, args| {
+        engine.export_native("min", scheme, 1, |scope, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = args[0].as_list()?;
-            extremum_handle_by_type(engine.heap(), &elem_ty, values, std::cmp::Ordering::Less)
+            let values = scope.root_as_list(args[0])?;
+            extremum_root_by_type(scope, &elem_ty, values, std::cmp::Ordering::Less)
         })?;
     }
 
@@ -2508,11 +2471,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::option(a), a)
         );
-        engine.export_native("min", scheme, 1, |_, call_type, args| {
+        engine.export_native("min", scheme, 1, |scope, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let _elem_ty = option_elem_type(&opt_ty)?;
-            match option_handle(&args[0])? {
+            match option_value(scope, args[0])? {
                 Some(v) => Ok(v),
                 None => Err(EngineError::EmptySequence),
             }
@@ -2523,12 +2486,12 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::list(a), a)
         );
-        engine.export_native("max", scheme, 1, |engine, call_type, args| {
+        engine.export_native("max", scheme, 1, |scope, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = args[0].as_list()?;
-            extremum_handle_by_type(engine.heap(), &elem_ty, values, std::cmp::Ordering::Greater)
+            let values = scope.root_as_list(args[0])?;
+            extremum_root_by_type(scope, &elem_ty, values, std::cmp::Ordering::Greater)
         })?;
     }
 
@@ -2536,11 +2499,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::option(a), a)
         );
-        engine.export_native("max", scheme, 1, |_, call_type, args| {
+        engine.export_native("max", scheme, 1, |scope, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let _elem_ty = option_elem_type(&opt_ty)?;
-            match option_handle(&args[0])? {
+            match option_value(scope, args[0])? {
                 Some(v) => Ok(v),
                 None => Err(EngineError::EmptySequence),
             }
@@ -2573,11 +2536,11 @@ fn inject_option_result_builtins<State: Clone + Send + Sync + 'static>(
                         )
                 ) =>
             {
-                engine.export_native("unwrap", scheme, 1, |_, _, args| {
-                    match option_handle(&args[0])? {
-                        Some(value) => Ok(value),
-                        None => Err(EngineError::Custom("called unwrap on None".into())),
-                    }
+                engine.export_native("unwrap", scheme, 1, |scope, _, args| match option_value(
+                    scope, args[0],
+                )? {
+                    Some(value) => Ok(value),
+                    None => Err(EngineError::Custom("called unwrap on None".into())),
                 })?;
             }
             TypeKind::Fun(arg_ty, _)
@@ -2594,11 +2557,11 @@ fn inject_option_result_builtins<State: Clone + Send + Sync + 'static>(
                         )
                 ) =>
             {
-                engine.export_native("unwrap", scheme, 1, |_, _, args| {
-                    match result_handle(&args[0])? {
-                        Ok(value) => Ok(value),
-                        Err(_) => Err(EngineError::Custom("called unwrap on Err".into())),
-                    }
+                engine.export_native("unwrap", scheme, 1, |scope, _, args| match result_value(
+                    scope, args[0],
+                )? {
+                    Ok(value) => Ok(value),
+                    Err(_) => Err(EngineError::Custom("called unwrap on Err".into())),
                 })?;
             }
             _ => {}
@@ -2607,24 +2570,28 @@ fn inject_option_result_builtins<State: Clone + Send + Sync + 'static>(
 
     let is_some = Symbol::intern("is_some");
     let is_some_scheme = engine.lookup_scheme(&is_some)?;
-    engine.export_native("is_some", is_some_scheme, 1, |engine, _, args| {
-        engine.heap().alloc_bool(option_handle(&args[0])?.is_some())
+    engine.export_native("is_some", is_some_scheme, 1, |scope, _, args| {
+        let value = option_value(scope, args[0])?.is_some();
+        scope.alloc_root_bool(value)
     })?;
     let is_none = Symbol::intern("is_none");
     let is_none_scheme = engine.lookup_scheme(&is_none)?;
-    engine.export_native("is_none", is_none_scheme, 1, |engine, _, args| {
-        engine.heap().alloc_bool(option_handle(&args[0])?.is_none())
+    engine.export_native("is_none", is_none_scheme, 1, |scope, _, args| {
+        let value = option_value(scope, args[0])?.is_none();
+        scope.alloc_root_bool(value)
     })?;
 
     let is_ok = Symbol::intern("is_ok");
     let is_ok_scheme = engine.lookup_scheme(&is_ok)?;
-    engine.export_native("is_ok", is_ok_scheme, 1, |engine, _, args| {
-        engine.heap().alloc_bool(result_handle(&args[0])?.is_ok())
+    engine.export_native("is_ok", is_ok_scheme, 1, |scope, _, args| {
+        let value = result_value(scope, args[0])?.is_ok();
+        scope.alloc_root_bool(value)
     })?;
     let is_err = Symbol::intern("is_err");
     let is_err_scheme = engine.lookup_scheme(&is_err)?;
-    engine.export_native("is_err", is_err_scheme, 1, |engine, _, args| {
-        engine.heap().alloc_bool(result_handle(&args[0])?.is_err())
+    engine.export_native("is_err", is_err_scheme, 1, |scope, _, args| {
+        let value = result_value(scope, args[0])?.is_err();
+        scope.alloc_root_bool(value)
     })?;
     Ok(())
 }

@@ -13,8 +13,8 @@ use rex::{
     Rex,
     ast::Symbol,
     engine::{
-        Builder, CompileOptions, Context, EngineError, FromRex, Handle, ImportRequest, Importer,
-        IntoRex, Module, ModuleId, ResolvedModule, ResolvedModuleContent, RexDefault, Value,
+        Builder, CompileOptions, Context, EngineError, FromRex, ImportRequest, Importer, IntoRex,
+        Module, ModuleId, ResolvedModule, ResolvedModuleContent, RexDefault, Value,
         virtual_export_name,
     },
     parser::parse as parse_rex,
@@ -137,14 +137,14 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
         items[1].to_rust::<String>().unwrap(),
         format!("{:>12}", "right")
     );
-    match items[2].value().unwrap() {
+    match &items[2] {
         Value::Adt(tag, args) => {
             assert_eq!(tag.as_ref(), "Right");
             assert!(args.is_empty());
         }
         _ => panic!("expected ADT value for Correctness.Right"),
     }
-    match items[3].value().unwrap() {
+    match &items[3] {
         Value::Adt(tag, args) => {
             assert_eq!(tag.as_ref(), "Wrong");
             assert!(args.is_empty());
@@ -313,7 +313,7 @@ impl Entity2 {
 }
 
 impl RexDefault<HostState> for Entity1 {
-    fn rex_default(engine: Context<HostState>) -> Result<Handle, EngineError> {
+    fn rex_default(engine: Context<HostState>) -> Result<Value, EngineError> {
         let entity = Entity1 {
             account_id: engine.state().account_id,
             project_id: engine.state().project_id,
@@ -322,7 +322,7 @@ impl RexDefault<HostState> for Entity1 {
             tags: None,
             numbers: vec![],
         };
-        entity.into_rex(engine.heap())
+        entity.into_rex()
     }
 }
 
@@ -446,7 +446,7 @@ async fn derived_rex_default_can_read_host_state() {
         .unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
 
-    let decoded = Entity1::from_rex(&value).unwrap();
+    let decoded = Entity1::from_rex(value).unwrap();
     assert_eq!(
         decoded,
         Entity1 {
@@ -482,7 +482,7 @@ async fn derived_rex_default_record_update_can_override_fields() {
     .unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
 
-    let decoded = Entity1::from_rex(&value).unwrap();
+    let decoded = Entity1::from_rex(value).unwrap();
     assert_eq!(
         decoded,
         Entity1 {
@@ -515,7 +515,7 @@ async fn entity2_constructor_defaults_from_host_state_with_required_fields() {
         .unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
 
-    let decoded = Entity2::from_rex(&value).unwrap();
+    let decoded = Entity2::from_rex(value).unwrap();
     assert_eq!(
         decoded,
         Entity2 {
@@ -557,7 +557,7 @@ async fn entity2_constructor_result_can_be_record_updated() {
     .unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
 
-    let decoded = Entity2::from_rex(&value).unwrap();
+    let decoded = Entity2::from_rex(value).unwrap();
     assert_eq!(
         decoded,
         Entity2 {
@@ -627,11 +627,11 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
         ),
     );
     common::inject_globals(&mut builder, |module| {
-        module.export_native("repeat_value", scheme, 2, |engine, _, args| {
+        module.export_native("repeat_value", scheme, 2, |_engine, _, args| {
             let value = args[0].clone();
             let len = args[1].to_rust::<i32>()?;
             let copies = (0..len.max(0)).map(|_| value.clone()).collect();
-            common::list_from_handles(engine.heap(), copies)
+            Ok(common::list_from_values(copies))
         })
     })
     .unwrap();
@@ -681,10 +681,8 @@ async fn generic_export_can_swap_two_values_of_different_types() {
         Type::fun(p.clone(), Type::fun(q.clone(), Type::tuple(vec![q, p]))),
     );
     common::inject_globals(&mut builder, |module| {
-        module.export_native("swap_pair", scheme, 2, |engine, _, args| {
-            engine
-                .heap()
-                .alloc_tuple(vec![args[1].clone(), args[0].clone()])
+        module.export_native("swap_pair", scheme, 2, |_engine, _, args| {
+            Ok(Value::Tuple(vec![args[1].clone(), args[0].clone()]))
         })
     })
     .unwrap();

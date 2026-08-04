@@ -1,25 +1,21 @@
 //! Free-standing helpers for Rex list representations.
 
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use rex_ast::Symbol;
 
 use crate::EngineError;
 
-use super::heap::{
-    Cell, HeapState, InternalPtr, InternalPtrKey, InternalPtrPairKey, RootScope, RootedPtr,
-    ValueDisplayOptions, pointer_debug_inner, pointer_display_inner, pointer_eq_inner,
-};
+use super::heap::{Cell, HeapState, InternalPtr, RootScope, RootedPtr};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum ListElement {
     InternalPtr(InternalPtr),
     U8(u8),
 }
-
 #[derive(Clone, Copy)]
-pub(super) enum ListRootElement<'scope> {
-    RootedPtr(RootedPtr<'scope>),
+pub(super) enum ListRootElement {
+    RootedPtr(RootedPtr),
     U8(u8),
 }
 
@@ -85,10 +81,7 @@ impl<P> ListItems<P> {
 }
 
 impl ListItems<InternalPtr> {
-    pub(crate) fn into_rooted<'scope>(
-        self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> ListItems<RootedPtr<'scope>> {
+    pub(crate) fn into_rooted(self, scope: &mut RootScope<'_>) -> ListItems<RootedPtr> {
         match self {
             Self::Slice {
                 elements,
@@ -117,12 +110,12 @@ impl ListItems<InternalPtr> {
     }
 }
 
-impl<'scope> ListItems<RootedPtr<'scope>> {
+impl ListItems<RootedPtr> {
     pub(crate) fn get(
         &self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         index: usize,
-    ) -> Result<RootedPtr<'scope>, EngineError> {
+    ) -> Result<RootedPtr, EngineError> {
         match self {
             Self::Slice {
                 elements,
@@ -237,12 +230,12 @@ fn append_list_slice_elements(
     }
 }
 
-pub(super) fn list_slice_head_element<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    elements: RootedPtr<'scope>,
+pub(super) fn list_slice_head_element(
+    scope: &mut RootScope<'_>,
+    elements: RootedPtr,
     start: usize,
     end: usize,
-) -> Result<Option<ListRootElement<'scope>>, EngineError> {
+) -> Result<Option<ListRootElement>, EngineError> {
     if start >= end {
         return Ok(None);
     }
@@ -337,10 +330,10 @@ pub(super) fn list_len_from_pointer(
     }
 }
 
-pub(super) fn materialize_list_elements<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+pub(super) fn materialize_list_elements(
+    scope: &mut RootScope<'_>,
     elements: Vec<ListElement>,
-) -> Result<Vec<RootedPtr<'scope>>, EngineError> {
+) -> Result<Vec<RootedPtr>, EngineError> {
     let mut pointer_roots = elements
         .iter()
         .filter_map(|element| match element {
@@ -368,10 +361,10 @@ pub(super) fn materialize_list_elements<'scope>(
     Ok(result)
 }
 
-pub(super) fn list_elements_to_rooted_ptr_vec<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+pub(super) fn list_elements_to_rooted_ptr_vec(
+    scope: &mut RootScope<'_>,
     elements: Vec<ListElement>,
-) -> Result<Vec<RootedPtr<'scope>>, EngineError> {
+) -> Result<Vec<RootedPtr>, EngineError> {
     elements
         .into_iter()
         .map(|element| match element {
@@ -385,103 +378,50 @@ pub(super) fn list_elements_to_rooted_ptr_vec<'scope>(
 }
 
 pub(super) fn collect_list_u8(
-    heap: &mut HeapState,
+    heap: &HeapState,
     pointer: &InternalPtr,
 ) -> Result<Vec<u8>, EngineError> {
-    let elements = list_elements_from_pointer(heap, *pointer)?;
-    let mut out = Vec::with_capacity(elements.len());
-    for element in elements {
-        match element {
-            ListElement::InternalPtr(pointer) => {
-                let value = heap.root_scope(|scope| {
-                    let pointer = scope.root(pointer);
-                    scope.root_as_u8(pointer)
-                })?;
-                out.push(value);
+    let mut out = Vec::with_capacity(list_len_from_pointer(heap, *pointer)?);
+    let mut cursor = heap.get_cell_from_pointer(pointer)?;
+    loop {
+        match cursor {
+            Cell::Empty => return Ok(out),
+            Cell::Cons(head, tail) => {
+                out.push(heap.get_cell_from_pointer(head)?.cell_as_u8()?);
+                cursor = heap.get_cell_from_pointer(tail)?;
             }
-            ListElement::U8(value) => out.push(value),
-        }
-    }
-    Ok(out)
-}
-
-pub(super) fn format_list_debug(
-    heap: &HeapState,
-    cell: &Cell,
-    active: &mut HashSet<InternalPtrKey>,
-) -> Result<String, EngineError> {
-    let items = list_elements_from_cell(heap, cell)?
-        .into_iter()
-        .map(|element| match element {
-            ListElement::InternalPtr(pointer) => pointer_debug_inner(heap, &pointer, active),
-            ListElement::U8(value) => Ok(format!("{value}u8")),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(format!("[{}]", items.join(", ")))
-}
-
-pub(super) fn format_list_display(
-    heap: &HeapState,
-    cell: &Cell,
-    active: &mut HashSet<InternalPtrKey>,
-    opts: ValueDisplayOptions,
-) -> Result<String, EngineError> {
-    let items = list_elements_from_cell(heap, cell)?
-        .into_iter()
-        .map(|element| match element {
-            ListElement::InternalPtr(pointer) => {
-                pointer_display_inner(heap, &pointer, active, opts)
-            }
-            ListElement::U8(value) => {
-                if opts.include_numeric_suffixes {
-                    Ok(format!("{value}u8"))
-                } else {
-                    Ok(value.to_string())
+            Cell::ListSlice {
+                start,
+                end,
+                elements,
+            } => match heap.get_cell_from_pointer(elements)? {
+                Cell::Data(values) => {
+                    validate_list_slice_bounds(values.len(), *start, *end)?;
+                    for value in &values[*start..*end] {
+                        out.push(heap.get_cell_from_pointer(value)?.cell_as_u8()?);
+                    }
+                    return Ok(out);
                 }
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(format!("[{}]", items.join(", ")))
-}
-
-fn list_element_eq_inner(
-    heap: &HeapState,
-    lhs: ListElement,
-    rhs: ListElement,
-    seen: &mut HashSet<InternalPtrPairKey>,
-) -> Result<bool, EngineError> {
-    match (lhs, rhs) {
-        (ListElement::InternalPtr(lhs), ListElement::InternalPtr(rhs)) => {
-            pointer_eq_inner(heap, &lhs, &rhs, seen)
-        }
-        (ListElement::U8(lhs), ListElement::U8(rhs)) => Ok(lhs == rhs),
-        (ListElement::U8(lhs), ListElement::InternalPtr(rhs))
-        | (ListElement::InternalPtr(rhs), ListElement::U8(lhs)) => {
-            match heap.get_cell_from_pointer(&rhs)? {
-                Cell::U8(rhs) => Ok(lhs == *rhs),
-                _ => Ok(false),
+                Cell::BinaryData(values) => {
+                    validate_list_slice_bounds(values.len(), *start, *end)?;
+                    out.extend_from_slice(&values[*start..*end]);
+                    return Ok(out);
+                }
+                cell => {
+                    return Err(EngineError::NativeType {
+                        expected: "list slice backing data".into(),
+                        got: cell.cell_type_name().into(),
+                    });
+                }
+            },
+            cell => {
+                return Err(EngineError::NativeType {
+                    expected: "list".into(),
+                    got: cell.cell_type_name().into(),
+                });
             }
         }
     }
-}
-
-pub(super) fn list_cells_eq_inner(
-    heap: &HeapState,
-    lhs: &Cell,
-    rhs: &Cell,
-    seen: &mut HashSet<InternalPtrPairKey>,
-) -> Result<bool, EngineError> {
-    let lhs = list_elements_from_cell(heap, lhs)?;
-    let rhs = list_elements_from_cell(heap, rhs)?;
-    if lhs.len() != rhs.len() {
-        return Ok(false);
-    }
-    for (lhs, rhs) in lhs.into_iter().zip(rhs) {
-        if !list_element_eq_inner(heap, lhs, rhs, seen)? {
-            return Ok(false);
-        }
-    }
-    Ok(true)
 }
 
 pub(super) fn list_items_from_pointer(

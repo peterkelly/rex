@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{Builder, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value},
+    engine::{Builder, EngineError, FromRex, IntoRex, Module, Value},
     parser::parse as parse_rex,
     typesystem::{AdtDecl, BuiltinTypeId, RexAdt, RexType, Type, TypeError, TypeVarSupply},
 };
@@ -51,45 +51,50 @@ impl RexType for ManualRecord {
 }
 
 impl IntoRex for ManualRecord {
-    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
+    fn into_rex(self) -> Result<Value, EngineError> {
         let mut fields = BTreeMap::new();
-        fields.insert(Symbol::intern("enabled"), self.enabled.into_rex(heap)?);
-        fields.insert(Symbol::intern("count"), self.count.into_rex(heap)?);
-        let dict = heap.alloc_dict(fields)?;
-        heap.alloc_adt(Symbol::intern("ManualRecord"), vec![dict])
+        fields.insert(Symbol::intern("enabled"), self.enabled.into_rex()?);
+        fields.insert(Symbol::intern("count"), self.count.into_rex()?);
+        Ok(Value::Adt(
+            Symbol::intern("ManualRecord"),
+            vec![Value::Dict(fields)],
+        ))
     }
 }
 
 impl FromRex for ManualRecord {
-    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
-        let Value::Adt(tag, args) = handle.value()? else {
+    fn from_rex(value: Value) -> Result<Self, EngineError> {
+        let got = value.value_type_name();
+        let Value::Adt(tag, mut args) = value else {
             return Err(EngineError::NativeType {
                 expected: "ManualRecord".into(),
-                got: handle.type_name()?.into(),
+                got: got.into(),
             });
         };
         if tag.as_ref() != "ManualRecord" || args.len() != 1 {
             return Err(EngineError::NativeType {
                 expected: "ManualRecord".into(),
-                got: handle.type_name()?.into(),
+                got: "adt".into(),
             });
         }
 
-        let Value::Dict(fields) = args[0].value()? else {
+        let arg = args.pop().expect("validated one argument");
+        let got = arg.value_type_name();
+        let Value::Dict(mut fields) = arg else {
             return Err(EngineError::NativeType {
                 expected: "dict".into(),
-                got: args[0].type_name()?.into(),
+                got: got.into(),
             });
         };
         let enabled = fields
-            .get(&Symbol::intern("enabled"))
+            .remove(&Symbol::intern("enabled"))
             .ok_or_else(|| EngineError::NativeType {
                 expected: "field `enabled`".into(),
                 got: "dict".into(),
             })
             .and_then(bool::from_rex)?;
         let count = fields
-            .get(&Symbol::intern("count"))
+            .remove(&Symbol::intern("count"))
             .ok_or_else(|| EngineError::NativeType {
                 expected: "field `count`".into(),
                 got: "dict".into(),
@@ -112,38 +117,39 @@ impl RexType for ManualEnum {
 }
 
 impl IntoRex for ManualEnum {
-    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
+    fn into_rex(self) -> Result<Value, EngineError> {
         match self {
             Self::Flag(value) => {
-                let value = value.into_rex(heap)?;
-                heap.alloc_adt(Symbol::intern("Flag"), vec![value])
+                let value = value.into_rex()?;
+                Ok(Value::Adt(Symbol::intern("Flag"), vec![value]))
             }
             Self::Count(value) => {
-                let value = value.into_rex(heap)?;
-                heap.alloc_adt(Symbol::intern("Count"), vec![value])
+                let value = value.into_rex()?;
+                Ok(Value::Adt(Symbol::intern("Count"), vec![value]))
             }
         }
     }
 }
 
 impl FromRex for ManualEnum {
-    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
-        let Value::Adt(tag, args) = handle.value()? else {
+    fn from_rex(value: Value) -> Result<Self, EngineError> {
+        let got = value.value_type_name();
+        let Value::Adt(tag, mut args) = value else {
             return Err(EngineError::NativeType {
                 expected: "ManualEnum".into(),
-                got: handle.type_name()?.into(),
+                got: got.into(),
             });
         };
         if tag.as_ref() == "Flag" && args.len() == 1 {
-            return Ok(Self::Flag(bool::from_rex(&args[0])?));
+            return Ok(Self::Flag(bool::from_rex(args.pop().unwrap())?));
         }
         if tag.as_ref() == "Count" && args.len() == 1 {
-            return Ok(Self::Count(i32::from_rex(&args[0])?));
+            return Ok(Self::Count(i32::from_rex(args.pop().unwrap())?));
         }
 
         Err(EngineError::NativeType {
             expected: "ManualEnum".into(),
-            got: handle.type_name()?.into(),
+            got: "adt".into(),
         })
     }
 }
@@ -179,7 +185,7 @@ async fn manual_struct_adt_can_be_registered_and_roundtripped() {
     let program = parse_rex("ManualRecord { enabled = true, count = 41 }").unwrap();
     let (handle, ty) = common::run_program(builder, &program).await.unwrap();
     assert_eq!(ty, ManualRecord::rex_type());
-    let decoded = ManualRecord::from_rex(&handle).unwrap();
+    let decoded = ManualRecord::from_rex(handle).unwrap();
     assert_eq!(
         decoded,
         ManualRecord {
@@ -197,7 +203,7 @@ async fn derived_struct_adt_can_be_registered_and_roundtripped() {
     let program = parse_rex("DerivedRecord { enabled = true, count = 41 }").unwrap();
     let (handle, ty) = common::run_program(builder, &program).await.unwrap();
     assert_eq!(ty, DerivedRecord::rex_type());
-    let decoded = DerivedRecord::from_rex(&handle).unwrap();
+    let decoded = DerivedRecord::from_rex(handle).unwrap();
     assert_eq!(
         decoded,
         DerivedRecord {

@@ -32,19 +32,19 @@ async fn record_update_end_to_end() {
             Type::builtin(BuiltinTypeId::I32)
         ])
     );
-    let Value::Tuple(items) = value_handle.value().unwrap() else {
-        panic!("expected tuple, got {}", value_handle.type_name().unwrap());
+    let Value::Tuple(items) = value_handle else {
+        panic!("expected tuple, got {}", value_handle.value_type_name());
     };
     assert_eq!(items.len(), 2);
 
     let a_handle = &items[0];
-    let Value::I32(a) = a_handle.value().unwrap() else {
-        panic!("expected i32, got {}", a_handle.type_name().unwrap());
+    let Value::I32(a) = a_handle else {
+        panic!("expected i32, got {}", a_handle.value_type_name());
     };
     let b_handle = &items[1];
-    let Value::I32(b) = b_handle.value().unwrap() else {
-        panic!("expected i32, got {}", b_handle.type_name().unwrap());
+    let Value::I32(b) = b_handle else {
+        panic!("expected i32, got {}", b_handle.value_type_name());
     };
-    assert_eq!(a, 6);
-    assert_eq!(b, 2);
+    assert_eq!(*a, 6);
+    assert_eq!(*b, 2);
 }

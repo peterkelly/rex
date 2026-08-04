@@ -1,7 +1,7 @@
 mod common;
 
 use rex::{
-    engine::{Builder, EngineError, Handle, Heap, Module, Value},
+    engine::{Builder, EngineError, Module, Value},
     typesystem::{BuiltinTypeId, Type},
 };
 
@@ -18,7 +18,7 @@ fn register_integer_literal_natives(builder: &mut Builder<()>) -> Result<(), Eng
     builder.inject_module(module)
 }
 
-async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
+async fn eval(code: &str) -> Result<((), Value, Type), EngineError> {
     let mut builder = Builder::with_prelude(()).unwrap();
     register_integer_literal_natives(&mut builder)?;
     common::eval_source(builder, code).await
@@ -56,8 +56,8 @@ fn expected_negative_signed_type() -> Type {
     ])
 }
 
-fn assert_tuple_of_strings(_heap: &Heap, handle: &Handle) {
-    let Value::Tuple(parts) = handle.value().unwrap() else {
+fn assert_tuple_of_strings(_runtime: &(), handle: &Value) {
+    let Value::Tuple(parts) = handle else {
         panic!("expected tuple");
     };
     let got: Vec<String> = parts
@@ -71,8 +71,8 @@ fn assert_tuple_of_strings(_heap: &Heap, handle: &Handle) {
     assert_eq!(got, expected);
 }
 
-fn assert_tuple_of_negative_signed_strings(_heap: &Heap, handle: &Handle) {
-    let Value::Tuple(parts) = handle.value().unwrap() else {
+fn assert_tuple_of_negative_signed_strings(_runtime: &(), handle: &Value) {
+    let Value::Tuple(parts) = handle else {
         panic!("expected tuple");
     };
     let got: Vec<String> = parts

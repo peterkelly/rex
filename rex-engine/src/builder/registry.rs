@@ -9,6 +9,7 @@ use rex_typesystem::{
 
 use crate::{
     env::RootedEnvironment, error::EngineError, evaluator::native_callable::NativeCallable,
+    memory::heap::RootedPtr,
 };
 
 pub(crate) type NativeId = u64;
@@ -126,6 +127,14 @@ impl<State: Clone + Send + Sync + 'static> NativeRegistry<State> {
     pub(crate) fn callable_by_id(&self, id: NativeId) -> Option<&NativeCallable<State>> {
         self.by_id.get(&id).map(|imp| &imp.func)
     }
+
+    pub(crate) fn visit_values(&self, visit: &mut impl FnMut(RootedPtr)) {
+        for implementation in self.by_id.values() {
+            if let NativeCallable::Constant(value) = &implementation.func {
+                visit(*value);
+            }
+        }
+    }
 }
 
 fn impl_matches_type<State: Clone + Send + Sync + 'static>(
@@ -224,6 +233,14 @@ impl TypeclassRegistry {
                 class: class.clone(),
                 typ: param_type.to_string(),
             }),
+        }
+    }
+
+    pub(crate) fn visit_values(&self, visit: &mut impl FnMut(crate::memory::heap::RootedPtr)) {
+        for instances in self.entries.values() {
+            for instance in instances {
+                instance.def_env.visit_values(visit);
+            }
         }
     }
 }

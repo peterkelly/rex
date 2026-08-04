@@ -3,17 +3,16 @@ mod common;
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{Builder, CompileOptions, EngineError, FromRex, Handle, Heap, Value},
+    engine::{Builder, CompileOptions, EngineError, FromRex, Value},
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, RexType, Type},
 };
 
 /// Helper to evaluate a Rex expression and return the result handle.
-async fn eval_expr(builder: Builder<()>, expr: &str) -> (Handle, Heap, Type) {
+async fn eval_expr(builder: Builder<()>, expr: &str) -> (Value, (), Type) {
     let program = parse_rex(expr).unwrap();
-    let heap = builder.heap().clone();
     let (value, ty) = common::run_program(builder, &program).await.unwrap();
-    (value, heap, ty)
+    (value, (), ty)
 }
 
 /// Helper to infer the type of a Rex expression
@@ -39,14 +38,9 @@ async fn vec_from_value() {
     })
     .unwrap();
 
-    let (result, heap, ty) = eval_expr(builder, r#"accept_vec [1, 2, 3]"#).await;
+    let (result, _, ty) = eval_expr(builder, r#"accept_vec [1, 2, 3]"#).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
-    common::assert_handles_eq(
-        &result,
-        &heap
-            .alloc_string("accept_vec: [1, 2, 3]".to_string())
-            .unwrap(),
-    );
+    common::assert_handles_eq(&result, &Value::String("accept_vec: [1, 2, 3]".to_string()));
 }
 
 #[tokio::test]
@@ -61,14 +55,9 @@ async fn vec_from_value_accepts_list_literal_without_conversion() {
     })
     .unwrap();
 
-    let (result, heap, ty) = eval_expr(builder, r#"accept_vec [1, 2, 3]"#).await;
+    let (result, _, ty) = eval_expr(builder, r#"accept_vec [1, 2, 3]"#).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
-    common::assert_handles_eq(
-        &result,
-        &heap
-            .alloc_string("accept_vec: [1, 2, 3]".to_string())
-            .unwrap(),
-    );
+    common::assert_handles_eq(&result, &Value::String("accept_vec: [1, 2, 3]".to_string()));
 }
 
 #[tokio::test]
@@ -83,19 +72,17 @@ async fn vec_to_value() {
     })
     .unwrap();
 
-    let (result, heap, ty) = eval_expr(builder, r#"return_vec "hello""#).await;
+    let (result, _, ty) = eval_expr(builder, r#"return_vec "hello""#).await;
     assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
     common::assert_handles_eq(
         &result,
-        &heap
-            .alloc_list(vec![
-                heap.alloc_i32(0).unwrap(),
-                heap.alloc_i32(1).unwrap(),
-                heap.alloc_i32(2).unwrap(),
-                heap.alloc_i32(3).unwrap(),
-                heap.alloc_i32(4).unwrap(),
-            ])
-            .unwrap(),
+        &Value::List(vec![
+            Value::I32(0),
+            Value::I32(1),
+            Value::I32(2),
+            Value::I32(3),
+            Value::I32(4),
+        ]),
     );
 }
 
@@ -127,7 +114,7 @@ async fn host_vecs_pattern_match_as_lists() {
     })
     .unwrap();
 
-    let (result, heap, ty) = eval_expr(
+    let (result, _, ty) = eval_expr(
         builder,
         r#"match (return_vec "abc") with {
             case Cons x _ -> x;
@@ -136,11 +123,11 @@ async fn host_vecs_pattern_match_as_lists() {
     )
     .await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    common::assert_handles_eq(&result, &heap.alloc_i32(0).unwrap());
+    common::assert_handles_eq(&result, &Value::I32(0));
 }
 
 #[tokio::test]
-async fn host_vec_u8_returns_binary_backed_list() {
+async fn host_vec_u8_returns_canonical_bytes_value() {
     fn return_bytes(_state: &()) -> Result<Vec<u8>, EngineError> {
         Ok(vec![3, 4, 5])
     }
@@ -153,20 +140,7 @@ async fn host_vec_u8_returns_binary_backed_list() {
 
     let (result, _heap, ty) = eval_expr(builder, "return_bytes").await;
     assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::U8)));
-    let Value::ListSlice {
-        start,
-        end,
-        elements,
-    } = result.value().unwrap()
-    else {
-        panic!("expected list slice");
-    };
-    assert_eq!(start, 0);
-    assert_eq!(end, 3);
-    let Value::BinaryData(bytes) = elements.value().unwrap() else {
-        panic!("expected binary data backing");
-    };
-    assert_eq!(bytes, vec![3, 4, 5]);
+    assert_eq!(result, Value::Bytes(vec![3, 4, 5]));
 }
 
 #[tokio::test]
@@ -186,7 +160,7 @@ async fn host_vec_u8_arguments_decode_binary_and_hybrid_lists() {
     })
     .unwrap();
 
-    let (result, heap, ty) = eval_expr(
+    let (result, _, ty) = eval_expr(
         builder,
         r#"
         (
@@ -216,22 +190,19 @@ async fn host_vec_u8_arguments_decode_binary_and_hybrid_lists() {
     );
     common::assert_handles_eq(
         &result,
-        &heap
-            .alloc_tuple(vec![
-                heap.alloc_string("[10, 11, 12, 13]".to_string()).unwrap(),
-                heap.alloc_string("[11, 12]".to_string()).unwrap(),
-                heap.alloc_string("[1, 11, 12, 13]".to_string()).unwrap(),
-                heap.alloc_tuple(vec![heap.alloc_u8(10).unwrap(), heap.alloc_i32(3).unwrap()])
-                    .unwrap(),
-            ])
-            .unwrap(),
+        &Value::Tuple(vec![
+            Value::String("[10, 11, 12, 13]".to_string()),
+            Value::String("[11, 12]".to_string()),
+            Value::String("[1, 11, 12, 13]".to_string()),
+            Value::Tuple(vec![Value::U8(10), Value::I32(3)]),
+        ]),
     );
 }
 
 #[tokio::test]
 async fn option_prelude() {
     let builder = Builder::with_prelude(()).unwrap();
-    let (result, heap, ty) = eval_expr(
+    let (result, _, ty) = eval_expr(
         builder,
         r#"(((Some 4) is Option i32), (None is Option i32))"#,
     )
@@ -245,13 +216,10 @@ async fn option_prelude() {
     );
     common::assert_handles_eq(
         &result,
-        &heap
-            .alloc_tuple(vec![
-                heap.alloc_adt(Symbol::intern("Some"), vec![heap.alloc_i32(4).unwrap()])
-                    .unwrap(),
-                heap.alloc_adt(Symbol::intern("None"), vec![]).unwrap(),
-            ])
-            .unwrap(),
+        &Value::Tuple(vec![
+            Value::Adt(Symbol::intern("Some"), vec![Value::I32(4)]),
+            Value::Adt(Symbol::intern("None"), vec![]),
+        ]),
     );
 }
 
@@ -266,7 +234,7 @@ async fn option_from_value() {
         module.export("accept_opt", accept_opt)
     })
     .unwrap();
-    let (result, heap, ty) = eval_expr(builder, r#"(accept_opt (Some 4), accept_opt None)"#).await;
+    let (result, _, ty) = eval_expr(builder, r#"(accept_opt (Some 4), accept_opt None)"#).await;
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -276,13 +244,10 @@ async fn option_from_value() {
     );
     common::assert_handles_eq(
         &result,
-        &heap
-            .alloc_tuple(vec![
-                heap.alloc_string("accept_opt: Some(4)".to_string())
-                    .unwrap(),
-                heap.alloc_string("accept_opt: None".to_string()).unwrap(),
-            ])
-            .unwrap(),
+        &Value::Tuple(vec![
+            Value::String("accept_opt: Some(4)".to_string()),
+            Value::String("accept_opt: None".to_string()),
+        ]),
     );
 }
 
@@ -301,7 +266,7 @@ async fn option_into_value() {
         module.export("return_opt", return_opt)
     })
     .unwrap();
-    let (result, heap, ty) = eval_expr(builder, r#"(return_opt "hello", return_opt "")"#).await;
+    let (result, _, ty) = eval_expr(builder, r#"(return_opt "hello", return_opt "")"#).await;
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -311,13 +276,10 @@ async fn option_into_value() {
     );
     common::assert_handles_eq(
         &result,
-        &heap
-            .alloc_tuple(vec![
-                heap.alloc_adt(Symbol::intern("Some"), vec![heap.alloc_i32(5).unwrap()])
-                    .unwrap(),
-                heap.alloc_adt(Symbol::intern("None"), vec![]).unwrap(),
-            ])
-            .unwrap(),
+        &Value::Tuple(vec![
+            Value::Adt(Symbol::intern("Some"), vec![Value::I32(5)]),
+            Value::Adt(Symbol::intern("None"), vec![]),
+        ]),
     );
 }
 
@@ -350,7 +312,7 @@ async fn option_rex_type() {
 #[tokio::test]
 async fn result_prelude() {
     let builder = Builder::with_prelude(()).unwrap();
-    let (result, heap, ty) = eval_expr(
+    let (result, _, ty) = eval_expr(
         builder,
         r#"(((Ok 42) is Result i32 string), ((Err "error") is Result i32 string))"#,
     )
@@ -370,17 +332,13 @@ async fn result_prelude() {
     );
     common::assert_handles_eq(
         &result,
-        &heap
-            .alloc_tuple(vec![
-                heap.alloc_adt(Symbol::intern("Ok"), vec![heap.alloc_i32(42).unwrap()])
-                    .unwrap(),
-                heap.alloc_adt(
-                    Symbol::intern("Err"),
-                    vec![heap.alloc_string("error".to_string()).unwrap()],
-                )
-                .unwrap(),
-            ])
-            .unwrap(),
+        &Value::Tuple(vec![
+            Value::Adt(Symbol::intern("Ok"), vec![Value::I32(42)]),
+            Value::Adt(
+                Symbol::intern("Err"),
+                vec![Value::String("error".to_string())],
+            ),
+        ]),
     );
 }
 
@@ -395,7 +353,7 @@ async fn result_from_value_primitives() {
         module.export("accept_result", accept_result)
     })
     .unwrap();
-    let (result, heap, ty) = eval_expr(
+    let (result, _, ty) = eval_expr(
         builder,
         r#"(accept_result (Ok 42), accept_result (Err "failed"))"#,
     )
@@ -409,14 +367,10 @@ async fn result_from_value_primitives() {
     );
     common::assert_handles_eq(
         &result,
-        &heap
-            .alloc_tuple(vec![
-                heap.alloc_string("accept_result: Ok(42)".to_string())
-                    .unwrap(),
-                heap.alloc_string("accept_result: Err(\"failed\")".to_string())
-                    .unwrap(),
-            ])
-            .unwrap(),
+        &Value::Tuple(vec![
+            Value::String("accept_result: Ok(42)".to_string()),
+            Value::String("accept_result: Err(\"failed\")".to_string()),
+        ]),
     );
 }
 
@@ -431,7 +385,7 @@ async fn result_from_value_different_primitives() {
         module.export("accept_result", accept_result)
     })
     .unwrap();
-    let (result, heap, ty) = eval_expr(
+    let (result, _, ty) = eval_expr(
         builder,
         r#"(accept_result (Ok 3.14), accept_result (Err 404))"#,
     )
@@ -445,14 +399,10 @@ async fn result_from_value_different_primitives() {
     );
     common::assert_handles_eq(
         &result,
-        &heap
-            .alloc_tuple(vec![
-                heap.alloc_string("accept_result: Ok(3.14)".to_string())
-                    .unwrap(),
-                heap.alloc_string("accept_result: Err(404)".to_string())
-                    .unwrap(),
-            ])
-            .unwrap(),
+        &Value::Tuple(vec![
+            Value::String("accept_result: Ok(3.14)".to_string()),
+            Value::String("accept_result: Err(404)".to_string()),
+        ]),
     );
 }
 
@@ -471,8 +421,7 @@ async fn result_into_value_primitives() {
         module.export("return_result", return_result)
     })
     .unwrap();
-    let (result, heap, ty) =
-        eval_expr(builder, r#"(return_result "hello", return_result "")"#).await;
+    let (result, _, ty) = eval_expr(builder, r#"(return_result "hello", return_result "")"#).await;
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -488,17 +437,13 @@ async fn result_into_value_primitives() {
     );
     common::assert_handles_eq(
         &result,
-        &heap
-            .alloc_tuple(vec![
-                heap.alloc_adt(Symbol::intern("Ok"), vec![heap.alloc_i32(5).unwrap()])
-                    .unwrap(),
-                heap.alloc_adt(
-                    Symbol::intern("Err"),
-                    vec![heap.alloc_string("empty string".to_string()).unwrap()],
-                )
-                .unwrap(),
-            ])
-            .unwrap(),
+        &Value::Tuple(vec![
+            Value::Adt(Symbol::intern("Ok"), vec![Value::I32(5)]),
+            Value::Adt(
+                Symbol::intern("Err"),
+                vec![Value::String("empty string".to_string())],
+            ),
+        ]),
     );
 }
 
@@ -560,7 +505,7 @@ async fn result_from_value_custom_types() {
     })
     .unwrap();
 
-    let (result, heap, ty) = eval_expr(
+    let (result, _, ty) = eval_expr(
         builder,
         r#"(
             accept_result (Ok (Point { x = 10, y = 20 })),
@@ -578,13 +523,10 @@ async fn result_from_value_custom_types() {
 
     common::assert_handles_eq(
         &result,
-        &heap
-            .alloc_tuple(vec![
-                heap.alloc_string("Ok: Point(10, 20)".to_string()).unwrap(),
-                heap.alloc_string("Err: not found (code 404)".to_string())
-                    .unwrap(),
-            ])
-            .unwrap(),
+        &Value::Tuple(vec![
+            Value::String("Ok: Point(10, 20)".to_string()),
+            Value::String("Err: not found (code 404)".to_string()),
+        ]),
     );
 }
 
@@ -619,13 +561,13 @@ async fn result_into_value_custom_types() {
         ])
     );
 
-    let Value::Tuple(tuple_values) = result.value().unwrap() else {
+    let Value::Tuple(tuple_values) = result else {
         panic!("expected tuple");
     };
     assert_eq!(tuple_values.len(), 2);
 
-    let ok_result = <Result<Point, ErrorInfo>>::from_rex(&tuple_values[0]).unwrap();
-    let err_result = <Result<Point, ErrorInfo>>::from_rex(&tuple_values[1]).unwrap();
+    let ok_result = <Result<Point, ErrorInfo>>::from_rex(tuple_values[0].clone()).unwrap();
+    let err_result = <Result<Point, ErrorInfo>>::from_rex(tuple_values[1].clone()).unwrap();
 
     assert_eq!(ok_result, Ok(Point { x: 100, y: 200 }));
     assert_eq!(

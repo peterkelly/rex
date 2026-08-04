@@ -4,11 +4,9 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use crate::modules::stdio;
-pub use crate::modules::stdio::{io_result_type_arg, run_io_handle};
 use rex::{
     Rex,
-    engine::{Builder, EngineError, Handle, Module},
+    engine::{Builder, EngineError, Module, Value},
     typesystem::{BuiltinTypeId, Scheme, Type},
 };
 use tokio::process::Command;
@@ -60,7 +58,6 @@ struct CliSubprocess {
 
 pub fn inject_cli_prelude_builder(builder: &mut Builder) -> Result<(), EngineError> {
     inject_cli_test_natives(builder)?;
-    stdio::inject_cli_io_natives(builder)?;
     inject_cli_process_natives(builder)?;
     Ok(())
 }
@@ -95,20 +92,20 @@ fn inject_cli_test_natives(builder: &mut Builder) -> Result<(), EngineError> {
         vec![],
         Type::fun(&u64_ty, Type::fun(&u64_ty, &string_list_ty)),
     );
-    module.export_native("make_hybrid_list", scheme, 2, |engine, _scheme, args| {
-        let ncons = args[0].as_u64()?;
-        let nflat = args[1].as_u64()?;
-        let mut flat_contents: Vec<Handle> = Vec::new();
-        for i in 0..nflat {
-            flat_contents.push(engine.heap().alloc_string(format!("F-{}", ncons + i))?);
+    module.export_native("make_hybrid_list", scheme, 2, |_ctx, _scheme, args| {
+        let [Value::U64(ncons), Value::U64(nflat)] = args.as_slice() else {
+            return Err(EngineError::NativeType {
+                expected: "(u64, u64)".into(),
+                got: "host values".into(),
+            });
+        };
+        let mut values = (0..*nflat)
+            .map(|i| Value::String(format!("F-{}", *ncons + i)))
+            .collect::<Vec<_>>();
+        for i in 0..*ncons {
+            values.insert(0, Value::String(format!("C-{}", *ncons + i)));
         }
-        let data = engine.heap().alloc_data(flat_contents)?;
-        let mut tail = engine.heap().alloc_list_slice(0, nflat as usize, data)?;
-        for i in 0..ncons {
-            let head = engine.heap().alloc_string(format!("C-{}", ncons + i))?;
-            tail = engine.heap().alloc_cons(head, tail)?;
-        }
-        Ok(tail)
+        Ok(Value::List(values))
     })?;
 
     builder.inject_module(module)
@@ -229,142 +226,6 @@ mod tests {
         CompileOptions::for_module("cli.test").unwrap()
     }
     #[tokio::test]
-    async fn cli_prelude_typecheck_smoke() {
-        let code = r#"
-            import std.process;
-            import std.io;
-
-            let p = process.spawn (process.SpawnOptions {
-                cmd = "sh",
-                args = ["-c", "printf hi"]
-            }) in
-              io.write_all 1 (process.stdout p)
-        "#;
-
-        let mut builder = Builder::with_prelude(()).unwrap();
-        inject_cli_prelude_builder(&mut builder).unwrap();
-        let compiler = builder.build_compiler();
-        let parsed = parse_rex(code).unwrap();
-        let (program, evaluator) = compiler
-            .compile_program(&parsed, compile_options())
-            .await
-            .unwrap();
-        let (value, ctx) = evaluator
-            .run_with_context(program, Default::default())
-            .await
-            .unwrap();
-        run_io_handle(ctx, value).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn cli_log_exports_are_string_functions() {
-        let code = r#"
-            import std.io;
-
-            io.info "hello"
-        "#;
-
-        let mut builder = Builder::with_prelude(()).unwrap();
-        inject_cli_prelude_builder(&mut builder).unwrap();
-        let compiler = builder.build_compiler();
-        let parsed = parse_rex(code).unwrap();
-        let (program, evaluator) = compiler
-            .compile_program(&parsed, compile_options())
-            .await
-            .unwrap();
-        let ty = program.result_type().clone();
-        let (value, ctx) = evaluator
-            .run_with_context(program, Default::default())
-            .await
-            .unwrap();
-        let inner = io_result_type_arg(&ty).unwrap();
-        let value = run_io_handle(ctx, value).await.unwrap();
-        assert_eq!(inner, Type::builtin(BuiltinTypeId::String));
-        assert_eq!(value.to_rust::<String>().unwrap(), "hello");
-    }
-
-    #[tokio::test]
-    async fn cli_io_filesystem_actions_sequence_with_bind() {
-        let path = std::env::temp_dir().join(format!("rex-cli-io-{}.txt", Uuid::new_v4()));
-        let path_str = path.display().to_string();
-        let code = format!(
-            r#"
-            import std.io;
-
-            let path = "{path_str}" in
-              bind (\_ ->
-                bind (\contents ->
-                  bind (\exists ->
-                    bind (\_ -> pure (contents, exists))
-                         (io.remove_file path))
-                       (io.exists path))
-                     (io.read_file path))
-                   (io.write_file path "hello")
-            "#
-        );
-
-        let mut builder = Builder::with_prelude(()).unwrap();
-        inject_cli_prelude_builder(&mut builder).unwrap();
-        let compiler = builder.build_compiler();
-        let parsed = parse_rex(&code).unwrap();
-        let (program, evaluator) = compiler
-            .compile_program(&parsed, compile_options())
-            .await
-            .unwrap();
-        let ty = program.result_type().clone();
-        let (value, ctx) = evaluator
-            .run_with_context(program, Default::default())
-            .await
-            .unwrap();
-        let inner = io_result_type_arg(&ty).unwrap();
-        let value = run_io_handle(ctx, value).await.unwrap();
-        assert_eq!(
-            inner,
-            Type::tuple(vec![
-                Type::builtin(BuiltinTypeId::String),
-                Type::builtin(BuiltinTypeId::Bool),
-            ])
-        );
-        let Value::Tuple(xs) = value.value().unwrap() else {
-            panic!("expected tuple");
-        };
-        assert_eq!(xs[0].to_rust::<String>().unwrap(), "hello");
-        assert!(xs[1].to_rust::<bool>().unwrap());
-        assert!(!path.exists());
-    }
-
-    #[tokio::test]
-    async fn cli_io_deep_bind_chain_does_not_recurse_rust_stack() {
-        let code = r#"
-            import std.io;
-
-            fn go n: i32 -> io.IO i32 =
-              if n <= 0 then pure n
-              else bind (\_ -> go (n - 1)) (pure n);
-
-            go 10000
-        "#;
-
-        let mut builder = Builder::with_prelude(()).unwrap();
-        inject_cli_prelude_builder(&mut builder).unwrap();
-        let compiler = builder.build_compiler();
-        let parsed = parse_rex(code).unwrap();
-        let (program, evaluator) = compiler
-            .compile_program(&parsed, compile_options())
-            .await
-            .unwrap();
-        let ty = program.result_type().clone();
-        let (value, ctx) = evaluator
-            .run_with_context(program, Default::default())
-            .await
-            .unwrap();
-        let inner = io_result_type_arg(&ty).unwrap();
-        let value = run_io_handle(ctx, value).await.unwrap();
-        assert_eq!(inner, Type::builtin(BuiltinTypeId::I32));
-        assert_eq!(value.to_rust::<i32>().unwrap(), 0);
-    }
-
-    #[tokio::test]
     async fn cli_subprocess_captures_stdout_and_exit_code() {
         let code = r#"
             import std.process;
@@ -395,16 +256,11 @@ mod tests {
                 Type::list(Type::builtin(BuiltinTypeId::U8)),
             ])
         );
-        let Value::Tuple(xs) = value.value().unwrap() else {
+        let Value::Tuple(xs) = value else {
             panic!("expected tuple");
         };
-        assert_eq!(xs[0].to_rust::<i32>().unwrap(), 0);
-
-        let out = xs[1].as_list().unwrap();
-        let got: Vec<u8> = out.iter().map(|v| v.to_rust::<u8>().unwrap()).collect();
-        assert_eq!(got, b"hi");
-
-        let err = xs[2].as_list().unwrap();
-        assert!(err.is_empty());
+        assert_eq!(xs[0], Value::I32(0));
+        assert_eq!(xs[1], Value::Bytes(b"hi".to_vec()));
+        assert_eq!(xs[2], Value::Bytes(Vec::new()));
     }
 }

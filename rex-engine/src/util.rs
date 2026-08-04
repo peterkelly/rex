@@ -123,6 +123,34 @@ pub(crate) fn validate_native_export_scheme(
     Ok(())
 }
 
+pub(crate) fn validate_host_value_export_scheme(
+    scheme: &Scheme,
+    arity: usize,
+) -> Result<(), EngineError> {
+    let (args, result) = native_export_arg_types(scheme, arity)?;
+    if args.iter().any(type_contains_function) || type_contains_function(&result) {
+        return Err(EngineError::Custom(format!(
+            "host export type `{}` contains a function value that cannot cross the owned Value boundary",
+            scheme.typ
+        )));
+    }
+    Ok(())
+}
+
+fn type_contains_function(typ: &Type) -> bool {
+    match typ.as_ref() {
+        TypeKind::Fun(_, _) => true,
+        TypeKind::App(function, argument) => {
+            type_contains_function(function) || type_contains_function(argument)
+        }
+        TypeKind::Tuple(items) => items.iter().any(type_contains_function),
+        TypeKind::Record(fields) => fields
+            .iter()
+            .any(|(_, field)| type_contains_function(field)),
+        TypeKind::Var(_) | TypeKind::Con(_) => false,
+    }
+}
+
 pub(crate) fn normalize_name(name: &str) -> Symbol {
     if let Some(stripped) = name.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
         let ok = stripped

@@ -7,14 +7,14 @@ use rex::{
     typesystem::{BuiltinTypeId, Type},
 };
 
-async fn eval(source: &str) -> Result<(rex::engine::Heap, rex::engine::Handle, Type), EngineError> {
+async fn eval(source: &str) -> Result<((), rex::engine::Value, Type), EngineError> {
     common::eval_source(Builder::with_prelude(()).unwrap(), source).await
 }
 
 async fn assert_i32(source: &str, expected: i32) {
     let (_heap, handle, ty) = eval(source).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32), "{source}");
-    assert_eq!(i32::from_rex(&handle).unwrap(), expected, "{source}");
+    assert_eq!(i32::from_rex(handle).unwrap(), expected, "{source}");
 }
 
 async fn assert_widens_to<T>(
@@ -29,7 +29,7 @@ async fn assert_widens_to<T>(
     let source = format!("let x: {dst} = ({value} is {src}) in x");
     let (_heap, handle, ty) = eval(&source).await.unwrap();
     assert_eq!(ty, Type::builtin(expected_ty), "{source}");
-    assert_eq!(T::from_rex(&handle).unwrap(), expected, "{source}");
+    assert_eq!(T::from_rex(handle).unwrap(), expected, "{source}");
 }
 
 async fn assert_type_error(source: &str) {

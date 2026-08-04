@@ -22,7 +22,7 @@ pub use module_id::{ModuleId, ModuleIdError};
 pub use system::Importer;
 pub use types::virtual_export_name;
 pub use types::{
-    CanonicalSymbol, ImportRequest, ModuleExports, ModuleInstance, ModuleKey, ResolvedModule,
+    CanonicalSymbol, ImportRequest, ModuleExports, ModuleKey, ResolvedModule,
     ResolvedModuleContent, ResolvedRustModule, SymbolKind, VirtualModule,
 };
 

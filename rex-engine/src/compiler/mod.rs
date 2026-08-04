@@ -17,7 +17,7 @@ use crate::{
     env::RootedEnvironment,
     evaluator::runtime_core::RuntimeCore,
     manifest::{MainInputSpec, MainSignature},
-    memory::heap::Heap,
+    memory::heap::HeapState,
     modules::{
         CompilationPackage, ImportChain, ImportRequest, Importer, ModuleId, ResolvedModuleContent,
         exports_from_package, package_from_resolved, parse_program_from_source, prefix_for_module,
@@ -60,7 +60,7 @@ where
     pub(crate) runtime: RuntimeRegistry<State>,
     pub(crate) module_loader: ModuleLoaderState<State>,
     pub(crate) policy: RuntimePolicy,
-    pub(crate) heap: Heap,
+    pub(crate) heap: HeapState,
 }
 
 impl<State> Compiler<State>

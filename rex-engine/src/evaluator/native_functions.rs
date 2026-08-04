@@ -15,28 +15,28 @@ use rex_ast::Symbol;
 use rex_typesystem::types::{BuiltinTypeId, Type, TypeKind, TypedExpr, TypedExprKind};
 use std::{collections::BTreeMap, sync::Arc};
 
-pub(crate) enum NativeStep<'scope> {
+pub(crate) enum NativeStep {
     Wait,
     Push {
         expr: Arc<TypedExpr>,
-        env: ScopedEnvironment<'scope>,
+        env: ScopedEnvironment,
     },
     Schedule(usize),
-    Return(RootedPtr<'scope>),
+    Return(RootedPtr),
 }
 
-struct NativeChildSpec<'scope> {
+struct NativeChildSpec {
     expr: Arc<TypedExpr>,
-    env: ScopedEnvironment<'scope>,
+    env: ScopedEnvironment,
 }
 
-fn native_step_to_control<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
+fn native_step_to_control(
+    scope: &mut RootScope<'_>,
+    frames: &mut FrameStore<Frame<RootedPtr, ScopedEnvironment>>,
     frame_id: FrameId,
-    mut frame: FrNativeCall<RootedPtr<'scope>>,
-    step: NativeStep<'scope>,
-) -> Result<EvalControl<'scope>, EngineError> {
+    mut frame: FrNativeCall<RootedPtr>,
+    step: NativeStep,
+) -> Result<EvalControl, EngineError> {
     match step {
         NativeStep::Wait => {
             frames.replace(frame_id, Frame::NativeCall(frame))?;
@@ -79,12 +79,12 @@ fn native_step_to_control<'scope>(
     }
 }
 
-pub(crate) fn eval_native_enter<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
+pub(crate) fn eval_native_enter(
+    scope: &mut RootScope<'_>,
+    frames: &mut FrameStore<Frame<RootedPtr, ScopedEnvironment>>,
     frame_id: FrameId,
-    mut frame: FrNativeCall<RootedPtr<'scope>>,
-) -> Result<EvalControl<'scope>, EngineError> {
+    mut frame: FrNativeCall<RootedPtr>,
+) -> Result<EvalControl, EngineError> {
     if frame.state != FrNativeCallState::Enter {
         return unexpected_child_result("native call");
     }
@@ -92,14 +92,14 @@ pub(crate) fn eval_native_enter<'scope>(
     native_step_to_control(scope, frames, frame_id, frame, step)
 }
 
-pub(crate) fn eval_native_receive<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    frames: &mut FrameStore<Frame<RootedPtr<'scope>, ScopedEnvironment<'scope>>>,
+pub(crate) fn eval_native_receive(
+    scope: &mut RootScope<'_>,
+    frames: &mut FrameStore<Frame<RootedPtr, ScopedEnvironment>>,
     frame_id: FrameId,
-    mut frame: FrNativeCall<RootedPtr<'scope>>,
+    mut frame: FrNativeCall<RootedPtr>,
     child: FrameId,
-    value: RootedPtr<'scope>,
-) -> Result<EvalControl<'scope>, EngineError> {
+    value: RootedPtr,
+) -> Result<EvalControl, EngineError> {
     if frame.state != FrNativeCallState::Waiting {
         return unexpected_child_result("native call");
     }
@@ -329,7 +329,7 @@ impl<P> NativeTask<P> {
     }
 }
 
-impl<'scope> NativeTask<RootedPtr<'scope>> {
+impl NativeTask<RootedPtr> {
     fn push_scheduled_child(&mut self, child: FrameId) -> Result<(), EngineError> {
         match self {
             NativeTask::SequenceMap(task) => {
@@ -373,9 +373,9 @@ impl<'scope> NativeTask<RootedPtr<'scope>> {
 
     fn scheduled_child_spec(
         &self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         index: usize,
-    ) -> Result<NativeChildSpec<'scope>, EngineError> {
+    ) -> Result<NativeChildSpec, EngineError> {
         match self {
             NativeTask::SequenceMap(task) => task.child_spec(scope, index),
             NativeTask::SequenceFilter(task) => task.child_spec(scope, index),
@@ -389,11 +389,8 @@ impl<'scope> NativeTask<RootedPtr<'scope>> {
     }
 }
 
-impl<'scope> Coroutine<'scope> for NativeTask<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeTask<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         match self {
             NativeTask::ApplyUnary(task) => task.enter(scope),
             NativeTask::SequenceMap(task) => task.enter(scope),
@@ -415,10 +412,10 @@ impl<'scope> Coroutine<'scope> for NativeTask<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         match self {
             NativeTask::ApplyUnary(task) => task.receive(scope, child, value),
             NativeTask::SequenceMap(task) => task.receive(scope, child, value),
@@ -439,24 +436,24 @@ impl<'scope> Coroutine<'scope> for NativeTask<RootedPtr<'scope>> {
     }
 }
 
-fn native_apply_step<'scope>(
-    func: RootedPtr<'scope>,
+fn native_apply_step(
+    func: RootedPtr,
     func_type: Type,
-    arg: RootedPtr<'scope>,
+    arg: RootedPtr,
     arg_type: Type,
-) -> Result<NativeStep<'scope>, EngineError> {
+) -> Result<NativeStep, EngineError> {
     native_apply_spec(func, func_type, arg, arg_type).map(|spec| NativeStep::Push {
         expr: spec.expr,
         env: spec.env,
     })
 }
 
-fn native_apply_spec<'scope>(
-    func: RootedPtr<'scope>,
+fn native_apply_spec(
+    func: RootedPtr,
     func_type: Type,
-    arg: RootedPtr<'scope>,
+    arg: RootedPtr,
     arg_type: Type,
-) -> Result<NativeChildSpec<'scope>, EngineError> {
+) -> Result<NativeChildSpec, EngineError> {
     let (env, expr) = synthetic_application_expr(func, func_type, &[(arg, arg_type)])?;
     Ok(NativeChildSpec {
         expr: Arc::new(expr),
@@ -464,18 +461,15 @@ fn native_apply_spec<'scope>(
     })
 }
 
-pub(crate) trait Coroutine<'scope> {
-    fn enter(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError>;
+pub(crate) trait Coroutine {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError>;
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError>;
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError>;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -486,11 +480,8 @@ pub struct NativeApplyUnary<P> {
     pub arg_type: Type,
 }
 
-impl<'scope> Coroutine<'scope> for NativeApplyUnary<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        _scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeApplyUnary<RootedPtr> {
+    fn enter(&mut self, _scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         native_apply_step(
             self.func,
             self.func_type.clone(),
@@ -501,10 +492,10 @@ impl<'scope> Coroutine<'scope> for NativeApplyUnary<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        _scope: &mut RootScope<'_, 'scope>,
+        _scope: &mut RootScope<'_>,
         _child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         Ok(NativeStep::Return(value))
     }
 }
@@ -521,11 +512,8 @@ pub(crate) struct NativeSequenceMap<P> {
     pub remaining: usize,
 }
 
-impl<'scope> Coroutine<'scope> for NativeSequenceMap<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeSequenceMap<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         if self.values.is_empty() {
             let root = alloc_native_sequence(scope, &self.shape, Vec::new())?;
             return Ok(NativeStep::Return(root));
@@ -538,10 +526,10 @@ impl<'scope> Coroutine<'scope> for NativeSequenceMap<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         let index = self
             .children
             .iter()
@@ -579,12 +567,12 @@ impl<'scope> Coroutine<'scope> for NativeSequenceMap<RootedPtr<'scope>> {
     }
 }
 
-impl<'scope> NativeSequenceMap<RootedPtr<'scope>> {
+impl NativeSequenceMap<RootedPtr> {
     fn child_spec(
         &self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         index: usize,
-    ) -> Result<NativeChildSpec<'scope>, EngineError> {
+    ) -> Result<NativeChildSpec, EngineError> {
         let value = self.values.get(scope, index)?;
         native_apply_spec(
             self.func,
@@ -607,11 +595,8 @@ pub(crate) struct NativeSequenceFilter<P> {
     pub remaining: usize,
 }
 
-impl<'scope> Coroutine<'scope> for NativeSequenceFilter<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeSequenceFilter<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         if self.values.is_empty() {
             let root = alloc_native_sequence(scope, &self.shape, Vec::new())?;
             return Ok(NativeStep::Return(root));
@@ -624,10 +609,10 @@ impl<'scope> Coroutine<'scope> for NativeSequenceFilter<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         let index = self
             .children
             .iter()
@@ -669,12 +654,12 @@ impl<'scope> Coroutine<'scope> for NativeSequenceFilter<RootedPtr<'scope>> {
     }
 }
 
-impl<'scope> NativeSequenceFilter<RootedPtr<'scope>> {
+impl NativeSequenceFilter<RootedPtr> {
     fn child_spec(
         &self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         index: usize,
-    ) -> Result<NativeChildSpec<'scope>, EngineError> {
+    ) -> Result<NativeChildSpec, EngineError> {
         let value = self.values.get(scope, index)?;
         native_apply_spec(
             self.func,
@@ -697,11 +682,8 @@ pub(crate) struct NativeSequenceFilterMap<P> {
     pub remaining: usize,
 }
 
-impl<'scope> Coroutine<'scope> for NativeSequenceFilterMap<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeSequenceFilterMap<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         if self.values.is_empty() {
             let root = alloc_native_sequence(scope, &self.shape, Vec::new())?;
             return Ok(NativeStep::Return(root));
@@ -714,10 +696,10 @@ impl<'scope> Coroutine<'scope> for NativeSequenceFilterMap<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         let index = self
             .children
             .iter()
@@ -757,12 +739,12 @@ impl<'scope> Coroutine<'scope> for NativeSequenceFilterMap<RootedPtr<'scope>> {
     }
 }
 
-impl<'scope> NativeSequenceFilterMap<RootedPtr<'scope>> {
+impl NativeSequenceFilterMap<RootedPtr> {
     fn child_spec(
         &self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         index: usize,
-    ) -> Result<NativeChildSpec<'scope>, EngineError> {
+    ) -> Result<NativeChildSpec, EngineError> {
         let value = self.values.get(scope, index)?;
         native_apply_spec(
             self.func,
@@ -785,11 +767,8 @@ pub(crate) struct NativeSequenceFlatMap<P> {
     pub remaining: usize,
 }
 
-impl<'scope> Coroutine<'scope> for NativeSequenceFlatMap<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeSequenceFlatMap<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         if self.values.is_empty() {
             let root = alloc_native_sequence(scope, &self.shape, Vec::new())?;
             return Ok(NativeStep::Return(root));
@@ -802,10 +781,10 @@ impl<'scope> Coroutine<'scope> for NativeSequenceFlatMap<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         let index = self
             .children
             .iter()
@@ -847,12 +826,12 @@ impl<'scope> Coroutine<'scope> for NativeSequenceFlatMap<RootedPtr<'scope>> {
     }
 }
 
-impl<'scope> NativeSequenceFlatMap<RootedPtr<'scope>> {
+impl NativeSequenceFlatMap<RootedPtr> {
     fn child_spec(
         &self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         index: usize,
-    ) -> Result<NativeChildSpec<'scope>, EngineError> {
+    ) -> Result<NativeChildSpec, EngineError> {
         let value = self.values.get(scope, index)?;
         native_apply_spec(
             self.func,
@@ -872,11 +851,8 @@ pub(crate) struct NativeUnaryMap<P> {
     pub shape: NativeUnaryShape,
 }
 
-impl<'scope> Coroutine<'scope> for NativeUnaryMap<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        _scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeUnaryMap<RootedPtr> {
+    fn enter(&mut self, _scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         native_apply_step(
             self.func,
             self.func_type.clone(),
@@ -887,10 +863,10 @@ impl<'scope> Coroutine<'scope> for NativeUnaryMap<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         _child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         let value = match &self.shape {
             NativeUnaryShape::Option => option_from_native_pointer(scope, Some(value))?,
             NativeUnaryShape::Result => result_from_native_pointer(scope, Ok(value))?,
@@ -908,11 +884,8 @@ pub(crate) struct NativeUnaryFilter<P> {
     pub original: P,
 }
 
-impl<'scope> Coroutine<'scope> for NativeUnaryFilter<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        _scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeUnaryFilter<RootedPtr> {
+    fn enter(&mut self, _scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         native_apply_step(
             self.func,
             self.func_type.clone(),
@@ -923,10 +896,10 @@ impl<'scope> Coroutine<'scope> for NativeUnaryFilter<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         _child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         let value = if scope.root_as_bool(value)? {
             self.original
         } else {
@@ -944,11 +917,8 @@ pub struct NativeUnaryFilterMap<P> {
     pub value: P,
 }
 
-impl<'scope> Coroutine<'scope> for NativeUnaryFilterMap<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        _scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeUnaryFilterMap<RootedPtr> {
+    fn enter(&mut self, _scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         native_apply_step(
             self.func,
             self.func_type.clone(),
@@ -959,10 +929,10 @@ impl<'scope> Coroutine<'scope> for NativeUnaryFilterMap<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        _scope: &mut RootScope<'_, 'scope>,
+        _scope: &mut RootScope<'_>,
         _child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         Ok(NativeStep::Return(value))
     }
 }
@@ -976,11 +946,8 @@ pub(crate) struct NativeUnaryFlatMap<P> {
     pub shape: NativeUnaryShape,
 }
 
-impl<'scope> Coroutine<'scope> for NativeUnaryFlatMap<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        _scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeUnaryFlatMap<RootedPtr> {
+    fn enter(&mut self, _scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         native_apply_step(
             self.func,
             self.func_type.clone(),
@@ -991,10 +958,10 @@ impl<'scope> Coroutine<'scope> for NativeUnaryFlatMap<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         _child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         if matches!(self.shape, NativeUnaryShape::Result) {
             let _ = result_value_ptr(scope, value)?;
         }
@@ -1029,11 +996,8 @@ pub(crate) struct NativeFold<P> {
     pub step: Option<P>,
 }
 
-impl<'scope> Coroutine<'scope> for NativeFold<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeFold<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         if self.values.is_empty() {
             return Ok(NativeStep::Return(self.acc));
         }
@@ -1044,10 +1008,10 @@ impl<'scope> Coroutine<'scope> for NativeFold<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         _child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         match self.state {
             NativeFoldState::ApplyFirst => {
                 self.step = Some(value);
@@ -1069,11 +1033,8 @@ impl<'scope> Coroutine<'scope> for NativeFold<RootedPtr<'scope>> {
     }
 }
 
-impl<'scope> NativeFold<RootedPtr<'scope>> {
-    fn apply_first(
-        &self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl NativeFold<RootedPtr> {
+    fn apply_first(&self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         let arg = match self.order {
             NativeFoldOrder::Left => self.acc,
             NativeFoldOrder::Right => self.value_at(scope, self.next_index)?,
@@ -1085,10 +1046,7 @@ impl<'scope> NativeFold<RootedPtr<'scope>> {
         native_apply_step(self.func, self.func_type.clone(), arg, arg_type)
     }
 
-    fn apply_second(
-        &self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+    fn apply_second(&self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         let step = self
             .step
             .ok_or_else(|| EngineError::Internal("native fold missing step function".into()))?;
@@ -1104,11 +1062,7 @@ impl<'scope> NativeFold<RootedPtr<'scope>> {
         native_apply_step(step, step_type, arg, arg_type)
     }
 
-    fn value_at(
-        &self,
-        scope: &mut RootScope<'_, 'scope>,
-        index: usize,
-    ) -> Result<RootedPtr<'scope>, EngineError> {
+    fn value_at(&self, scope: &mut RootScope<'_>, index: usize) -> Result<RootedPtr, EngineError> {
         let index = match self.order {
             NativeFoldOrder::Left => index,
             NativeFoldOrder::Right => {
@@ -1132,11 +1086,8 @@ pub struct NativeDictMap<P> {
     pub remaining: usize,
 }
 
-impl<'scope> Coroutine<'scope> for NativeDictMap<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeDictMap<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         if self.entries.is_empty() {
             let root = scope.alloc_root_dict(BTreeMap::new())?;
             return Ok(NativeStep::Return(root));
@@ -1149,10 +1100,10 @@ impl<'scope> Coroutine<'scope> for NativeDictMap<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         let index = self
             .children
             .iter()
@@ -1180,8 +1131,8 @@ impl<'scope> Coroutine<'scope> for NativeDictMap<RootedPtr<'scope>> {
     }
 }
 
-impl<'scope> NativeDictMap<RootedPtr<'scope>> {
-    fn child_spec(&self, index: usize) -> Result<NativeChildSpec<'scope>, EngineError> {
+impl NativeDictMap<RootedPtr> {
+    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
         let (_, value) = self.entries.get(index).ok_or_else(|| {
             EngineError::Internal("native dict map child index out of bounds".into())
         })?;
@@ -1204,11 +1155,8 @@ pub struct NativeDictTraverse<P> {
     pub output: BTreeMap<Symbol, P>,
 }
 
-impl<'scope> Coroutine<'scope> for NativeDictTraverse<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeDictTraverse<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         if self.entries.is_empty() {
             let root = scope.alloc_root_dict(BTreeMap::new())?;
             let root = result_from_native_pointer(scope, Ok(root))?;
@@ -1226,10 +1174,10 @@ impl<'scope> Coroutine<'scope> for NativeDictTraverse<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         _child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         match result_value_ptr(scope, value)? {
             Ok(value) => {
                 let (key, _) = self.entries[self.next_index].clone();
@@ -1275,11 +1223,8 @@ pub struct NativeArrayEq<P> {
     pub negate: bool,
 }
 
-impl<'scope> Coroutine<'scope> for NativeArrayEq<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeArrayEq<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         if self.xs.len() != self.ys.len() {
             return self.result(scope, false);
         }
@@ -1293,10 +1238,10 @@ impl<'scope> Coroutine<'scope> for NativeArrayEq<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         _child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         match self.state {
             NativeArrayEqState::ApplyFirst => {
                 self.step = Some(value);
@@ -1320,11 +1265,8 @@ impl<'scope> Coroutine<'scope> for NativeArrayEq<RootedPtr<'scope>> {
     }
 }
 
-impl<'scope> NativeArrayEq<RootedPtr<'scope>> {
-    fn apply_first(
-        &self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl NativeArrayEq<RootedPtr> {
+    fn apply_first(&self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         let bool_ty = Type::builtin(BuiltinTypeId::Bool);
         let eq_ty = Type::fun(
             self.elem_type.clone(),
@@ -1335,10 +1277,7 @@ impl<'scope> NativeArrayEq<RootedPtr<'scope>> {
         native_apply_step(eq, eq_ty, lhs, self.elem_type.clone())
     }
 
-    fn apply_second(
-        &self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+    fn apply_second(&self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         let step = self
             .step
             .ok_or_else(|| EngineError::Internal("native list equality missing step".into()))?;
@@ -1348,11 +1287,7 @@ impl<'scope> NativeArrayEq<RootedPtr<'scope>> {
         native_apply_step(step, step_ty, y, self.elem_type.clone())
     }
 
-    fn result(
-        &self,
-        scope: &mut RootScope<'_, 'scope>,
-        equal: bool,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+    fn result(&self, scope: &mut RootScope<'_>, equal: bool) -> Result<NativeStep, EngineError> {
         let b = if self.negate { !equal } else { equal };
         let root = scope.alloc_root_bool(b)?;
         Ok(NativeStep::Return(root))
@@ -1370,11 +1305,8 @@ pub struct NativeSum<P> {
     pub step: Option<P>,
 }
 
-impl<'scope> Coroutine<'scope> for NativeSum<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeSum<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         if self.values.is_empty() {
             return Ok(native_eval_var_step(
                 Symbol::intern("zero"),
@@ -1393,10 +1325,10 @@ impl<'scope> Coroutine<'scope> for NativeSum<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         _child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         match self.state {
             NativeFoldState::Enter => Ok(NativeStep::Return(value)),
             NativeFoldState::ApplyFirst => {
@@ -1418,11 +1350,11 @@ impl<'scope> Coroutine<'scope> for NativeSum<RootedPtr<'scope>> {
     }
 }
 
-impl<'scope> NativeSum<RootedPtr<'scope>> {
+impl NativeSum<RootedPtr> {
     fn apply_first_may_allocate(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        scope: &mut RootScope<'_>,
+    ) -> Result<NativeStep, EngineError> {
         let plus_ty = binary_same_type(&self.elem_type);
         if self.plus.is_none() {
             let root = overloaded_root(scope, "+", plus_ty.clone())?;
@@ -1431,7 +1363,7 @@ impl<'scope> NativeSum<RootedPtr<'scope>> {
         self.apply_first()
     }
 
-    fn apply_first(&self) -> Result<NativeStep<'scope>, EngineError> {
+    fn apply_first(&self) -> Result<NativeStep, EngineError> {
         let plus_ty = binary_same_type(&self.elem_type);
         let plus = self
             .plus
@@ -1442,10 +1374,7 @@ impl<'scope> NativeSum<RootedPtr<'scope>> {
         native_apply_step(plus, plus_ty, acc, self.elem_type.clone())
     }
 
-    fn apply_second(
-        &self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+    fn apply_second(&self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         let step = self
             .step
             .ok_or_else(|| EngineError::Internal("native sum missing step".into()))?;
@@ -1476,11 +1405,8 @@ pub struct NativeMean<P> {
     pub len_value: Option<P>,
 }
 
-impl<'scope> Coroutine<'scope> for NativeMean<RootedPtr<'scope>> {
-    fn enter(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl Coroutine for NativeMean<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         if self.values.is_empty() {
             return Err(EngineError::EmptySequence);
         }
@@ -1496,10 +1422,10 @@ impl<'scope> Coroutine<'scope> for NativeMean<RootedPtr<'scope>> {
 
     fn receive(
         &mut self,
-        scope: &mut RootScope<'_, 'scope>,
+        scope: &mut RootScope<'_>,
         _child: FrameId,
-        value: RootedPtr<'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
         match self.state {
             NativeMeanState::ApplyPlusFirst => {
                 self.step = Some(value);
@@ -1528,11 +1454,8 @@ impl<'scope> Coroutine<'scope> for NativeMean<RootedPtr<'scope>> {
     }
 }
 
-impl<'scope> NativeMean<RootedPtr<'scope>> {
-    fn apply_plus_first(
-        &self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+impl NativeMean<RootedPtr> {
+    fn apply_plus_first(&self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         let plus_ty = binary_same_type(&self.elem_type);
         let acc = self
             .acc
@@ -1541,10 +1464,7 @@ impl<'scope> NativeMean<RootedPtr<'scope>> {
         native_apply_step(plus, plus_ty, acc, self.elem_type.clone())
     }
 
-    fn apply_plus_second(
-        &self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+    fn apply_plus_second(&self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         let step = self
             .step
             .ok_or_else(|| EngineError::Internal("native mean missing addition step".into()))?;
@@ -1553,10 +1473,7 @@ impl<'scope> NativeMean<RootedPtr<'scope>> {
         native_apply_step(step, step_ty, arg, self.elem_type.clone())
     }
 
-    fn apply_div_first(
-        &mut self,
-        scope: &mut RootScope<'_, 'scope>,
-    ) -> Result<NativeStep<'scope>, EngineError> {
+    fn apply_div_first(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
         let div_ty = binary_same_type(&self.elem_type);
         let acc = self
             .acc
@@ -1569,7 +1486,7 @@ impl<'scope> NativeMean<RootedPtr<'scope>> {
         native_apply_step(div, div_ty, acc, self.elem_type.clone())
     }
 
-    fn apply_div_second(&self) -> Result<NativeStep<'scope>, EngineError> {
+    fn apply_div_second(&self) -> Result<NativeStep, EngineError> {
         let step = self
             .step
             .ok_or_else(|| EngineError::Internal("native mean missing division step".into()))?;
@@ -1586,30 +1503,30 @@ pub enum NativeSequenceShape {
     List,
 }
 
-fn alloc_native_sequence<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn alloc_native_sequence(
+    scope: &mut RootScope<'_>,
     shape: &NativeSequenceShape,
-    values: Vec<RootedPtr<'scope>>,
-) -> Result<RootedPtr<'scope>, EngineError> {
+    values: Vec<RootedPtr>,
+) -> Result<RootedPtr, EngineError> {
     match shape {
         NativeSequenceShape::List => scope.alloc_root_list(values),
     }
 }
 
-fn native_flatten_sequence<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn native_flatten_sequence(
+    scope: &mut RootScope<'_>,
     shape: &NativeSequenceShape,
-    root: RootedPtr<'scope>,
-) -> Result<Vec<RootedPtr<'scope>>, EngineError> {
+    root: RootedPtr,
+) -> Result<Vec<RootedPtr>, EngineError> {
     match shape {
         NativeSequenceShape::List => scope.root_as_list(root),
     }
 }
 
-fn option_value_ptr<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    pointer: RootedPtr<'scope>,
-) -> Result<Option<RootedPtr<'scope>>, EngineError> {
+fn option_value_ptr(
+    scope: &mut RootScope<'_>,
+    pointer: RootedPtr,
+) -> Result<Option<RootedPtr>, EngineError> {
     let (tag, args) = scope.root_as_adt(pointer)?;
     if tag.as_ref() == "Some" && args.len() == 1 {
         Ok(Some(args[0]))
@@ -1623,30 +1540,30 @@ fn option_value_ptr<'scope>(
     }
 }
 
-fn option_from_native_pointer<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    value: Option<RootedPtr<'scope>>,
-) -> Result<RootedPtr<'scope>, EngineError> {
+fn option_from_native_pointer(
+    scope: &mut RootScope<'_>,
+    value: Option<RootedPtr>,
+) -> Result<RootedPtr, EngineError> {
     match value {
         Some(value) => scope.alloc_root_adt(Symbol::intern("Some"), vec![value]),
         None => scope.alloc_root_adt(Symbol::intern("None"), vec![]),
     }
 }
 
-fn result_from_native_pointer<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    value: Result<RootedPtr<'scope>, RootedPtr<'scope>>,
-) -> Result<RootedPtr<'scope>, EngineError> {
+fn result_from_native_pointer(
+    scope: &mut RootScope<'_>,
+    value: Result<RootedPtr, RootedPtr>,
+) -> Result<RootedPtr, EngineError> {
     match value {
         Ok(value) => scope.alloc_root_adt(Symbol::intern("Ok"), vec![value]),
         Err(value) => scope.alloc_root_adt(Symbol::intern("Err"), vec![value]),
     }
 }
 
-fn result_value_ptr<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
-    pointer: RootedPtr<'scope>,
-) -> Result<Result<RootedPtr<'scope>, RootedPtr<'scope>>, EngineError> {
+fn result_value_ptr(
+    scope: &mut RootScope<'_>,
+    pointer: RootedPtr,
+) -> Result<Result<RootedPtr, RootedPtr>, EngineError> {
     let (tag, args) = scope.root_as_adt(pointer)?;
     if tag.as_ref() == "Ok" && args.len() == 1 {
         Ok(Ok(args[0]))
@@ -1660,15 +1577,15 @@ fn result_value_ptr<'scope>(
     }
 }
 
-fn overloaded_root<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn overloaded_root(
+    scope: &mut RootScope<'_>,
     name: &str,
     typ: Type,
-) -> Result<RootedPtr<'scope>, EngineError> {
+) -> Result<RootedPtr, EngineError> {
     scope.alloc_root_overloaded(Symbol::intern(name), typ, Vec::new(), Vec::new())
 }
 
-fn native_eval_var_step<'scope>(name: Symbol, typ: Type) -> NativeStep<'scope> {
+fn native_eval_var_step(name: Symbol, typ: Type) -> NativeStep {
     NativeStep::Push {
         expr: Arc::new(TypedExpr::new(
             typ,
@@ -1685,11 +1602,11 @@ fn binary_same_type(typ: &Type) -> Type {
     Type::fun(typ.clone(), Type::fun(typ.clone(), typ.clone()))
 }
 
-fn len_value_for_native_type<'scope>(
-    scope: &mut RootScope<'_, 'scope>,
+fn len_value_for_native_type(
+    scope: &mut RootScope<'_>,
     elem_ty: &Type,
     len: usize,
-) -> Result<RootedPtr<'scope>, EngineError> {
+) -> Result<RootedPtr, EngineError> {
     match elem_ty.as_ref() {
         TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::F32) => scope.alloc_root_f32(len as f32),
         TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::F64) => scope.alloc_root_f64(len as f64),
@@ -1700,11 +1617,11 @@ fn len_value_for_native_type<'scope>(
     }
 }
 
-fn synthetic_application_expr<'scope>(
-    func: RootedPtr<'scope>,
+fn synthetic_application_expr(
+    func: RootedPtr,
     func_type: Type,
-    args: &[(RootedPtr<'scope>, Type)],
-) -> Result<(ScopedEnvironment<'scope>, TypedExpr), EngineError> {
+    args: &[(RootedPtr, Type)],
+) -> Result<(ScopedEnvironment, TypedExpr), EngineError> {
     let func_name = Symbol::intern("__rex_apply_func");
     let mut env = ScopedEnvironment::new().extend(func_name.clone(), func);
     let mut expr = TypedExpr::new(

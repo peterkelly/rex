@@ -40,13 +40,8 @@ async fn run_with_json_inputs(source: &str, input_json: Value) -> (Value, Value)
     } = prepare(source).await;
     let result_type = compiled.result_type().clone();
     let type_system = evaluator.type_system();
-    let inputs = json_to_main_inputs(
-        evaluator.heap(),
-        input_json,
-        compiled.main_signature(),
-        type_system.as_ref(),
-    )
-    .unwrap();
+    let inputs =
+        json_to_main_inputs(input_json, compiled.main_signature(), type_system.as_ref()).unwrap();
     let value = evaluator.run(compiled, inputs).await.unwrap();
     (
         rex_to_json(&value, &result_type, type_system.as_ref()).unwrap(),
@@ -61,13 +56,8 @@ async fn json_input_error(source: &str, input_json: Value) -> (EngineError, Valu
         manifest,
     } = prepare(source).await;
     let type_system = evaluator.type_system();
-    let err = json_to_main_inputs(
-        evaluator.heap(),
-        input_json,
-        compiled.main_signature(),
-        type_system.as_ref(),
-    )
-    .unwrap_err();
+    let err = json_to_main_inputs(input_json, compiled.main_signature(), type_system.as_ref())
+        .unwrap_err();
     (err, manifest)
 }
 

@@ -17,10 +17,10 @@ use rex_typesystem::{
     unification::unify,
 };
 
-pub(crate) enum NativeApplyResult<'scope> {
-    Value(RootedPtr<'scope>),
-    Task(NativeTask<RootedPtr<'scope>>),
-    Pending(NativeCallRequest<'scope>),
+pub(crate) enum NativeApplyResult {
+    Value(RootedPtr),
+    Task(NativeTask<RootedPtr>),
+    Pending(NativeCallRequest),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -51,17 +51,14 @@ impl<P> NativeFn<P> {
             applied_types,
         }
     }
-
-    pub(crate) fn name(&self) -> &Symbol {
-        &self.name
-    }
 }
 
-impl<'scope> NativeFn<RootedPtr<'scope>> {
+impl NativeFn<RootedPtr> {
     pub(crate) fn call_zero<State: Clone + Send + Sync + 'static>(
         &self,
         runtime: &RuntimeCore<State>,
-    ) -> Result<NativeCallRequest<'scope>, EngineError> {
+        scope: &mut RootScope<'_>,
+    ) -> Result<NativeApplyResult, EngineError> {
         if self.arity != 0 {
             return Err(EngineError::NativeArity {
                 name: self.name.clone(),
@@ -69,18 +66,25 @@ impl<'scope> NativeFn<RootedPtr<'scope>> {
                 got: 0,
             });
         }
-        runtime
-            .native_callable(self.native_id)?
-            .call(self.native_id, self.typ.clone(), &[])
+        match runtime.native_callable(self.native_id)? {
+            NativeCallable::Constant(value) => Ok(NativeApplyResult::Value(*value)),
+            NativeCallable::Scheduler(callable) => match callable(scope, self.typ.clone(), &[])? {
+                SchedulerNativeResult::Ready(value) => Ok(NativeApplyResult::Value(value)),
+                SchedulerNativeResult::Task(task) => Ok(NativeApplyResult::Task(task)),
+            },
+            callable => callable
+                .call(self.native_id, self.typ.clone(), &[])
+                .map(NativeApplyResult::Pending),
+        }
     }
 
     pub(crate) fn apply<State: Clone + Send + Sync + 'static>(
         mut self,
         runtime: &RuntimeCore<State>,
-        scope: &mut RootScope<'_, 'scope>,
-        arg: RootedPtr<'scope>,
+        scope: &mut RootScope<'_>,
+        arg: RootedPtr,
         arg_type: Option<&Type>,
-    ) -> Result<NativeApplyResult<'scope>, EngineError> {
+    ) -> Result<NativeApplyResult, EngineError> {
         // `self` is an owned copy cloned from heap storage; we mutate it to
         // accumulate partial-application state and never mutate shared values.
         if self.arity == 0 {
@@ -120,6 +124,11 @@ impl<'scope> NativeFn<RootedPtr<'scope>> {
         }
 
         match runtime.native_callable(self.native_id)? {
+            NativeCallable::Constant(_) => Err(EngineError::NativeArity {
+                name: self.name,
+                expected: 0,
+                got: self.applied.len(),
+            }),
             NativeCallable::Scheduler(f) => match f(scope, full_ty, &self.applied)? {
                 SchedulerNativeResult::Ready(value) => Ok(NativeApplyResult::Value(value)),
                 SchedulerNativeResult::Task(task) => Ok(NativeApplyResult::Task(task)),

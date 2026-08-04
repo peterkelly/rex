@@ -3,7 +3,7 @@ mod common;
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{Builder, CompileOptions, Handle, Heap, Value, standard_type_system},
+    engine::{Builder, CompileOptions, Value, standard_type_system},
     json::{json_to_rex, rex_to_json},
     parser::parse as parse_rex,
     typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply},
@@ -37,7 +37,7 @@ struct EvalJsonRecord {
 
 fn assert_eval_json(
     type_system: &TypeSystem,
-    handle: &Handle,
+    handle: &Value,
     typ: &Type,
     expected: serde_json::Value,
 ) {
@@ -48,8 +48,6 @@ fn assert_eval_json(
 #[test]
 fn primitive_roundtrip() {
     let ts = mk_type_system();
-    let heap = Heap::new();
-
     let cases = vec![
         (Type::builtin(BuiltinTypeId::Bool), json!(true)),
         (Type::builtin(BuiltinTypeId::I32), json!(-7)),
@@ -57,7 +55,7 @@ fn primitive_roundtrip() {
     ];
 
     for (ty, expected_json) in cases {
-        let handle = json_to_rex(&heap, &expected_json, &ty, &ts).unwrap();
+        let handle = json_to_rex(&expected_json, &ty, &ts).unwrap();
         let actual_json = rex_to_json(&handle, &ty, &ts).unwrap();
         assert_eq!(actual_json, expected_json);
     }
@@ -66,14 +64,12 @@ fn primitive_roundtrip() {
 #[test]
 fn option_and_result_roundtrip() {
     let ts = mk_type_system();
-    let heap = Heap::new();
-
     let opt_ty = Type::option(Type::builtin(BuiltinTypeId::I32));
     let some = json!(9);
     let none = serde_json::Value::Null;
 
-    let some_handle = json_to_rex(&heap, &some, &opt_ty, &ts).unwrap();
-    let none_handle = json_to_rex(&heap, &none, &opt_ty, &ts).unwrap();
+    let some_handle = json_to_rex(&some, &opt_ty, &ts).unwrap();
+    let none_handle = json_to_rex(&none, &opt_ty, &ts).unwrap();
     assert_eq!(rex_to_json(&some_handle, &opt_ty, &ts).unwrap(), some);
     assert_eq!(rex_to_json(&none_handle, &opt_ty, &ts).unwrap(), none);
 
@@ -83,8 +79,8 @@ fn option_and_result_roundtrip() {
     );
     let ok_json = json!({ "Ok": 1 });
     let err_json = json!({ "Err": "bad" });
-    let ok_handle = json_to_rex(&heap, &ok_json, &res_ty, &ts).unwrap();
-    let err_handle = json_to_rex(&heap, &err_json, &res_ty, &ts).unwrap();
+    let ok_handle = json_to_rex(&ok_json, &res_ty, &ts).unwrap();
+    let err_handle = json_to_rex(&err_json, &res_ty, &ts).unwrap();
     assert_eq!(rex_to_json(&ok_handle, &res_ty, &ts).unwrap(), ok_json);
     assert_eq!(rex_to_json(&err_handle, &res_ty, &ts).unwrap(), err_json);
 }
@@ -92,12 +88,11 @@ fn option_and_result_roundtrip() {
 #[test]
 fn promise_roundtrip_from_json() {
     let ts = mk_type_system();
-    let heap = Heap::new();
     let promise_ty = Type::promise(Type::builtin(BuiltinTypeId::I32));
     let promise_json = json!(fixed_uuid());
 
-    let promise_handle = json_to_rex(&heap, &promise_json, &promise_ty, &ts).unwrap();
-    let Value::Adt(tag, args) = promise_handle.value().unwrap() else {
+    let promise_handle = json_to_rex(&promise_json, &promise_ty, &ts).unwrap();
+    let Value::Adt(tag, args) = &promise_handle else {
         panic!("expected Promise ADT");
     };
     assert_eq!(tag.as_ref(), "Promise");
@@ -112,18 +107,14 @@ fn promise_roundtrip_from_json() {
 #[test]
 fn promise_roundtrip_from_runtime_value() {
     let ts = mk_type_system();
-    let heap = Heap::new();
     let promise_ty = Type::promise(Type::builtin(BuiltinTypeId::String));
-    let promise_id = heap.alloc_uuid(fixed_uuid()).unwrap();
-    let promise_handle = heap
-        .alloc_adt(Symbol::intern("Promise"), vec![promise_id])
-        .unwrap();
+    let promise_handle = Value::Adt(Symbol::intern("Promise"), vec![Value::Uuid(fixed_uuid())]);
 
     let promise_json = rex_to_json(&promise_handle, &promise_ty, &ts).unwrap();
     assert_eq!(promise_json, json!(fixed_uuid()));
 
-    let roundtrip_handle = json_to_rex(&heap, &promise_json, &promise_ty, &ts).unwrap();
-    let Value::Adt(tag, args) = roundtrip_handle.value().unwrap() else {
+    let roundtrip_handle = json_to_rex(&promise_json, &promise_ty, &ts).unwrap();
+    let Value::Adt(tag, args) = &roundtrip_handle else {
         panic!("expected Promise ADT");
     };
     assert_eq!(tag.as_ref(), "Promise");
@@ -134,11 +125,10 @@ fn promise_roundtrip_from_runtime_value() {
 #[test]
 fn json_array_maps_to_list() {
     let ts = mk_type_system();
-    let heap = Heap::new();
     let array_json = json!([1, 2, 3]);
 
     let list_ty = Type::list(Type::builtin(BuiltinTypeId::I32));
-    let list_handle = json_to_rex(&heap, &array_json, &list_ty, &ts).unwrap();
+    let list_handle = json_to_rex(&array_json, &list_ty, &ts).unwrap();
     let items = list_handle.as_list().unwrap();
     assert_eq!(items.len(), 3);
     assert_eq!(
@@ -150,8 +140,6 @@ fn json_array_maps_to_list() {
 #[test]
 fn struct_like_single_variant_adt_roundtrip() {
     let mut ts = mk_type_system();
-    let heap = Heap::new();
-
     let mut supply = TypeVarSupply::new();
     let mut foo = AdtDecl::new(&Symbol::intern("Foo"), &[], &mut supply);
     foo.add_variant(
@@ -166,8 +154,8 @@ fn struct_like_single_variant_adt_roundtrip() {
     let foo_ty = Type::con("Foo", 0);
     let foo_json = json!({ "a": 42, "b": "Hello" });
 
-    let foo_handle = json_to_rex(&heap, &foo_json, &foo_ty, &ts).unwrap();
-    let Value::Adt(tag, args) = foo_handle.value().unwrap() else {
+    let foo_handle = json_to_rex(&foo_json, &foo_ty, &ts).unwrap();
+    let Value::Adt(tag, args) = &foo_handle else {
         panic!("expected Foo ADT");
     };
     assert_eq!(tag.as_ref(), "Foo");
@@ -178,17 +166,26 @@ fn struct_like_single_variant_adt_roundtrip() {
 #[test]
 fn unit_enum_string_roundtrip() {
     let mut ts = mk_type_system();
-    let heap = Heap::new();
-
     let color = mk_unit_enum("Color", &["Red", "Green", "Blue"]);
     ts.register_adt(&color);
     let color_ty = Type::con("Color", 0);
 
     for v in [json!("Red"), json!("Green"), json!("Blue")] {
-        let handle = json_to_rex(&heap, &v, &color_ty, &ts).unwrap();
+        let handle = json_to_rex(&v, &color_ty, &ts).unwrap();
         let actual = rex_to_json(&handle, &color_ty, &ts).unwrap();
         assert_eq!(actual, v);
     }
+}
+
+#[test]
+fn rex_to_json_rejects_qualified_foreign_constructor() {
+    let mut ts = mk_type_system();
+    let color = mk_unit_enum("Color", &["Red"]);
+    ts.register_adt(&color);
+    let color_ty = Type::con("Color", 0);
+    let value = Value::Adt(Symbol::intern("another.module.Red"), vec![]);
+
+    assert!(rex_to_json(&value, &color_ty, &ts).is_err());
 }
 
 #[tokio::test]

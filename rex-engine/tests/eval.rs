@@ -1,8 +1,6 @@
 use futures::FutureExt;
 use rex_ast::{CompilationUnit, Expr};
-use rex_engine::{
-    Builder, CompileOptions, Context, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value,
-};
+use rex_engine::{Builder, CompileOptions, Context, EngineError, FromRex, IntoRex, Module, Value};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
@@ -43,14 +41,14 @@ impl RexType for HandleOnlyI32 {
 }
 
 impl FromRex for HandleOnlyI32 {
-    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
-        Ok(Self(i32::from_rex(handle)?))
+    fn from_rex(value: Value) -> Result<Self, EngineError> {
+        Ok(Self(i32::from_rex(value)?))
     }
 }
 
 impl IntoRex for HandleOnlyI32 {
-    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
-        self.0.into_rex(heap)
+    fn into_rex(self) -> Result<Value, EngineError> {
+        self.0.into_rex()
     }
 }
 
@@ -63,7 +61,7 @@ fn inject_globals(
     builder.inject_module(module).unwrap();
 }
 
-async fn eval_expr(builder: Builder, expr: &Expr) -> Result<Handle, EngineError> {
+async fn eval_expr(builder: Builder, expr: &Expr) -> Result<Value, EngineError> {
     let compiler = builder.build_compiler();
     let program = CompilationUnit {
         decls: Vec::new(),
@@ -75,7 +73,7 @@ async fn eval_expr(builder: Builder, expr: &Expr) -> Result<Handle, EngineError>
     evaluator.run(compiled, Default::default()).await
 }
 
-async fn eval_program(builder: Builder, program: &CompilationUnit) -> Result<Handle, EngineError> {
+async fn eval_program(builder: Builder, program: &CompilationUnit) -> Result<Value, EngineError> {
     let compiler = builder.build_compiler();
     let (compiled, evaluator) = compiler.compile_program(program, compile_options()).await?;
     evaluator.run(compiled, Default::default()).await
@@ -111,80 +109,22 @@ async fn compiler_is_consumed_by_compile_program() {
     assert_eq!(value.as_i32().unwrap(), 42);
 }
 
-macro_rules! pval {
-    ($builder:expr, $ptr:expr) => {
-        $ptr.value().unwrap()
-    };
-}
-
 macro_rules! pvals {
     ($builder:expr, $vals:expr) => {
-        $vals
-            .iter()
-            .map(|value| value.value().unwrap())
-            .collect::<Vec<_>>()
+        $vals.iter().cloned().collect::<Vec<_>>()
     };
-}
-
-trait HandleRef {
-    fn handle_ref(&self) -> &Handle;
-}
-
-impl HandleRef for Handle {
-    fn handle_ref(&self) -> &Handle {
-        self
-    }
-}
-
-impl HandleRef for &Handle {
-    fn handle_ref(&self) -> &Handle {
-        self
-    }
 }
 
 macro_rules! assert_pointer_eq {
-    ($heap:expr, $lhs:expr, $builder:ident . heap . $alloc:ident ( $($args:tt)* ) . unwrap()) => {{
-        let lhs: Handle = HandleRef::handle_ref(&$lhs).clone();
-        let rhs = lhs.heap().$alloc($($args)*).unwrap();
-        assert!(
-            lhs.value_eq(&rhs).unwrap(),
-            "left: {}, right: {}",
-            lhs.display().unwrap(),
-            rhs.display().unwrap()
-        );
-    }};
-    ($heap:expr, $lhs:expr, $rhs:expr) => {{
-        let lhs: Handle = HandleRef::handle_ref(&$lhs).clone();
-        let rhs: Handle = HandleRef::handle_ref(&$rhs).clone();
-        assert!(
-            lhs.value_eq(&rhs).unwrap(),
-            "left: {}, right: {}",
-            lhs.display().unwrap(),
-            rhs.display().unwrap()
-        );
-    }};
+    ($ignored:expr, $lhs:expr, $rhs:expr) => {
+        assert_eq!($lhs, $rhs);
+    };
 }
 
-fn list_values(value: &Value) -> Vec<Handle> {
+fn list_values(value: &Value) -> Vec<Value> {
     match value {
-        Value::Empty => Vec::new(),
-        Value::Cons(head, tail) => {
-            let mut out = vec![head.clone()];
-            out.extend(list_values(&tail.value().unwrap()));
-            out
-        }
-        Value::ListSlice {
-            start,
-            end,
-            elements,
-        } => match elements.value().unwrap() {
-            Value::Data(values) => values[*start..*end].to_vec(),
-            Value::BinaryData(values) => values[*start..*end]
-                .iter()
-                .map(|value| elements.heap().alloc_u8(*value).unwrap())
-                .collect(),
-            _ => panic!("expected list backing data"),
-        },
+        Value::List(values) => values.clone(),
+        Value::Bytes(values) => values.iter().copied().map(Value::U8).collect(),
         _ => panic!("expected list value"),
     }
 }
@@ -201,7 +141,6 @@ async fn eval_let_lambda() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -222,7 +161,7 @@ async fn eval_native_injection() {
     });
 
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(2).unwrap());
+    assert_pointer_eq!((), value, Value::I32(2));
 }
 
 #[tokio::test]
@@ -274,7 +213,6 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
     });
 
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -381,7 +319,6 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
     });
 
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -416,19 +353,10 @@ async fn eval_deep_list_does_not_overflow() {
     let expr = program.body.unwrap();
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let xs = list_values(&value.value().unwrap());
+    let xs = list_values(&value);
     assert_eq!(xs.len(), N);
-    let expected = value.heap().alloc_i32(0).unwrap();
-    assert_pointer_eq!(
-        value.heap(),
-        xs.first().expect("list should be non-empty"),
-        expected
-    );
-    assert_pointer_eq!(
-        value.heap(),
-        xs.last().expect("list should be non-empty"),
-        expected
-    );
+    assert_eq!(xs.first(), Some(&Value::I32(0)));
+    assert_eq!(xs.last(), Some(&Value::I32(0)));
 }
 
 #[tokio::test]
@@ -436,7 +364,7 @@ async fn eval_type_annotation_let() {
     let expr = parse("let x: i32 = 42 in x");
     let builder = builder_with_arith();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(42).unwrap());
+    assert_pointer_eq!((), value, Value::I32(42));
 }
 
 #[tokio::test]
@@ -444,11 +372,7 @@ async fn eval_type_annotation_is() {
     let expr = parse("\"hi\" is str");
     let builder = builder_with_arith();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(
-        value.heap(),
-        value,
-        value.heap().alloc_string("hi".into()).unwrap()
-    );
+    assert_pointer_eq!((), value, Value::String("hi".into()));
 }
 
 #[tokio::test]
@@ -456,7 +380,6 @@ async fn eval_type_annotation_lambda_param() {
     let expr = parse("let f = \\ (a : f32) -> a in f 1.5");
     let builder = builder_with_arith();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     assert!(matches!(value, Value::F32(v) if (v - 1.5).abs() < f32::EPSILON));
 }
 
@@ -474,7 +397,7 @@ async fn eval_record_update_single_variant_adt() {
     );
     let builder = builder_with_arith();
     let value = eval_program(builder, &program).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(6).unwrap());
+    assert_pointer_eq!((), value, Value::I32(6));
 }
 
 #[tokio::test]
@@ -493,7 +416,7 @@ async fn eval_record_update_refined_by_match() {
     );
     let builder = builder_with_arith();
     let value = eval_program(builder, &program).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(2).unwrap());
+    assert_pointer_eq!((), value, Value::I32(2));
 }
 
 #[tokio::test]
@@ -508,7 +431,7 @@ async fn eval_record_update_plain_record_type() {
     );
     let builder = builder_with_arith();
     let value = eval_program(builder, &program).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(9).unwrap());
+    assert_pointer_eq!((), value, Value::I32(9));
 }
 
 #[tokio::test]
@@ -574,7 +497,7 @@ async fn eval_sync_native_injection() {
 }
 
 #[tokio::test]
-async fn typed_native_injection_uses_handle_conversions() {
+async fn typed_native_injection_uses_owned_value_conversions() {
     let mut builder = builder_with_arith();
     inject_globals(&mut builder, |module| {
         module.export("bump_handle_only", |_: &(), value: HandleOnlyI32| {
@@ -613,7 +536,7 @@ async fn typed_native_injection_uses_handle_conversions() {
         ])
     );
 
-    let Value::Tuple(items) = ptr.value().unwrap() else {
+    let Value::Tuple(items) = ptr else {
         panic!("expected tuple");
     };
     assert_eq!(items[0].to_rust::<i32>().unwrap(), 42);
@@ -713,7 +636,7 @@ async fn eval_match_list() {
         "#,
     );
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(1).unwrap());
+    assert_pointer_eq!((), value, Value::I32(1));
 }
 
 #[tokio::test]
@@ -730,39 +653,22 @@ async fn eval_cons_constructor_form_for_lists() {
         "#,
     );
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     let Value::Tuple(xs) = value else {
         panic!("expected tuple result");
     };
     assert_eq!(xs.len(), 3);
 
-    let sugar = xs[0].value().unwrap();
-    let ctor = xs[1].value().unwrap();
+    let sugar = xs[0].clone();
+    let ctor = xs[1].clone();
     let sugar_items = list_values(&sugar);
     let ctor_items = list_values(&ctor);
     assert_eq!(sugar_items.len(), 2);
     assert_eq!(ctor_items.len(), 2);
-    assert_pointer_eq!(
-        sugar_items[0].heap(),
-        sugar_items[0],
-        sugar_items[0].heap().alloc_i32(1).unwrap()
-    );
-    assert_pointer_eq!(
-        sugar_items[1].heap(),
-        sugar_items[1],
-        sugar_items[1].heap().alloc_i32(2).unwrap()
-    );
-    assert_pointer_eq!(
-        ctor_items[0].heap(),
-        ctor_items[0],
-        ctor_items[0].heap().alloc_i32(1).unwrap()
-    );
-    assert_pointer_eq!(
-        ctor_items[1].heap(),
-        ctor_items[1],
-        ctor_items[1].heap().alloc_i32(2).unwrap()
-    );
-    assert_pointer_eq!(xs[2].heap(), xs[2], xs[2].heap().alloc_i32(1).unwrap());
+    assert_pointer_eq!((), sugar_items[0], Value::I32(1));
+    assert_pointer_eq!((), sugar_items[1], Value::I32(2));
+    assert_pointer_eq!((), ctor_items[0], Value::I32(1));
+    assert_pointer_eq!((), ctor_items[1], Value::I32(2));
+    assert_pointer_eq!((), xs[2], Value::I32(1));
 }
 
 #[tokio::test]
@@ -770,7 +676,7 @@ async fn eval_simple_addition() {
     let expr = parse("420 + 69");
     let builder = builder_with_arith();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(489).unwrap());
+    assert_pointer_eq!((), value, Value::I32(489));
 }
 
 #[tokio::test]
@@ -778,7 +684,7 @@ async fn eval_simple_mod() {
     let expr = parse("10 % 3");
     let builder = builder_with_arith();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(1).unwrap());
+    assert_pointer_eq!((), value, Value::I32(1));
 }
 
 #[tokio::test]
@@ -801,7 +707,6 @@ async fn eval_simple_multiplication_float() {
     let expr = parse("420.0 * 6.9");
     let builder = builder_with_arith();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::F32(v) => assert!((v - 2898.0).abs() < 1e-3),
         _ => panic!("expected f32 result"),
@@ -820,7 +725,7 @@ async fn eval_let_id_nested() {
     );
     let builder = builder_with_arith();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(489).unwrap());
+    assert_pointer_eq!((), value, Value::I32(489));
 }
 
 #[tokio::test]
@@ -835,7 +740,7 @@ async fn eval_higher_order_add() {
     );
     let builder = builder_with_arith();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(42).unwrap());
+    assert_pointer_eq!((), value, Value::I32(42));
 }
 
 #[tokio::test]
@@ -852,7 +757,6 @@ async fn eval_match_dict_and_tuple() {
     );
     let builder = builder_with_arith();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -908,7 +812,7 @@ async fn eval_nested_match_list_sum() {
     );
     let builder = builder_with_arith();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(3).unwrap());
+    assert_pointer_eq!((), value, Value::I32(3));
 }
 
 #[tokio::test]
@@ -930,7 +834,6 @@ async fn eval_safe_div_pipeline() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -967,7 +870,7 @@ async fn eval_user_adt_declaration() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_program(builder, &program).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(42).unwrap());
+    assert_pointer_eq!((), value, Value::I32(42));
 }
 
 #[tokio::test]
@@ -981,7 +884,7 @@ async fn eval_fn_decl_simple() {
     let builder = Builder::with_prelude(()).unwrap();
     let expr = program.body_with_fns().unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(3).unwrap());
+    assert_pointer_eq!((), value, Value::I32(3));
 }
 
 #[tokio::test]
@@ -995,7 +898,7 @@ async fn eval_fn_decl_with_where_constraints() {
     let builder = Builder::with_prelude(()).unwrap();
     let expr = program.body_with_fns().unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(3).unwrap());
+    assert_pointer_eq!((), value, Value::I32(3));
 }
 
 #[tokio::test]
@@ -1011,7 +914,6 @@ async fn eval_adt_record_projection_single_variant() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_program(builder, &program).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -1041,7 +943,7 @@ async fn eval_adt_record_projection_match_arm() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_program(builder, &program).await.unwrap();
-    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(1).unwrap());
+    assert_pointer_eq!((), value, Value::I32(1));
 }
 
 #[tokio::test]
@@ -1059,35 +961,18 @@ async fn eval_list_map_fold_filter() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 3);
             let vals = list_values(&xs[0]);
             assert_eq!(vals.len(), 3);
-            assert_pointer_eq!(
-                vals[0].heap(),
-                vals[0],
-                vals[0].heap().alloc_i32(2).unwrap()
-            );
-            assert_pointer_eq!(
-                vals[1].heap(),
-                vals[1],
-                vals[1].heap().alloc_i32(3).unwrap()
-            );
-            assert_pointer_eq!(
-                vals[2].heap(),
-                vals[2],
-                vals[2].heap().alloc_i32(4).unwrap()
-            );
+            assert_pointer_eq!((), vals[0], Value::I32(2));
+            assert_pointer_eq!((), vals[1], Value::I32(3));
+            assert_pointer_eq!((), vals[2], Value::I32(4));
             let vals = list_values(&xs[1]);
             assert_eq!(vals.len(), 1);
-            assert_pointer_eq!(
-                vals[0].heap(),
-                vals[0],
-                vals[0].heap().alloc_i32(2).unwrap()
-            );
+            assert_pointer_eq!((), vals[0], Value::I32(2));
             assert!(matches!(xs[2], Value::I32(6)));
         }
         _ => panic!("expected tuple result"),
@@ -1108,33 +993,16 @@ async fn eval_list_flat_map_zip_unzip() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 2);
             let vals = list_values(&xs[0]);
             assert_eq!(vals.len(), 4);
-            assert_pointer_eq!(
-                vals[0].heap(),
-                vals[0],
-                vals[0].heap().alloc_i32(1).unwrap()
-            );
-            assert_pointer_eq!(
-                vals[1].heap(),
-                vals[1],
-                vals[1].heap().alloc_i32(1).unwrap()
-            );
-            assert_pointer_eq!(
-                vals[2].heap(),
-                vals[2],
-                vals[2].heap().alloc_i32(2).unwrap()
-            );
-            assert_pointer_eq!(
-                vals[3].heap(),
-                vals[3],
-                vals[3].heap().alloc_i32(2).unwrap()
-            );
+            assert_pointer_eq!((), vals[0], Value::I32(1));
+            assert_pointer_eq!((), vals[1], Value::I32(1));
+            assert_pointer_eq!((), vals[2], Value::I32(2));
+            assert_pointer_eq!((), vals[3], Value::I32(2));
             match &xs[1] {
                 Value::Tuple(parts) => {
                     let parts = pvals!(builder, parts);
@@ -1164,7 +1032,6 @@ async fn eval_list_sum_mean_min_max() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -1199,7 +1066,6 @@ async fn eval_option_result_helpers() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -1229,7 +1095,6 @@ async fn eval_option_filter() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -1237,7 +1102,7 @@ async fn eval_option_filter() {
             match &xs[0] {
                 Value::Adt(tag, args) if tag.as_ref() == "Some" => {
                     assert_eq!(args.len(), 1);
-                    assert!(matches!(pval!(builder, args[0].clone()), Value::I32(2)));
+                    assert!(matches!(args[0], Value::I32(2)));
                 }
                 _ => panic!("expected Some 2"),
             }
@@ -1262,7 +1127,6 @@ async fn eval_option_filter_map() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -1270,7 +1134,7 @@ async fn eval_option_filter_map() {
             match &xs[0] {
                 Value::Adt(tag, args) if tag.as_ref() == "Some" => {
                     assert_eq!(args.len(), 1);
-                    assert!(matches!(pval!(builder, args[0].clone()), Value::I32(3)));
+                    assert!(matches!(args[0], Value::I32(3)));
                 }
                 _ => panic!("expected Some 3"),
             }
@@ -1314,7 +1178,6 @@ async fn eval_order_ops() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -1344,7 +1207,6 @@ async fn eval_option_and_then_or_else() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -1373,7 +1235,6 @@ async fn eval_result_filter_pipeline() {
     );
     let builder = Builder::with_prelude(()).unwrap();
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
@@ -1391,6 +1252,7 @@ async fn eval_list_combinators_for_host_vecs() {
     inject_globals(&mut builder, |module| {
         module.export_value("arr", vec![1i32, 2i32, 3i32])
     });
+    builder.set_extreme_gc_stress(true);
     let expr = parse(
         r#"
         let
@@ -1405,7 +1267,6 @@ async fn eval_list_combinators_for_host_vecs() {
         "#,
     );
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
-    let value = pval!(builder, value);
     match value {
         Value::Tuple(items) => {
             let viewed = pvals!(builder, items);
@@ -1445,8 +1306,8 @@ async fn eval_list_combinators_for_host_vecs() {
             match &viewed[4] {
                 Value::Tuple(parts) => {
                     assert_eq!(parts.len(), 2);
-                    assert_eq!(parts[0].type_name().unwrap(), "list");
-                    assert_eq!(parts[1].type_name().unwrap(), "list");
+                    assert_eq!(parts[0].value_type_name(), "list");
+                    assert_eq!(parts[1].value_type_name(), "list");
                 }
                 _ => panic!("expected unzipped tuple"),
             }

@@ -1,6 +1,7 @@
 use crate::{
+    Value,
     builder::{
-        export::{Export, ExportTarget, HostFnSync},
+        export::{Export, ExportPayload, ExportTarget},
         qualify::qualify_package,
         registry::{NativeRegistry, TypeclassRegistry},
     },
@@ -15,15 +16,15 @@ use crate::{
     env::RootedEnvironment,
     error::EngineError,
     evaluator::{
-        context::Context,
+        intrinsic_handler::InternalFnSync,
         native_callable::{
-            NativeCallScheduling, NativeCallable, NativeHandleCallable, SchedulerNativeCallable,
+            HostValueCallable, NativeCallScheduling, NativeCallable, SchedulerNativeCallable,
             SchedulerNativeResult,
         },
     },
     handlers::RexDefault,
     memory::{
-        heap::{Handle, Heap, RootScope, RootedPtr},
+        heap::{HeapState, RootScope, RootedPtr},
         traits::IntoRex,
     },
     modules::{
@@ -64,7 +65,7 @@ where
     pub(crate) runtime: RuntimeRegistry<State>,
     pub(crate) module_loader: ModuleLoaderState<State>,
     pub(crate) policy: RuntimePolicy,
-    pub(crate) heap: Heap,
+    pub(crate) heap: HeapState,
 }
 
 impl<State> Default for Builder<State>
@@ -91,7 +92,7 @@ where
             },
             module_loader: ModuleLoaderState::new(Vec::new()),
             policy: RuntimePolicy::default(),
-            heap: Heap::new(),
+            heap: HeapState::new(),
         }
     }
 
@@ -114,7 +115,7 @@ where
             },
             module_loader: ModuleLoaderState::new(options.default_imports),
             policy: RuntimePolicy::default(),
-            heap: Heap::new(),
+            heap: HeapState::new(),
         };
         if matches!(options.prelude, PreludeMode::Enabled) {
             builder
@@ -198,10 +199,15 @@ where
             let mut decls = module.declarations();
             decls.types.clear();
 
-            for export in module.exports {
+            let (value_exports, callable_exports): (Vec<_>, Vec<_>) =
+                module.exports.into_iter().partition(Export::is_value);
+            for export in callable_exports {
                 self.inject_module_export(ROOT_MODULE_NAME, export)?;
             }
             self.inject_decls(&decls)?;
+            for export in value_exports {
+                self.inject_module_export(ROOT_MODULE_NAME, export)?;
+            }
             return Ok(());
         }
 
@@ -250,11 +256,14 @@ where
             sanitize_type_name_for_symbol(&head_ty)
         );
         let native_scheme = Scheme::new(vec![], vec![], head_ty.clone());
-        self.export_native(
-            native_name.clone(),
-            native_scheme,
-            0,
-            move |engine, _, _| T::rex_default(engine),
+        let func: HostValueCallable<State> = Arc::new(move |engine, _, _| {
+            let result = T::rex_default(engine);
+            async move { result }.boxed()
+        });
+        self.register_native_registration(
+            ROOT_MODULE_NAME,
+            &native_name,
+            NativeRegistration::sync(native_scheme, 0, func),
         )?;
 
         self.type_system.register_instance(
@@ -364,8 +373,9 @@ where
         &mut self.type_system
     }
 
-    pub fn heap(&self) -> &Heap {
-        &self.heap
+    #[doc(hidden)]
+    pub fn set_extreme_gc_stress(&mut self, enabled: bool) {
+        self.heap.set_extreme_stress(enabled);
     }
 }
 
@@ -488,6 +498,52 @@ where
     register_native_parts(type_system, runtime, name, scheme, arity, callable)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn register_owned_value_parts<State>(
+    module_loader: &ModuleLoaderState<State>,
+    type_system: &mut TypeSystem,
+    runtime: &mut RuntimeRegistry<State>,
+    heap: &mut HeapState,
+    module_name: &str,
+    export_name: &str,
+    mut typ: Type,
+    value: Value,
+) -> Result<(), EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let scheme_module = if module_name == ROOT_MODULE_NAME {
+        module_loader
+            .registration_module_context
+            .as_deref()
+            .unwrap_or(ROOT_MODULE_NAME)
+    } else {
+        module_name
+    };
+    if scheme_module != ROOT_MODULE_NAME
+        && let Some(local_type_names) = module_loader.module_local_type_names.get(scheme_module)
+    {
+        typ = qualify_module_scheme_refs(
+            &Scheme::new(vec![], vec![], typ),
+            scheme_module,
+            local_type_names,
+        )
+        .typ;
+    }
+
+    let name = normalize_name(&module_export_symbol(module_name, export_name));
+    let root = heap.machine_root_scope(|scope| scope.alloc_value(value, &typ, type_system))?;
+    let registration = NativeRegistration::constant(Scheme::new(vec![], vec![], typ), root);
+    let NativeRegistration {
+        scheme,
+        arity,
+        callable,
+    } = registration;
+    // Constants are resolved through the native registry so overloaded
+    // constants such as the numeric prelude identities remain type-directed.
+    register_native_parts(type_system, runtime, name, scheme, arity, callable)
+}
+
 pub(crate) fn install_named_rust_module<State, C>(
     engine: &mut C,
     expected_id: &ModuleId,
@@ -547,11 +603,16 @@ where
         },
     );
 
-    for export in module.exports {
+    let (value_exports, callable_exports): (Vec<_>, Vec<_>) =
+        module.exports.into_iter().partition(Export::is_value);
+    for export in callable_exports {
         engine.inject_module_export(&module_name, export)?;
     }
 
     engine.inject_decls(&qualified.decls)?;
+    for export in value_exports {
+        engine.inject_module_export(&module_name, export)?;
+    }
     engine
         .module_loader_mut()
         .injected_modules
@@ -575,7 +636,7 @@ where
         let Export {
             name,
             interface: _,
-            injector,
+            payload,
         } = export;
         let qualified_name = module_export_symbol(module_name, &name);
         let previous_context = self.module_loader.registration_module_context.clone();
@@ -584,13 +645,21 @@ where
         } else {
             Some(module_name.to_string())
         };
-        let result = injector(self, &qualified_name);
+        let result = match payload {
+            ExportPayload::Injector(injector) => injector(self, &qualified_name),
+            ExportPayload::Value { value, typ } => register_owned_value_parts(
+                &self.module_loader,
+                &mut self.type_system,
+                &mut self.runtime,
+                &mut self.heap,
+                ROOT_MODULE_NAME,
+                &qualified_name,
+                typ,
+                value,
+            ),
+        };
         self.module_loader.registration_module_context = previous_context;
         result
-    }
-
-    pub(crate) fn inject_root_export(&mut self, export: Export<State>) -> Result<(), EngineError> {
-        self.inject_module_export(ROOT_MODULE_NAME, export)
     }
 
     pub(crate) fn register_native_registration(
@@ -615,9 +684,17 @@ where
         handler: H,
     ) -> Result<(), EngineError>
     where
-        H: HostFnSync<State, Sig>,
+        H: InternalFnSync<State, Sig>,
     {
-        self.inject_root_export(Export::from_handler(name, handler)?)
+        let name = name.into();
+        let symbol = normalize_name(&name);
+        let (scheme, arity, callable) =
+            handler.into_registration(Arc::clone(&self.state), symbol.clone());
+        self.register_native_registration(
+            ROOT_MODULE_NAME,
+            &name,
+            NativeRegistration::scheduler(scheme, arity, callable),
+        )
     }
 
     pub(crate) fn export_native<F>(
@@ -628,7 +705,11 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(Context<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
+        F: for<'a> Fn(
+                &'a mut RootScope<'_>,
+                &'a Type,
+                &'a [RootedPtr],
+            ) -> Result<RootedPtr, EngineError>
             + Send
             + Sync
             + 'static,
@@ -636,11 +717,10 @@ where
         validate_native_export_scheme(&scheme, arity)?;
         let name = name.into();
         let handler = Arc::new(handler);
-        let func: NativeHandleCallable<State> = Arc::new(move |engine, typ, args| {
-            let result = handler(engine, &typ, &args);
-            async move { result }.boxed()
+        let func: SchedulerNativeCallable = Arc::new(move |scope, typ, args| {
+            handler(scope, &typ, args).map(SchedulerNativeResult::Ready)
         });
-        let registration = NativeRegistration::sync(scheme, arity, func);
+        let registration = NativeRegistration::scheduler(scheme, arity, func);
         self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
@@ -652,12 +732,11 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a, 'heap, 'scope> Fn(
-                &'a mut RootScope<'heap, 'scope>,
+        F: for<'a, 'heap> Fn(
+                &'a mut RootScope<'heap>,
                 Type,
-                Vec<RootedPtr<'scope>>,
-            )
-                -> Result<SchedulerNativeResult<'scope>, EngineError>
+                Vec<RootedPtr>,
+            ) -> Result<SchedulerNativeResult, EngineError>
             + Send
             + Sync
             + 'static,
@@ -677,14 +756,17 @@ where
         value: V,
     ) -> Result<(), EngineError> {
         let typ = V::rex_type();
-        let value = value.into_rex(&self.heap)?;
-        let func: NativeHandleCallable<State> = Arc::new(move |_engine, _typ, _args| {
-            let result = Ok(value.clone());
-            async move { result }.boxed()
-        });
-        let scheme = Scheme::new(vec![], vec![], typ);
-        let registration = NativeRegistration::sync(scheme, 0, func);
-        self.register_native_registration(ROOT_MODULE_NAME, name, registration)
+        let value = value.into_rex()?;
+        register_owned_value_parts(
+            &self.module_loader,
+            &mut self.type_system,
+            &mut self.runtime,
+            &mut self.heap,
+            ROOT_MODULE_NAME,
+            name,
+            typ,
+            value,
+        )
     }
 
     pub(crate) fn inject_adt(&mut self, adt: AdtDecl) -> Result<(), EngineError> {
@@ -696,7 +778,7 @@ where
             &mut self.env,
             &mut self.type_system,
             &mut self.runtime,
-            &self.heap,
+            &mut self.heap,
             decls,
         )
     }
@@ -736,7 +818,7 @@ where
             &mut self.env,
             &mut self.type_system,
             &mut self.runtime,
-            &self.heap,
+            &mut self.heap,
             module_id,
         )
     }
@@ -793,7 +875,7 @@ where
         let Export {
             name,
             interface: _,
-            injector,
+            payload,
         } = export;
         let qualified_name = module_export_symbol(module_name, &name);
         let previous_context = self.module_loader.registration_module_context.clone();
@@ -802,7 +884,19 @@ where
         } else {
             Some(module_name.to_string())
         };
-        let result = injector(self, &qualified_name);
+        let result = match payload {
+            ExportPayload::Injector(injector) => injector(self, &qualified_name),
+            ExportPayload::Value { value, typ } => register_owned_value_parts(
+                &self.module_loader,
+                &mut self.type_system,
+                &mut self.runtime,
+                &mut self.heap,
+                ROOT_MODULE_NAME,
+                &qualified_name,
+                typ,
+                value,
+            ),
+        };
         self.module_loader.registration_module_context = previous_context;
         result
     }
@@ -812,7 +906,7 @@ where
             &mut self.env,
             &mut self.type_system,
             &mut self.runtime,
-            &self.heap,
+            &mut self.heap,
             decls,
         )
     }
@@ -833,7 +927,7 @@ where
             &mut self.env,
             &mut self.type_system,
             &mut self.runtime,
-            &self.heap,
+            &mut self.heap,
             module_id,
         )
     }
@@ -915,7 +1009,7 @@ pub struct NativeRegistration<State: Clone + Send + Sync + 'static> {
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeRegistration<State> {
-    pub(crate) fn sync(scheme: Scheme, arity: usize, func: NativeHandleCallable<State>) -> Self {
+    pub(crate) fn sync(scheme: Scheme, arity: usize, func: HostValueCallable<State>) -> Self {
         Self {
             scheme,
             arity,
@@ -934,7 +1028,15 @@ impl<State: Clone + Send + Sync + 'static> NativeRegistration<State> {
         }
     }
 
-    pub(crate) fn r#async(scheme: Scheme, arity: usize, func: NativeHandleCallable<State>) -> Self {
+    pub(crate) fn constant(scheme: Scheme, value: RootedPtr) -> Self {
+        Self {
+            scheme,
+            arity: 0,
+            callable: NativeCallable::Constant(value),
+        }
+    }
+
+    pub(crate) fn r#async(scheme: Scheme, arity: usize, func: HostValueCallable<State>) -> Self {
         Self {
             scheme,
             arity,
@@ -975,9 +1077,9 @@ where
             continue;
         }
         let ctor_name = ctor.clone();
-        let func: NativeHandleCallable<State> = Arc::new(move |ctx, _typ, args| {
-            let result = ctx.heap().alloc_adt(runtime_ctor_symbol(&ctor_name), args);
-            async move { result }.boxed()
+        let func: SchedulerNativeCallable = Arc::new(move |scope, _typ, args| {
+            let value = scope.alloc_root_adt(runtime_ctor_symbol(&ctor_name), args.to_vec())?;
+            Ok(SchedulerNativeResult::Ready(value))
         });
         let arity = type_arity(&scheme.typ);
         register_native_parts(
@@ -986,10 +1088,7 @@ where
             ctor,
             scheme,
             arity,
-            NativeCallable::Host {
-                callable: func,
-                scheduling: NativeCallScheduling::Immediate,
-            },
+            NativeCallable::Scheduler(func),
         )?;
     }
     Ok(())
@@ -999,7 +1098,7 @@ fn inject_fn_runtime_parts<State>(
     env: &mut RootedEnvironment,
     type_system: &mut TypeSystem,
     runtime: &RuntimeRegistry<State>,
-    heap: &Heap,
+    heap: &mut HeapState,
     decls: &[FnDecl],
 ) -> Result<(), EngineError>
 where
@@ -1015,8 +1114,10 @@ where
         if let Some(existing) = env_rec.get(&decl.name.name) {
             slots.push(existing);
         } else {
-            let placeholder = heap.alloc_uninitialized(decl.name.name.clone())?;
-            env_rec = env_rec.extend(decl.name.name.clone(), placeholder.clone());
+            let placeholder = heap.machine_root_scope(|scope| {
+                scope.alloc_root_uninitialized(decl.name.name.clone())
+            })?;
+            env_rec = env_rec.extend(decl.name.name.clone(), placeholder);
             slots.push(placeholder);
         }
     }
@@ -1063,8 +1164,8 @@ where
                     "fn declaration did not lower to lambda".into(),
                 ));
             };
-            heap.with_root_scope(|scope| {
-                let closure_env = env.to_scoped_environment(scope)?;
+            heap.machine_root_scope(|scope| {
+                let closure_env = env.to_scoped_environment();
                 let value = scope.alloc_root_closure(
                     closure_env,
                     param.clone(),
@@ -1072,8 +1173,7 @@ where
                     typed.typ.clone(),
                     Arc::new(body.as_ref().clone()),
                 )?;
-                let slot = scope.root_handle(slot)?;
-                scope.overwrite_root(slot, value)
+                scope.overwrite_root(*slot, value)
             })?;
         }
         Ok(())
@@ -1092,7 +1192,7 @@ fn inject_decls_parts<State>(
     env: &mut RootedEnvironment,
     type_system: &mut TypeSystem,
     runtime: &mut RuntimeRegistry<State>,
-    heap: &Heap,
+    heap: &mut HeapState,
     decls: &Declarations,
 ) -> Result<(), EngineError>
 where
@@ -1141,14 +1241,15 @@ where
 
 fn publish_runtime_decl_interfaces_parts(
     env: &mut RootedEnvironment,
-    heap: &Heap,
+    heap: &mut HeapState,
     decls: &[DeclareFnDecl],
 ) -> Result<(), EngineError> {
     for df in decls {
         if env.get(&df.name.name).is_some() {
             continue;
         }
-        let placeholder = heap.alloc_uninitialized(df.name.name.clone())?;
+        let placeholder =
+            heap.machine_root_scope(|scope| scope.alloc_root_uninitialized(df.name.name.clone()))?;
         *env = env.extend(df.name.name.clone(), placeholder);
     }
     Ok(())
@@ -1156,7 +1257,7 @@ fn publish_runtime_decl_interfaces_parts(
 
 fn publish_runtime_interfaces_parts(
     env: &mut RootedEnvironment,
-    heap: &Heap,
+    heap: &mut HeapState,
     decls: &Declarations,
 ) -> Result<(), EngineError> {
     publish_runtime_decl_interfaces_parts(env, heap, &decls.declare_fns)
@@ -1267,7 +1368,7 @@ fn ensure_cycle_interfaces_published_parts<State>(
     env: &mut RootedEnvironment,
     type_system: &mut TypeSystem,
     runtime: &mut RuntimeRegistry<State>,
-    heap: &Heap,
+    heap: &mut HeapState,
     module_id: &ModuleId,
 ) -> Result<(), EngineError>
 where

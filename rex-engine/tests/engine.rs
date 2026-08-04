@@ -69,16 +69,16 @@ async fn compile_program_uses_explicit_main_signature_and_runtime_inputs() {
     assert_eq!(compiled.result_type(), &Type::builtin(BuiltinTypeId::I32));
 
     let mut inputs = BTreeMap::new();
-    inputs.insert("y".to_string(), evaluator.heap().alloc_i32(5).unwrap());
-    inputs.insert("x".to_string(), evaluator.heap().alloc_i32(37).unwrap());
+    inputs.insert("y".to_string(), Value::I32(5));
+    inputs.insert("x".to_string(), Value::I32(37));
     let value = evaluator.run(compiled, inputs).await.unwrap();
     assert_eq!(value.as_i32().unwrap(), 42);
 }
 
 #[tokio::test]
 async fn compile_program_handles_gc_during_compile_and_main_input_application() {
-    let builder = Builder::with_prelude(()).unwrap();
-    builder.heap().set_extreme_stress(true).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
+    builder.set_extreme_gc_stress(true);
     let compiler = builder.build_compiler();
     let program = parse_program("fn main x: i32 -> i32 = x + 1;");
     let (compiled, evaluator) = compiler
@@ -86,16 +86,16 @@ async fn compile_program_handles_gc_during_compile_and_main_input_application() 
         .await
         .unwrap();
     let mut inputs = BTreeMap::new();
-    inputs.insert("x".to_string(), evaluator.heap().alloc_i32(41).unwrap());
+    inputs.insert("x".to_string(), Value::I32(41));
     let value = evaluator.run(compiled, inputs).await.unwrap();
     assert_eq!(value.as_i32().unwrap(), 42);
 }
 
 #[tokio::test]
-async fn compile_program_preserves_function_results_from_main() {
+async fn compile_program_preserves_function_result_type_but_run_rejects_export() {
     let program = parse_program("fn main x: i32 -> i32 -> i32 = \\ y -> x + y;");
     let compiler = Builder::with_prelude(()).unwrap().build_compiler();
-    let (compiled, _evaluator) = compiler
+    let (compiled, evaluator) = compiler
         .compile_program(&program, compile_options())
         .await
         .unwrap();
@@ -111,6 +111,13 @@ async fn compile_program_preserves_function_results_from_main() {
             Type::builtin(BuiltinTypeId::I32),
         )
     );
+
+    let mut inputs = BTreeMap::new();
+    inputs.insert("x".to_string(), Value::I32(1));
+    assert!(matches!(
+        evaluator.run(compiled, inputs).await,
+        Err(EngineError::ValueConversion { .. })
+    ));
 }
 
 #[tokio::test]
@@ -165,8 +172,8 @@ async fn evaluator_rejects_missing_or_extra_main_inputs() {
         .await
         .unwrap();
     let mut inputs = BTreeMap::new();
-    inputs.insert("x".to_string(), evaluator.heap().alloc_i32(1).unwrap());
-    inputs.insert("y".to_string(), evaluator.heap().alloc_i32(2).unwrap());
+    inputs.insert("x".to_string(), Value::I32(1));
+    inputs.insert("y".to_string(), Value::I32(2));
     let err = evaluator.run(compiled, inputs).await.unwrap_err();
 
     assert!(matches!(
@@ -268,7 +275,7 @@ async fn injected_module_can_define_pub_adt_declarations() {
         .unwrap();
     let value = evaluator.run(program, Default::default()).await.unwrap();
 
-    match value.value().unwrap() {
+    match value {
         Value::Adt(tag, args) => {
             assert_eq!(tag.as_ref(), "Failed");
             assert_eq!(args.len(), 1);
