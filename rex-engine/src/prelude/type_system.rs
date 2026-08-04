@@ -346,6 +346,28 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
         let option_of = |t: Type| Type::app(option_con.clone(), t);
         let result_of = |ok: Type, err: Type| Type::app(Type::app(result_con.clone(), err), ok);
 
+        // Length primitives
+        {
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
+            let a = Type::var(a_tv.clone());
+            ts.add_value(
+                "prim_list_length",
+                Scheme::new(
+                    vec![a_tv.clone()],
+                    vec![],
+                    Type::fun(list_of(a.clone()), i32_ty.clone()),
+                ),
+            );
+            ts.add_value(
+                "prim_dict_length",
+                Scheme::new(vec![a_tv], vec![], Type::fun(Type::dict(a), i32_ty.clone())),
+            );
+            ts.add_value(
+                "prim_string_length",
+                Scheme::new(vec![], vec![], Type::fun(string_ty.clone(), i32_ty.clone())),
+            );
+        }
+
         // prim_map
         {
             let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
@@ -851,11 +873,6 @@ pub(super) fn inject_standard_prelude(
         => Type::fun(Type::app(f, a), a)
     );
     ts.add_value("mean", mean_scheme);
-    let length_scheme = scheme!(&mut ts.supply; forall [f, a]
-        where [Foldable(f)]
-        => Type::fun(Type::app(f, a), Type::builtin(BuiltinTypeId::I32))
-    );
-    ts.add_value("length", length_scheme);
     let first_scheme = scheme!(&mut ts.supply; forall [a]
         => Type::fun(
             Type::builtin(BuiltinTypeId::I32),

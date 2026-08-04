@@ -34,6 +34,7 @@ class:Foldable	Containers that can be reduced with folds.
 class:Functor	Type constructors that support structure-preserving mapping.
 class:Indexable	Containers that support indexed element access.
 class:Integral	Integral numeric types supporting modulo.
+class:Length	Collections and strings whose length can be measured.
 class:Monad	Applicatives supporting dependent sequencing (`bind`).
 class:MultiplicativeMonoid	Types with multiplicative identity and associative multiplication.
 class:Ord	Types with total ordering comparisons.
@@ -63,7 +64,7 @@ fn:Some	Construct a present `Option` value.
 fn:ap	Apply wrapped functions to wrapped values.
 fn:bind	Monadic flat-map/sequencing operation.
 fn:cmp	Three-way comparison returning negative/zero/positive `i32`.
-fn:length	Return the number of elements in a foldable container.
+fn:length	Return the number of list elements, dictionary entries, or string Unicode scalar values.
 fn:default	Canonical default value for a type. For `Result a e`, this requires `Default a`.
 fn:filter	Keep elements that satisfy a predicate.
 fn:filter_map	Map and drop missing results in one pass.

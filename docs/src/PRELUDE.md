@@ -136,6 +136,14 @@ Superclasses: _none_
 Methods:
 - `%`: `Integral 'a => ('a -> ('a -> 'a))`. Remainder/modulo operation.
 
+### `Length`
+Collections and strings whose length can be measured.
+
+Superclasses: _none_
+
+Methods:
+- `length`: `Length 'a => ('a -> i32)`. Return the number of list elements, dictionary entries, or string Unicode scalar values.
+
 ### `Monad`
 Applicatives supporting dependent sequencing (`bind`).
 
@@ -230,6 +238,7 @@ Methods:
 | `map` | `(('a -> 'b) -> (('f 'a) -> ('f`<br>`'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Apply a function to each value inside a functor. |
 | `get` | `(i32 -> ('t -> 'a))` | `((List 'a), 'a)` | Get an element by index. |
 | `%` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64` | Remainder/modulo operation. |
+| `length` | `('a -> i32)` | `(List 'a)`<br>`(Dict 'a)`<br>`string` | Return the number of list elements, dictionary entries, or string Unicode scalar values. |
 | `bind` | `(('a -> ('m 'b)) -> (('m 'a)`<br>`-> ('m 'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Monadic flat-map/sequencing operation. |
 | `one` | `'a` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Multiplicative identity. |
 | `*` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Multiplication. |
@@ -262,7 +271,6 @@ Methods:
 | `is_ok` | `((Result 't 'e) -> bool)` | Check whether a `Result` is `Ok`. |
 | `is_some` | `((Option 'a) -> bool)` | Check whether an `Option` is `Some`. |
 | `last` | `(i32 -> ((List 'a) -> (List`<br>`'a)))` | Return the last `n` list elements; errors if `n` is out of range. |
-| `length` | `Foldable 'f => (('f 'a) ->`<br>`i32)` | Return the number of elements in a foldable container. |
 | `max` | `Foldable 'f, Ord 'a => (('f`<br>`'a) -> 'a)` | Maximum element by ordering. |
 | `mean` | `Foldable 'f, Field 'a => (('f`<br>`'a) -> 'a)` | Arithmetic mean over numeric foldables. |
 | `min` | `Foldable 'f, Ord 'a => (('f`<br>`'a) -> 'a)` | Minimum element by ordering. |

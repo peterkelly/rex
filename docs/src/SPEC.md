@@ -43,6 +43,18 @@ String literals are decoded during lexing.
 - Backslash-newline is a line continuation and produces no character.
 - Unsupported or malformed escape sequences are lexical errors.
 
+## Length
+
+`length` returns an `i32` and is implemented for lists, dictionaries, and strings:
+
+- Lists return their number of elements.
+- Dictionaries return their number of entries.
+- Strings return their number of Unicode scalar values, not their UTF-8 byte length or number of
+  user-perceived grapheme clusters. For example, `length "h\u00e9\U0001F600" == 3` and
+  `length "e\u0301" == 2`.
+
+`Option` does not implement `Length`.
+
 ## Program Entry Points
 
 A Rex source is a compilation unit with zero or more declarations and an optional

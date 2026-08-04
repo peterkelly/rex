@@ -90,6 +90,10 @@ class Foldable t where {
     fold<a,b> : (b -> a -> b) -> b -> t a -> b;
 }
 
+class Length a where {
+    length : a -> i32;
+}
+
 class Filterable f <= Functor f where {
     filter<a> : (a -> bool) -> f a -> f a;
     filter_map<a,b> : (a -> Option b) -> f a -> f b;
@@ -798,6 +802,18 @@ instance Foldable Option where {
     foldl = prim_foldl;
     foldr = prim_foldr;
     fold = prim_fold;
+}
+
+instance<a> Length (List a) where {
+    length = prim_list_length;
+}
+
+instance<a> Length (Dict a) where {
+    length = prim_dict_length;
+}
+
+instance Length string where {
+    length = prim_string_length;
 }
 
 instance Filterable List <= Functor List where {

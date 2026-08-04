@@ -230,6 +230,61 @@ async fn test_string_literal_escape_sequences() {
 }
 
 #[tokio::test]
+async fn spec_length_counts_string_unicode_scalar_values() {
+    let (_heap, value, ty) = common::eval_source(
+        Builder::with_prelude(()).unwrap(),
+        r#"[length "", length "rex", length "hé😀", length "é"]"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)),);
+    assert_eq!(
+        common::list_elements(&value),
+        vec![Value::I32(0), Value::I32(3), Value::I32(3), Value::I32(2)]
+    );
+}
+
+#[tokio::test]
+async fn spec_length_remains_available_for_lists() {
+    let (_heap, value, ty) =
+        common::eval_source(Builder::with_prelude(()).unwrap(), "length [1, 2, 3]")
+            .await
+            .unwrap();
+
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    assert_eq!(value, Value::I32(3));
+}
+
+#[tokio::test]
+async fn spec_length_counts_dictionary_entries() {
+    let (_heap, value, ty) = common::eval_source(
+        Builder::with_prelude(()).unwrap(),
+        "[length (({}) is Dict i32), length (({ a = 1, b = 2 }) is Dict i32)]",
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
+    assert_eq!(
+        common::list_elements(&value),
+        vec![Value::I32(0), Value::I32(2)]
+    );
+}
+
+#[tokio::test]
+async fn spec_length_is_not_implemented_for_options() {
+    let err = common::eval_source(Builder::with_prelude(()).unwrap(), "length (Some 1)")
+        .await
+        .expect_err("Option must not implement Length");
+
+    assert!(matches!(
+        err,
+        EngineError::MissingTypeclassImpl { class, .. } if class.as_ref() == "Length"
+    ));
+}
+
+#[tokio::test]
 async fn test_match_tuple_destructuring() {
     let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),

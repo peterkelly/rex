@@ -1311,6 +1311,18 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
 ) -> Result<(), EngineError> {
     // Dict mapping and traversal helpers (used by `std.json`).
     {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::dict(a), Type::builtin(BuiltinTypeId::I32))
+        );
+        engine.export_native("prim_dict_length", scheme, 1, |scope, _, args| {
+            let values = scope.root_as_dict(args[0])?;
+            let length = i32::try_from(values.len())
+                .map_err(|_| EngineError::Internal("dictionary length overflow".into()))?;
+            scope.alloc_root_i32(length)
+        })?;
+    }
+
+    {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
                 Type::fun(a, b),
@@ -2275,18 +2287,19 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::list(a), Type::builtin(BuiltinTypeId::I32))
         );
-        engine.export_native("length", scheme, 1, |scope, _, args| {
+        engine.export_native("prim_list_length", scheme, 1, |scope, _, args| {
             let values = scope.root_as_list(args[0])?;
             scope.alloc_root_i32(values.len() as i32)
         })?;
     }
 
     {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(Type::option(a), Type::builtin(BuiltinTypeId::I32))
-        );
-        engine.export_native("length", scheme, 1, |scope, _, args| {
-            let length = option_value(scope, args[0])?.is_some() as i32;
+        let string_ty = Type::builtin(BuiltinTypeId::String);
+        let scheme = scheme!(Type::fun(&string_ty, Type::builtin(BuiltinTypeId::I32),));
+        engine.export_native("prim_string_length", scheme, 1, |scope, _, args| {
+            let value = scope.root_as_string(args[0])?;
+            let length = i32::try_from(value.chars().count())
+                .map_err(|_| EngineError::Internal("string length overflow".into()))?;
             scope.alloc_root_i32(length)
         })?;
     }
