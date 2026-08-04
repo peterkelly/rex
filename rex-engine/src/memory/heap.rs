@@ -835,7 +835,7 @@ impl RootScope<'_> {
 
     pub(crate) fn alloc_root_dict(
         &mut self,
-        values: BTreeMap<Symbol, RootedPtr>,
+        values: BTreeMap<String, RootedPtr>,
     ) -> Result<RootedPtr, EngineError> {
         let values = BTreeMap::from_iter(
             values
@@ -1123,8 +1123,8 @@ impl RootScope<'_> {
     pub(crate) fn root_as_dict(
         &mut self,
         root: RootedPtr,
-    ) -> Result<BTreeMap<Symbol, RootedPtr>, EngineError> {
-        let dict: BTreeMap<Symbol, InternalPtr> =
+    ) -> Result<BTreeMap<String, RootedPtr>, EngineError> {
+        let dict: BTreeMap<String, InternalPtr> =
             self.get_cell_from_rooted_ptr(root)?.cell_as_dict()?;
         Ok(BTreeMap::from_iter(
             dict.into_iter().map(|(k, v)| (k, self.root(v))),
@@ -1287,7 +1287,7 @@ pub(super) enum Cell {
     },
     Data(Vec<InternalPtr>),
     BinaryData(Vec<u8>),
-    Dict(BTreeMap<Symbol, InternalPtr>),
+    Dict(BTreeMap<String, InternalPtr>),
     Adt(Symbol, Vec<InternalPtr>),
     Uninitialized(Symbol),
     Closure(Closure),
@@ -1455,7 +1455,7 @@ impl Cell {
         }
     }
 
-    pub(super) fn cell_as_dict(&self) -> Result<BTreeMap<Symbol, InternalPtr>, EngineError> {
+    pub(super) fn cell_as_dict(&self) -> Result<BTreeMap<String, InternalPtr>, EngineError> {
         match self {
             Cell::Dict(v) => Ok(v.clone()),
             _ => Err(self.cell_type_error("dict")),

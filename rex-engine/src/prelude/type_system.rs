@@ -626,6 +626,36 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             );
         }
 
+        // Value-only dictionary filtering used by the Filterable Dict instance.
+        {
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
+            let b_tv = ts.supply.fresh(Some(Symbol::intern("b")));
+            let a = Type::var(a_tv.clone());
+            let b = Type::var(b_tv.clone());
+            ts.add_value(
+                "prim_dict_filter",
+                Scheme::new(
+                    vec![a_tv.clone()],
+                    vec![],
+                    Type::fun(
+                        Type::fun(a.clone(), bool_ty.clone()),
+                        Type::fun(Type::dict(a.clone()), Type::dict(a.clone())),
+                    ),
+                ),
+            );
+            ts.add_value(
+                "prim_dict_filter_map",
+                Scheme::new(
+                    vec![a_tv, b_tv],
+                    vec![],
+                    Type::fun(
+                        Type::fun(a.clone(), option_of(b.clone())),
+                        Type::fun(Type::dict(a), Type::dict(b)),
+                    ),
+                ),
+            );
+        }
+
         // Numeric conversions.
         for src in [
             BuiltinTypeId::U8,
@@ -786,6 +816,150 @@ pub(super) fn inject_standard_prelude(
         => Type::fun(Type::app(f, a), a)
     );
     ts.add_value("mean", mean_scheme);
+
+    // String-keyed immutable dictionary operations.
+    {
+        let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
+        let b_tv = ts.supply.fresh(Some(Symbol::intern("b")));
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
+        let string_ty = Type::builtin(BuiltinTypeId::String);
+        let dict_a = Type::dict(a.clone());
+        let dict_b = Type::dict(b.clone());
+        let option_a = Type::app(Type::builtin(BuiltinTypeId::Option), a.clone());
+        let entry_a = Type::tuple(vec![string_ty.clone(), a.clone()]);
+        let entry_b = Type::tuple(vec![string_ty.clone(), b.clone()]);
+
+        ts.add_value(
+            "dict_empty",
+            Scheme::new(vec![a_tv.clone()], vec![], dict_a.clone()),
+        );
+        ts.add_value(
+            "dict_singleton",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(string_ty.clone(), Type::fun(a.clone(), dict_a.clone())),
+            ),
+        );
+        ts.add_value(
+            "dict_get",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(
+                    string_ty.clone(),
+                    Type::fun(dict_a.clone(), option_a.clone()),
+                ),
+            ),
+        );
+        ts.add_value(
+            "dict_has",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(
+                    string_ty.clone(),
+                    Type::fun(dict_a.clone(), bool_ty.clone()),
+                ),
+            ),
+        );
+        ts.add_value(
+            "dict_insert",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(
+                    string_ty.clone(),
+                    Type::fun(a.clone(), Type::fun(dict_a.clone(), dict_a.clone())),
+                ),
+            ),
+        );
+        ts.add_value(
+            "dict_remove",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(string_ty.clone(), Type::fun(dict_a.clone(), dict_a.clone())),
+            ),
+        );
+        ts.add_value(
+            "dict_update",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(
+                    string_ty.clone(),
+                    Type::fun(
+                        Type::fun(option_a.clone(), option_a),
+                        Type::fun(dict_a.clone(), dict_a.clone()),
+                    ),
+                ),
+            ),
+        );
+        ts.add_value(
+            "dict_is_empty",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(dict_a.clone(), bool_ty.clone()),
+            ),
+        );
+        ts.add_value(
+            "dict_keys",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(dict_a.clone(), Type::list(string_ty.clone())),
+            ),
+        );
+        ts.add_value(
+            "dict_values",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(dict_a.clone(), Type::list(a.clone())),
+            ),
+        );
+        ts.add_value(
+            "dict_entries",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(dict_a.clone(), Type::list(entry_a.clone())),
+            ),
+        );
+        ts.add_value(
+            "dict_from_entries",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(Type::list(entry_a.clone()), dict_a.clone()),
+            ),
+        );
+        ts.add_value(
+            "dict_map",
+            Scheme::new(
+                vec![a_tv.clone(), b_tv],
+                vec![],
+                Type::fun(
+                    Type::fun(entry_a.clone(), entry_b),
+                    Type::fun(dict_a.clone(), dict_b),
+                ),
+            ),
+        );
+        ts.add_value(
+            "dict_filter",
+            Scheme::new(
+                vec![a_tv],
+                vec![],
+                Type::fun(
+                    Type::fun(entry_a, bool_ty.clone()),
+                    Type::fun(dict_a.clone(), dict_a),
+                ),
+            ),
+        );
+    }
     let first_scheme = scheme!(&mut ts.supply; forall [a]
         => Type::fun(
             Type::builtin(BuiltinTypeId::I32),

@@ -105,6 +105,55 @@ with `is`:
 ({ a = 1, b = 2 }) is Dict i32
 ```
 
+`Dict a` has string keys and values of one uniform type `a`. Dictionary literals use identifier
+keys, while functions such as `dict_insert` and `dict_from_entries` also accept arbitrary runtime
+strings.
+
+For a complete, function-by-function dictionary reference with signatures and runnable examples,
+see [Dictionaries](06_dictionaries.md).
+
+### Dictionary operations
+
+Lookup is option-based, and updates return new dictionaries:
+
+```rex,interactive
+let
+  d0 = dict_singleton "alpha" 1,
+  d1 = dict_insert "beta" 2 d0,
+  d2 = dict_update "alpha" (\old -> map ((+) 10) old) d1,
+  d3 = dict_remove "beta" d2
+in
+  (dict_get "alpha" d3, dict_has "beta" d3)
+```
+
+`dict_keys`, `dict_values`, and `dict_entries` return lists in lexicographic key order.
+`dict_from_entries` performs the inverse conversion; if a key occurs more than once, its last
+entry wins.
+
+The ordinary `map`, `filter`, and `filter_map` functions operate on dictionary values while
+preserving their keys. When the key is also needed, use `dict_map` or `dict_filter`; their callbacks
+receive a `(string, a)` tuple:
+
+```rex,interactive
+let
+  d = (({ a = 1, b = 2 }) is Dict i32),
+  renamed = dict_map
+    (\entry -> match entry with {
+      case (key, value) -> ("prefix_" + key, value * 10);
+    })
+    d,
+  selected = dict_filter
+    (\entry -> match entry with {
+      case (key, value) -> key != "b" && value > 0;
+    })
+    d
+in
+  (renamed, selected)
+```
+
+`dict_map` may produce the same output key from multiple input entries. Results are applied in the
+input dictionary's lexicographic key order, so the result produced for the latest input key wins.
+
 ### Matching dictionaries
 
 Dictionary patterns check for key presence and bind those keys to variables:

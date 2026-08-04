@@ -77,7 +77,8 @@ use crate::{
     evaluator::{
         native_callable::SchedulerNativeResult,
         native_functions::{
-            NativeApplyUnary, NativeArrayEq, NativeArrayEqState, NativeDictMap, NativeFold,
+            NativeApplyUnary, NativeArrayEq, NativeArrayEqState, NativeDictEntryMap,
+            NativeDictFilter, NativeDictFilterMap, NativeDictMap, NativeDictUpdate, NativeFold,
             NativeFoldOrder, NativeFoldState, NativeMean, NativeMeanState, NativeSequenceFilter,
             NativeSequenceFilterMap, NativeSequenceFlatMap, NativeSequenceMap, NativeSequenceShape,
             NativeSum, NativeTask, NativeUnaryFilter, NativeUnaryFilterMap, NativeUnaryFlatMap,
@@ -1232,6 +1233,344 @@ fn inject_dict_builtins<State: Clone + Send + Sync + 'static>(
                     entries: map.into_iter().collect(),
                     children: Vec::new(),
                     output: BTreeMap::new(),
+                    remaining: 0,
+                },
+            )))
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::fun(a.clone(), Type::builtin(BuiltinTypeId::Bool)),
+                Type::fun(Type::dict(a.clone()), Type::dict(a)),
+            )
+        );
+        engine.export_native_scheduler(
+            "prim_dict_filter",
+            scheme,
+            2,
+            |scope, call_type, args| {
+                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+                let func_ty = arg_tys[0].clone();
+                let elem_ty = dict_elem_type(&arg_tys[1])?;
+                let entries = scope.root_as_dict(args[1])?.into_iter().collect::<Vec<_>>();
+                let callback_args = entries.iter().map(|(_, value)| *value).collect();
+                Ok(SchedulerNativeResult::Task(NativeTask::DictFilter(
+                    NativeDictFilter {
+                        func: args[0],
+                        func_type: func_ty,
+                        arg_type: elem_ty,
+                        entries,
+                        args: callback_args,
+                        children: Vec::new(),
+                        keep: Vec::new(),
+                        remaining: 0,
+                    },
+                )))
+            },
+        )?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
+            Type::fun(
+                Type::fun(a.clone(), Type::option(b.clone())),
+                Type::fun(Type::dict(a), Type::dict(b)),
+            )
+        );
+        engine.export_native_scheduler(
+            "prim_dict_filter_map",
+            scheme,
+            2,
+            |scope, call_type, args| {
+                let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+                let func_ty = arg_tys[0].clone();
+                let elem_ty = dict_elem_type(&arg_tys[1])?;
+                let entries = scope.root_as_dict(args[1])?.into_iter().collect();
+                Ok(SchedulerNativeResult::Task(NativeTask::DictFilterMap(
+                    NativeDictFilterMap {
+                        func: args[0],
+                        func_type: func_ty,
+                        elem_type: elem_ty,
+                        entries,
+                        children: Vec::new(),
+                        output: Vec::new(),
+                        remaining: 0,
+                    },
+                )))
+            },
+        )?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] => Type::dict(a));
+        engine.export_native("dict_empty", scheme, 0, |scope, _, _| {
+            scope.alloc_root_dict(BTreeMap::new())
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::builtin(BuiltinTypeId::String),
+                Type::fun(a.clone(), Type::dict(a)),
+            )
+        );
+        engine.export_native("dict_singleton", scheme, 2, |scope, _, args| {
+            let key = scope.root_as_string(args[0])?;
+            scope.alloc_root_dict(BTreeMap::from([(key, args[1])]))
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::builtin(BuiltinTypeId::String),
+                Type::fun(Type::dict(a.clone()), Type::option(a)),
+            )
+        );
+        engine.export_native("dict_get", scheme, 2, |scope, _, args| {
+            let key = scope.root_as_string(args[0])?;
+            let value = scope.root_as_dict(args[1])?.get(&key).copied();
+            option_from_root(scope, value)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::builtin(BuiltinTypeId::String),
+                Type::fun(Type::dict(a), Type::builtin(BuiltinTypeId::Bool)),
+            )
+        );
+        engine.export_native("dict_has", scheme, 2, |scope, _, args| {
+            let key = scope.root_as_string(args[0])?;
+            let has = scope.root_as_dict(args[1])?.contains_key(&key);
+            scope.alloc_root_bool(has)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::builtin(BuiltinTypeId::String),
+                Type::fun(
+                    a.clone(),
+                    Type::fun(Type::dict(a.clone()), Type::dict(a)),
+                ),
+            )
+        );
+        engine.export_native("dict_insert", scheme, 3, |scope, _, args| {
+            let key = scope.root_as_string(args[0])?;
+            let mut map = scope.root_as_dict(args[2])?;
+            map.insert(key, args[1]);
+            scope.alloc_root_dict(map)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::builtin(BuiltinTypeId::String),
+                Type::fun(Type::dict(a.clone()), Type::dict(a)),
+            )
+        );
+        engine.export_native("dict_remove", scheme, 2, |scope, _, args| {
+            let key = scope.root_as_string(args[0])?;
+            let mut map = scope.root_as_dict(args[1])?;
+            map.remove(&key);
+            scope.alloc_root_dict(map)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::dict(a), Type::builtin(BuiltinTypeId::Bool))
+        );
+        engine.export_native("dict_is_empty", scheme, 1, |scope, _, args| {
+            let is_empty = scope.root_as_dict(args[0])?.is_empty();
+            scope.alloc_root_bool(is_empty)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::dict(a),
+                Type::list(Type::builtin(BuiltinTypeId::String)),
+            )
+        );
+        engine.export_native("dict_keys", scheme, 1, |scope, _, args| {
+            let keys = scope.root_as_dict(args[0])?.into_keys().collect::<Vec<_>>();
+            let mut roots = Vec::with_capacity(keys.len());
+            for key in keys {
+                roots.push(scope.alloc_root_string(key)?);
+            }
+            scope.alloc_root_list(roots)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::dict(a.clone()), Type::list(a))
+        );
+        engine.export_native("dict_values", scheme, 1, |scope, _, args| {
+            let values = scope.root_as_dict(args[0])?.into_values().collect();
+            scope.alloc_root_list(values)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::dict(a.clone()),
+                Type::list(Type::tuple(vec![
+                    Type::builtin(BuiltinTypeId::String),
+                    a.clone(),
+                ])),
+            )
+        );
+        engine.export_native("dict_entries", scheme, 1, |scope, _, args| {
+            let entries = scope.root_as_dict(args[0])?.into_iter().collect::<Vec<_>>();
+            let mut roots = Vec::with_capacity(entries.len());
+            for (key, value) in entries {
+                let key = scope.alloc_root_string(key)?;
+                roots.push(scope.alloc_root_tuple(vec![key, value])?);
+            }
+            scope.alloc_root_list(roots)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::list(Type::tuple(vec![
+                    Type::builtin(BuiltinTypeId::String),
+                    a.clone(),
+                ])),
+                Type::dict(a),
+            )
+        );
+        engine.export_native("dict_from_entries", scheme, 1, |scope, _, args| {
+            let items = scope.list_items(args[0])?;
+            let mut output = BTreeMap::new();
+            for index in 0..items.len() {
+                let item = items.get(scope, index)?;
+                let pair = scope.root_as_tuple(item)?;
+                if pair.len() != 2 {
+                    return Err(EngineError::NativeType {
+                        expected: "(string, a)".into(),
+                        got: scope.type_name(item)?.into(),
+                    });
+                }
+                output.insert(scope.root_as_string(pair[0])?, pair[1]);
+            }
+            scope.alloc_root_dict(output)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::builtin(BuiltinTypeId::String),
+                Type::fun(
+                    Type::fun(Type::option(a.clone()), Type::option(a.clone())),
+                    Type::fun(Type::dict(a.clone()), Type::dict(a)),
+                ),
+            )
+        );
+        engine.export_native_scheduler("dict_update", scheme, 3, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 3)?;
+            let key = scope.root_as_string(args[0])?;
+            let entries = scope.root_as_dict(args[2])?;
+            let old = entries.get(&key).copied();
+            let arg = option_from_root(scope, old)?;
+            let elem_ty = dict_elem_type(&arg_tys[2])?;
+            let option_ty = Type::option(elem_ty);
+            Ok(SchedulerNativeResult::Task(NativeTask::DictUpdate(
+                NativeDictUpdate {
+                    func: args[1],
+                    func_type: arg_tys[1].clone(),
+                    option_type: option_ty,
+                    key,
+                    entries,
+                    arg,
+                    children: Vec::new(),
+                },
+            )))
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
+            Type::fun(
+                Type::fun(
+                    Type::tuple(vec![
+                        Type::builtin(BuiltinTypeId::String),
+                        a.clone(),
+                    ]),
+                    Type::tuple(vec![Type::builtin(BuiltinTypeId::String), b.clone()]),
+                ),
+                Type::fun(Type::dict(a), Type::dict(b)),
+            )
+        );
+        engine.export_native_scheduler("dict_map", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let elem_ty = dict_elem_type(&arg_tys[1])?;
+            let entry_ty = Type::tuple(vec![Type::builtin(BuiltinTypeId::String), elem_ty]);
+            let entries = scope.root_as_dict(args[1])?.into_iter().collect::<Vec<_>>();
+            let mut callback_args = Vec::with_capacity(entries.len());
+            for (key, value) in entries {
+                let key = scope.alloc_root_string(key)?;
+                callback_args.push(scope.alloc_root_tuple(vec![key, value])?);
+            }
+            Ok(SchedulerNativeResult::Task(NativeTask::DictEntryMap(
+                NativeDictEntryMap {
+                    func: args[0],
+                    func_type: arg_tys[0].clone(),
+                    entry_type: entry_ty,
+                    args: callback_args,
+                    children: Vec::new(),
+                    output: Vec::new(),
+                    remaining: 0,
+                },
+            )))
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::fun(
+                    Type::tuple(vec![
+                        Type::builtin(BuiltinTypeId::String),
+                        a.clone(),
+                    ]),
+                    Type::builtin(BuiltinTypeId::Bool),
+                ),
+                Type::fun(Type::dict(a.clone()), Type::dict(a)),
+            )
+        );
+        engine.export_native_scheduler("dict_filter", scheme, 2, |scope, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
+            let elem_ty = dict_elem_type(&arg_tys[1])?;
+            let entry_ty = Type::tuple(vec![Type::builtin(BuiltinTypeId::String), elem_ty]);
+            let entries = scope.root_as_dict(args[1])?.into_iter().collect::<Vec<_>>();
+            let mut callback_args = Vec::with_capacity(entries.len());
+            for (key, value) in &entries {
+                let key = scope.alloc_root_string(key.clone())?;
+                callback_args.push(scope.alloc_root_tuple(vec![key, *value])?);
+            }
+            Ok(SchedulerNativeResult::Task(NativeTask::DictFilter(
+                NativeDictFilter {
+                    func: args[0],
+                    func_type: arg_tys[0].clone(),
+                    arg_type: entry_ty,
+                    entries,
+                    args: callback_args,
+                    children: Vec::new(),
+                    keep: Vec::new(),
                     remaining: 0,
                 },
             )))

@@ -798,13 +798,13 @@ fn map_keys_to_values<P>(
     kind: &'static str,
     keys: &[Symbol],
     values: Vec<P>,
-) -> Result<BTreeMap<Symbol, P>, EngineError> {
+) -> Result<BTreeMap<String, P>, EngineError> {
     if keys.len() != values.len() {
         return Err(EngineError::Internal(format!(
             "{kind} completed with mismatched keys and values"
         )));
     }
-    Ok(keys.iter().cloned().zip(values).collect())
+    Ok(keys.iter().map(ToString::to_string).zip(values).collect())
 }
 
 fn sequence_exprs(expr: &TypedExpr) -> Result<Vec<Arc<TypedExpr>>, EngineError> {
@@ -1314,11 +1314,11 @@ where
 fn apply_record_update_values(
     scope: &mut RootScope<'_>,
     base_ptr: RootedPtr,
-    update_vals: BTreeMap<Symbol, RootedPtr>,
+    update_vals: BTreeMap<String, RootedPtr>,
 ) -> Result<RootedPtr, EngineError> {
     enum RecordUpdateTarget {
-        Dict(BTreeMap<Symbol, RootedPtr>),
-        Adt(Symbol, BTreeMap<Symbol, RootedPtr>),
+        Dict(BTreeMap<String, RootedPtr>),
+        Adt(Symbol, BTreeMap<String, RootedPtr>),
     }
 
     let target = match scope.type_name(base_ptr)? {
@@ -1447,7 +1447,7 @@ fn match_pattern_ptr(
             let map = scope.root_as_dict(value)?;
             let Some(values) = fields
                 .iter()
-                .map(|(key, _)| map.get(key).copied())
+                .map(|(key, _)| map.get(key.as_ref()).copied())
                 .collect::<Option<Vec<_>>>()
             else {
                 return Ok(None);
@@ -1761,7 +1761,7 @@ fn project_pointer(
     }
     scope
         .root_as_dict(record)?
-        .get(field)
+        .get(field.as_ref())
         .copied()
         .ok_or_else(|| EngineError::UnknownField {
             field: field.clone(),

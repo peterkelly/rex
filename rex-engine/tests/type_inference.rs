@@ -1211,12 +1211,10 @@ fn infer_missing_instances_produce_unsatisfied_predicates() {
     for (name, code) in [
         ("eq_dict", "{a = 1} == {a = 2}"),
         ("min_bool", "min [true]"),
-        ("map_dict", r#"map (\x -> x) {a = 1}"#),
     ] {
         let (class, pred_type, expected_ty) = match name {
             "eq_dict" => ("Eq", dict_of(Type::builtin(BuiltinTypeId::I32)), None),
             "min_bool" => ("Ord", Type::builtin(BuiltinTypeId::Bool), None),
-            "map_dict" => ("Functor", Type::builtin(BuiltinTypeId::Dict), None),
             _ => unreachable!("unknown test case {name}"),
         };
 

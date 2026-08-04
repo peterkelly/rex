@@ -120,6 +120,10 @@ pub enum NativeTask<P> {
     UnaryFlatMap(NativeUnaryFlatMap<P>),
     Fold(NativeFold<P>),
     DictMap(NativeDictMap<P>),
+    DictEntryMap(NativeDictEntryMap<P>),
+    DictFilter(NativeDictFilter<P>),
+    DictFilterMap(NativeDictFilterMap<P>),
+    DictUpdate(NativeDictUpdate<P>),
     ArrayEq(NativeArrayEq<P>),
     Sum(NativeSum<P>),
     Mean(NativeMean<P>),
@@ -167,9 +171,9 @@ fn map_option_value_vecs<P, Q, E>(
 }
 
 fn map_entries_into<P, Q, E>(
-    entries: Vec<(Symbol, P)>,
+    entries: Vec<(String, P)>,
     map: &mut impl FnMut(P) -> Result<Q, E>,
-) -> Result<Vec<(Symbol, Q)>, E> {
+) -> Result<Vec<(String, Q)>, E> {
     entries
         .into_iter()
         .map(|(name, value)| Ok((name, map(value)?)))
@@ -177,9 +181,9 @@ fn map_entries_into<P, Q, E>(
 }
 
 fn map_values_into<P, Q, E>(
-    values: BTreeMap<Symbol, P>,
+    values: BTreeMap<String, P>,
     map: &mut impl FnMut(P) -> Result<Q, E>,
-) -> Result<BTreeMap<Symbol, Q>, E> {
+) -> Result<BTreeMap<String, Q>, E> {
     values
         .into_iter()
         .map(|(name, value)| Ok((name, map(value)?)))
@@ -288,6 +292,51 @@ impl<P> NativeTask<P> {
                 output: map_values_into(task.output, map)?,
                 remaining: task.remaining,
             }),
+            Self::DictEntryMap(task) => NativeTask::DictEntryMap(NativeDictEntryMap {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                entry_type: task.entry_type,
+                args: task
+                    .args
+                    .into_iter()
+                    .map(&mut *map)
+                    .collect::<Result<Vec<_>, _>>()?,
+                children: task.children,
+                output: map_option_values(task.output, map)?,
+                remaining: task.remaining,
+            }),
+            Self::DictFilter(task) => NativeTask::DictFilter(NativeDictFilter {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                arg_type: task.arg_type,
+                entries: map_entries_into(task.entries, map)?,
+                args: task
+                    .args
+                    .into_iter()
+                    .map(&mut *map)
+                    .collect::<Result<Vec<_>, _>>()?,
+                children: task.children,
+                keep: task.keep,
+                remaining: task.remaining,
+            }),
+            Self::DictFilterMap(task) => NativeTask::DictFilterMap(NativeDictFilterMap {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                elem_type: task.elem_type,
+                entries: map_entries_into(task.entries, map)?,
+                children: task.children,
+                output: map_nested_option_values(task.output, map)?,
+                remaining: task.remaining,
+            }),
+            Self::DictUpdate(task) => NativeTask::DictUpdate(NativeDictUpdate {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                option_type: task.option_type,
+                key: task.key,
+                entries: map_values_into(task.entries, map)?,
+                arg: map(task.arg)?,
+                children: task.children,
+            }),
             Self::ArrayEq(task) => NativeTask::ArrayEq(NativeArrayEq {
                 elem_type: task.elem_type,
                 xs: task.xs.map_values(map)?,
@@ -343,6 +392,22 @@ impl NativeTask<RootedPtr> {
                 task.children.push(child);
                 Ok(())
             }
+            NativeTask::DictEntryMap(task) => {
+                task.children.push(child);
+                Ok(())
+            }
+            NativeTask::DictFilter(task) => {
+                task.children.push(child);
+                Ok(())
+            }
+            NativeTask::DictFilterMap(task) => {
+                task.children.push(child);
+                Ok(())
+            }
+            NativeTask::DictUpdate(task) => {
+                task.children.push(child);
+                Ok(())
+            }
             _ => Err(EngineError::Internal(
                 "native task does not accept scheduled children".into(),
             )),
@@ -356,6 +421,10 @@ impl NativeTask<RootedPtr> {
             NativeTask::SequenceFilterMap(task) => Ok(task.children.clone()),
             NativeTask::SequenceFlatMap(task) => Ok(task.children.clone()),
             NativeTask::DictMap(task) => Ok(task.children.clone()),
+            NativeTask::DictEntryMap(task) => Ok(task.children.clone()),
+            NativeTask::DictFilter(task) => Ok(task.children.clone()),
+            NativeTask::DictFilterMap(task) => Ok(task.children.clone()),
+            NativeTask::DictUpdate(task) => Ok(task.children.clone()),
             _ => Err(EngineError::Internal(
                 "native task does not have scheduled children".into(),
             )),
@@ -373,6 +442,10 @@ impl NativeTask<RootedPtr> {
             NativeTask::SequenceFilterMap(task) => task.child_spec(scope, index),
             NativeTask::SequenceFlatMap(task) => task.child_spec(scope, index),
             NativeTask::DictMap(task) => task.child_spec(index),
+            NativeTask::DictEntryMap(task) => task.child_spec(index),
+            NativeTask::DictFilter(task) => task.child_spec(index),
+            NativeTask::DictFilterMap(task) => task.child_spec(index),
+            NativeTask::DictUpdate(task) => task.child_spec(index),
             _ => Err(EngineError::Internal(
                 "native task does not have scheduled child specs".into(),
             )),
@@ -394,6 +467,10 @@ impl Coroutine for NativeTask<RootedPtr> {
             NativeTask::UnaryFlatMap(task) => task.enter(scope),
             NativeTask::Fold(task) => task.enter(scope),
             NativeTask::DictMap(task) => task.enter(scope),
+            NativeTask::DictEntryMap(task) => task.enter(scope),
+            NativeTask::DictFilter(task) => task.enter(scope),
+            NativeTask::DictFilterMap(task) => task.enter(scope),
+            NativeTask::DictUpdate(task) => task.enter(scope),
             NativeTask::ArrayEq(task) => task.enter(scope),
             NativeTask::Sum(task) => task.enter(scope),
             NativeTask::Mean(task) => task.enter(scope),
@@ -418,6 +495,10 @@ impl Coroutine for NativeTask<RootedPtr> {
             NativeTask::UnaryFlatMap(task) => task.receive(scope, child, value),
             NativeTask::Fold(task) => task.receive(scope, child, value),
             NativeTask::DictMap(task) => task.receive(scope, child, value),
+            NativeTask::DictEntryMap(task) => task.receive(scope, child, value),
+            NativeTask::DictFilter(task) => task.receive(scope, child, value),
+            NativeTask::DictFilterMap(task) => task.receive(scope, child, value),
+            NativeTask::DictUpdate(task) => task.receive(scope, child, value),
             NativeTask::ArrayEq(task) => task.receive(scope, child, value),
             NativeTask::Sum(task) => task.receive(scope, child, value),
             NativeTask::Mean(task) => task.receive(scope, child, value),
@@ -1069,9 +1150,9 @@ pub struct NativeDictMap<P> {
     pub func: P,
     pub func_type: Type,
     pub elem_type: Type,
-    pub entries: Vec<(Symbol, P)>,
+    pub entries: Vec<(String, P)>,
     pub children: Vec<FrameId>,
-    pub output: BTreeMap<Symbol, P>,
+    pub output: BTreeMap<String, P>,
     pub remaining: usize,
 }
 
@@ -1130,6 +1211,318 @@ impl NativeDictMap<RootedPtr> {
             self.func_type.clone(),
             *value,
             self.elem_type.clone(),
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeDictEntryMap<P> {
+    pub func: P,
+    pub func_type: Type,
+    pub entry_type: Type,
+    pub args: Vec<P>,
+    pub children: Vec<FrameId>,
+    pub output: Vec<Option<P>>,
+    pub remaining: usize,
+}
+
+impl Coroutine for NativeDictEntryMap<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
+        if self.args.is_empty() {
+            return Ok(NativeStep::Return(scope.alloc_root_dict(BTreeMap::new())?));
+        }
+        self.children.clear();
+        self.output = vec![None; self.args.len()];
+        self.remaining = self.args.len();
+        Ok(NativeStep::Schedule(self.args.len()))
+    }
+
+    fn receive(
+        &mut self,
+        scope: &mut RootScope<'_>,
+        child: FrameId,
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
+        let index = self
+            .children
+            .iter()
+            .position(|candidate| *candidate == child)
+            .ok_or_else(|| {
+                EngineError::Internal("native dict entry map received unknown child".into())
+            })?;
+        let slot = self.output.get_mut(index).ok_or_else(|| {
+            EngineError::Internal("native dict entry map result slot out of bounds".into())
+        })?;
+        if slot.replace(value).is_some() {
+            return Err(EngineError::Internal(
+                "native dict entry map received duplicate child result".into(),
+            ));
+        }
+        self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
+            EngineError::Internal("native dict entry map received too many results".into())
+        })?;
+        if self.remaining != 0 {
+            return Ok(NativeStep::Wait);
+        }
+
+        let results = self
+            .output
+            .iter()
+            .copied()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                EngineError::Internal("native dict entry map completed with missing result".into())
+            })?;
+        let mut output = BTreeMap::new();
+        // Results are applied in the original dictionary's lexicographic key order,
+        // independently of callback completion order. Later duplicate keys win.
+        for result in results {
+            let pair = scope.root_as_tuple(result)?;
+            if pair.len() != 2 {
+                return Err(EngineError::NativeType {
+                    expected: "(string, a)".into(),
+                    got: scope.type_name(result)?.into(),
+                });
+            }
+            let key = scope.root_as_string(pair[0])?;
+            output.insert(key, pair[1]);
+        }
+        Ok(NativeStep::Return(scope.alloc_root_dict(output)?))
+    }
+}
+
+impl NativeDictEntryMap<RootedPtr> {
+    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
+        let arg = self.args.get(index).copied().ok_or_else(|| {
+            EngineError::Internal("native dict entry map child index out of bounds".into())
+        })?;
+        native_apply_spec(
+            self.func,
+            self.func_type.clone(),
+            arg,
+            self.entry_type.clone(),
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeDictFilter<P> {
+    pub func: P,
+    pub func_type: Type,
+    pub arg_type: Type,
+    pub entries: Vec<(String, P)>,
+    pub args: Vec<P>,
+    pub children: Vec<FrameId>,
+    pub keep: Vec<Option<bool>>,
+    pub remaining: usize,
+}
+
+impl Coroutine for NativeDictFilter<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
+        if self.entries.is_empty() {
+            return Ok(NativeStep::Return(scope.alloc_root_dict(BTreeMap::new())?));
+        }
+        if self.entries.len() != self.args.len() {
+            return Err(EngineError::Internal(
+                "native dict filter has mismatched entries and arguments".into(),
+            ));
+        }
+        self.children.clear();
+        self.keep = vec![None; self.entries.len()];
+        self.remaining = self.entries.len();
+        Ok(NativeStep::Schedule(self.entries.len()))
+    }
+
+    fn receive(
+        &mut self,
+        scope: &mut RootScope<'_>,
+        child: FrameId,
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
+        let index = self
+            .children
+            .iter()
+            .position(|candidate| *candidate == child)
+            .ok_or_else(|| EngineError::Internal("native dict filter unknown child".into()))?;
+        let slot = self.keep.get_mut(index).ok_or_else(|| {
+            EngineError::Internal("native dict filter result slot out of bounds".into())
+        })?;
+        if slot.replace(scope.root_as_bool(value)?).is_some() {
+            return Err(EngineError::Internal(
+                "native dict filter received duplicate child result".into(),
+            ));
+        }
+        self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
+            EngineError::Internal("native dict filter received too many results".into())
+        })?;
+        if self.remaining != 0 {
+            return Ok(NativeStep::Wait);
+        }
+        let mut output = BTreeMap::new();
+        for ((key, entry), keep) in self.entries.iter().zip(&self.keep) {
+            match keep {
+                Some(true) => {
+                    output.insert(key.clone(), *entry);
+                }
+                Some(false) => {}
+                None => {
+                    return Err(EngineError::Internal(
+                        "native dict filter completed with missing result".into(),
+                    ));
+                }
+            }
+        }
+        Ok(NativeStep::Return(scope.alloc_root_dict(output)?))
+    }
+}
+
+impl NativeDictFilter<RootedPtr> {
+    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
+        let arg = self.args.get(index).copied().ok_or_else(|| {
+            EngineError::Internal("native dict filter child index out of bounds".into())
+        })?;
+        native_apply_spec(
+            self.func,
+            self.func_type.clone(),
+            arg,
+            self.arg_type.clone(),
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeDictFilterMap<P> {
+    pub func: P,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub entries: Vec<(String, P)>,
+    pub children: Vec<FrameId>,
+    pub output: Vec<Option<Option<P>>>,
+    pub remaining: usize,
+}
+
+impl Coroutine for NativeDictFilterMap<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
+        if self.entries.is_empty() {
+            return Ok(NativeStep::Return(scope.alloc_root_dict(BTreeMap::new())?));
+        }
+        self.children.clear();
+        self.output = vec![None; self.entries.len()];
+        self.remaining = self.entries.len();
+        Ok(NativeStep::Schedule(self.entries.len()))
+    }
+
+    fn receive(
+        &mut self,
+        scope: &mut RootScope<'_>,
+        child: FrameId,
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
+        let index = self
+            .children
+            .iter()
+            .position(|candidate| *candidate == child)
+            .ok_or_else(|| EngineError::Internal("native dict filter_map unknown child".into()))?;
+        let slot = self.output.get_mut(index).ok_or_else(|| {
+            EngineError::Internal("native dict filter_map result slot out of bounds".into())
+        })?;
+        if slot.replace(option_value_ptr(scope, value)?).is_some() {
+            return Err(EngineError::Internal(
+                "native dict filter_map received duplicate child result".into(),
+            ));
+        }
+        self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
+            EngineError::Internal("native dict filter_map received too many results".into())
+        })?;
+        if self.remaining != 0 {
+            return Ok(NativeStep::Wait);
+        }
+        let mut output = BTreeMap::new();
+        for ((key, _), value) in self.entries.iter().zip(&self.output) {
+            match value {
+                Some(Some(value)) => {
+                    output.insert(key.clone(), *value);
+                }
+                Some(None) => {}
+                None => {
+                    return Err(EngineError::Internal(
+                        "native dict filter_map completed with missing result".into(),
+                    ));
+                }
+            }
+        }
+        Ok(NativeStep::Return(scope.alloc_root_dict(output)?))
+    }
+}
+
+impl NativeDictFilterMap<RootedPtr> {
+    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
+        let (_, value) = self.entries.get(index).ok_or_else(|| {
+            EngineError::Internal("native dict filter_map child index out of bounds".into())
+        })?;
+        native_apply_spec(
+            self.func,
+            self.func_type.clone(),
+            *value,
+            self.elem_type.clone(),
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeDictUpdate<P> {
+    pub func: P,
+    pub func_type: Type,
+    pub option_type: Type,
+    pub key: String,
+    pub entries: BTreeMap<String, P>,
+    pub arg: P,
+    pub children: Vec<FrameId>,
+}
+
+impl Coroutine for NativeDictUpdate<RootedPtr> {
+    fn enter(&mut self, _scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
+        self.children.clear();
+        Ok(NativeStep::Schedule(1))
+    }
+
+    fn receive(
+        &mut self,
+        scope: &mut RootScope<'_>,
+        child: FrameId,
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
+        if self.children.as_slice() != [child] {
+            return Err(EngineError::Internal(
+                "native dict update received unexpected child".into(),
+            ));
+        }
+        match option_value_ptr(scope, value)? {
+            Some(value) => {
+                self.entries.insert(self.key.clone(), value);
+            }
+            None => {
+                self.entries.remove(&self.key);
+            }
+        }
+        Ok(NativeStep::Return(
+            scope.alloc_root_dict(self.entries.clone())?,
+        ))
+    }
+}
+
+impl NativeDictUpdate<RootedPtr> {
+    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
+        if index != 0 {
+            return Err(EngineError::Internal(
+                "native dict update child index out of bounds".into(),
+            ));
+        }
+        native_apply_spec(
+            self.func,
+            self.func_type.clone(),
+            self.arg,
+            self.option_type.clone(),
         )
     }
 }

@@ -3,7 +3,7 @@
 # - type:<type name>
 # - class:<class name>
 # - fn:<function name>
-type:Dict	Dictionary/record-like mapping from field labels to values.
+type:Dict	Immutable mapping from string keys to values of one type.
 type:List	Immutable ordered sequence.
 type:Option	Optional value (`Some` or `None`).
 type:Result	Result value (`Ok` or `Err`) for success/failure flows.
@@ -67,6 +67,20 @@ fn:bind	Monadic flat-map/sequencing operation.
 fn:cmp	Three-way comparison returning negative/zero/positive `i32`.
 fn:length	Return the number of list elements, dictionary entries, or string Unicode scalar values.
 fn:default	Canonical default value for a type. For `Result a e`, this requires `Default a`.
+fn:dict_empty	Construct an empty dictionary.
+fn:dict_entries	Return key/value tuples in lexicographic key order.
+fn:dict_filter	Keep dictionary entries whose key/value tuple satisfies a predicate.
+fn:dict_from_entries	Construct a dictionary from key/value tuples; later duplicate keys win.
+fn:dict_get	Look up a string key, returning `Some` for a present value or `None`.
+fn:dict_has	Test whether a string key is present.
+fn:dict_insert	Return a dictionary with a string key inserted or replaced.
+fn:dict_is_empty	Test whether a dictionary has no entries.
+fn:dict_keys	Return keys in lexicographic order.
+fn:dict_map	Transform key/value tuples into a dictionary; later collisions in input-key order win.
+fn:dict_remove	Return a dictionary without a string key.
+fn:dict_singleton	Construct a dictionary containing one key/value entry.
+fn:dict_update	Insert, replace, or remove a key by transforming its optional value.
+fn:dict_values	Return values in lexicographic key order.
 fn:filter	Keep elements that satisfy a predicate.
 fn:filter_map	Map and drop missing results in one pass.
 fn:first	Return the first `n` list elements; errors if `n` is out of range.

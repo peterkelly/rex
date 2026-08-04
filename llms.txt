@@ -12,6 +12,7 @@ When generating Rex code, prefer consulting the LLM guidance and tutorial first,
 - [Documentation Home](https://peterkelly.github.io/rex/): Entry point for all Rex documentation.
 - [LLM Guidance](https://peterkelly.github.io/rex/LLMS.html): Practical rules for generating valid Rex code quickly.
 - [Tutorial Overview](https://peterkelly.github.io/rex/tutorial/): Guided learning path through language features.
+- [Dictionary Reference](https://peterkelly.github.io/rex/tutorial/section1/06_dictionaries.html): Complete `Dict` semantics, signatures, and runnable examples.
 - [Language Reference](https://peterkelly.github.io/rex/LANGUAGE.html): Compact syntax and feature reference.
 
 ## Core Reference
@@ -23,7 +24,7 @@ When generating Rex code, prefer consulting the LLM guidance and tutorial first,
 
 ## Tutorial
 
-- [Section 1: Basics](https://peterkelly.github.io/rex/tutorial/section1/): Syntax, expressions, functions, ADTs, records, and prelude usage.
+- [Section 1: Basics](https://peterkelly.github.io/rex/tutorial/section1/): Syntax, expressions, functions, dictionaries, ADTs, records, and prelude usage.
 - [Section 2: Advanced Topics](https://peterkelly.github.io/rex/tutorial/section2/): Inference, polymorphism, type classes, functor/applicative/monad.
 - [Section 3: Worked Examples](https://peterkelly.github.io/rex/tutorial/section3/): End-to-end examples and small projects.
 

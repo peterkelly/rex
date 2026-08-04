@@ -53,8 +53,8 @@ impl RexType for ManualRecord {
 impl IntoRex for ManualRecord {
     fn into_rex(self) -> Result<Value, EngineError> {
         let mut fields = BTreeMap::new();
-        fields.insert(Symbol::intern("enabled"), self.enabled.into_rex()?);
-        fields.insert(Symbol::intern("count"), self.count.into_rex()?);
+        fields.insert("enabled".to_owned(), self.enabled.into_rex()?);
+        fields.insert("count".to_owned(), self.count.into_rex()?);
         Ok(Value::Adt(
             Symbol::intern("ManualRecord"),
             vec![Value::Dict(fields)],
@@ -87,14 +87,14 @@ impl FromRex for ManualRecord {
             });
         };
         let enabled = fields
-            .remove(&Symbol::intern("enabled"))
+            .remove("enabled")
             .ok_or_else(|| EngineError::NativeType {
                 expected: "field `enabled`".into(),
                 got: "dict".into(),
             })
             .and_then(bool::from_rex)?;
         let count = fields
-            .remove(&Symbol::intern("count"))
+            .remove("count")
             .ok_or_else(|| EngineError::NativeType {
                 expected: "field `count`".into(),
                 got: "dict".into(),

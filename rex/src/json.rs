@@ -65,7 +65,7 @@ pub fn json_to_rex(
                 .iter()
                 .map(|(name, typ)| {
                     let field = fields.get(name.as_ref()).unwrap_or(&JsonValue::Null);
-                    Ok((name.clone(), json_to_rex(field, typ, ts)?))
+                    Ok((name.to_string(), json_to_rex(field, typ, ts)?))
                 })
                 .collect::<Result<BTreeMap<_, _>, _>>()
                 .map(RexValue::Dict)
@@ -118,7 +118,7 @@ pub fn rex_to_json(
                 .iter()
                 .map(|(name, typ)| {
                     let field = fields
-                        .get(name)
+                        .get(name.as_ref())
                         .ok_or_else(|| type_mismatch_value(value, want))?;
                     Ok((name.to_string(), rex_to_json(field, typ, ts)?))
                 })
@@ -235,9 +235,7 @@ fn json_to_value_for_con(
             };
             fields
                 .iter()
-                .map(|(name, value)| {
-                    Ok((Symbol::intern(name), json_to_rex(value, element_type, ts)?))
-                })
+                .map(|(name, value)| Ok((name.clone(), json_to_rex(value, element_type, ts)?)))
                 .collect::<Result<BTreeMap<_, _>, _>>()
                 .map(RexValue::Dict)
         }

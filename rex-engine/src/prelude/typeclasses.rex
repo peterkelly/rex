@@ -766,6 +766,10 @@ instance<e> Functor (Result e) where {
     map = prim_map;
 }
 
+instance Functor Dict where {
+    map = prim_dict_map;
+}
+
 instance Applicative List <= Functor List where {
     pure = \x -> [x];
     ap = \ff xx -> prim_flat_map (\f -> prim_map f xx) ff;
@@ -833,6 +837,11 @@ instance Filterable List <= Functor List where {
 instance Filterable Option <= Functor Option where {
     filter = prim_filter;
     filter_map = prim_filter_map;
+}
+
+instance Filterable Dict <= Functor Dict where {
+    filter = prim_dict_filter;
+    filter_map = prim_dict_filter_map;
 }
 
 instance Sequence List <= Functor List, Foldable List where {

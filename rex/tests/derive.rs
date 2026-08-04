@@ -547,9 +547,7 @@ fn derive_vec_fields_serialize_and_deserialize_as_lists() {
         let Value::Dict(fields) = &args[0] else {
             panic!("expected record payload");
         };
-        let list = fields
-            .get(&Symbol::intern("values"))
-            .expect("expected `values` field");
+        let list = fields.get("values").expect("expected `values` field");
         let actual = Vec::<i32>::from_rex(list.clone()).unwrap();
 
         assert_eq!(actual, expected);

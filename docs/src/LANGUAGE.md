@@ -330,7 +330,7 @@ Functions are right-associative: `a -> b -> c` means `a -> (b -> c)`.
 
 - Tuple type: `(a, b, c)`
 - List type: `List a` (prelude)
-- Dict type: `Dict a` (prelude; key type is a symbol/field label at runtime)
+- Dict type: `Dict a` (prelude; keys are strings and all values have type `a`)
 - Promise type: `Promise a` (built-in unary type constructor; embedders may attach their own operations)
 
 ### ADTs

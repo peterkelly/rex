@@ -462,11 +462,11 @@ async fn sequence_flat_map_starts_all_async_callbacks() {
 }
 
 #[tokio::test]
-async fn dict_map_starts_all_async_callbacks() {
+async fn dict_value_map_starts_all_async_callbacks() {
     let (result, started_values) = eval_gated_i32(
         r#"
         let
-            mapped = prim_dict_map gate (({ a = 1, b = 2, c = 3 }) is Dict i32)
+            mapped = map gate (({ a = 1, b = 2, c = 3 }) is Dict i32)
         in
             match mapped with {
                 case {a, b, c} -> a + b + c;
@@ -615,13 +615,13 @@ async fn sequence_flat_map_preserves_order_when_callbacks_complete_out_of_order(
 }
 
 #[tokio::test]
-async fn dict_map_preserves_keys_when_callbacks_complete_out_of_order() {
+async fn dict_value_map_preserves_keys_when_callbacks_complete_out_of_order() {
     let (builder, mut gate) = builder_with_gate(3);
     let eval_task = tokio::spawn(async move {
         eval_value(
             r#"
             let
-                mapped = prim_dict_map gate (({ a = 1, b = 2, c = 3 }) is Dict i32)
+                mapped = map gate (({ a = 1, b = 2, c = 3 }) is Dict i32)
             in
                 match mapped with {
                     case {a, b, c} -> a * 100 + b * 10 + c;
@@ -653,6 +653,100 @@ async fn dict_map_preserves_keys_when_callbacks_complete_out_of_order() {
         .expect("gated dict_map evaluation failed");
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(value.as_i32().unwrap(), 123);
+}
+
+#[tokio::test]
+async fn dict_entry_map_applies_collision_results_in_input_key_order() {
+    let (builder, mut gate) = builder_with_gate(3);
+    let eval_task = tokio::spawn(async move {
+        eval_value(
+            r#"
+            let
+                mapped =
+                    dict_map
+                        (\entry ->
+                            match entry with {
+                                case (key, value) -> ("same", gate value);
+                            })
+                        (({ c = 3, a = 1, b = 2 }) is Dict i32)
+            in
+                match mapped with {
+                    case {same} -> same;
+                }
+            "#,
+            builder,
+        )
+        .await
+    });
+
+    assert!(
+        wait_for_count(&gate.started, 3).await,
+        "evaluation did not start all dict_map callbacks"
+    );
+    let mut started_values = Vec::new();
+    for _ in 0..3 {
+        started_values.push(gate.started_rx.recv().unwrap());
+    }
+    started_values.sort();
+    assert_eq!(started_values, vec![1, 2, 3]);
+
+    // Completion order is c, a, b. Collision resolution must nevertheless
+    // follow original key order a, b, c, making c's value the final winner.
+    gate.releases.remove(2).send(()).unwrap();
+    gate.releases.remove(0).send(()).unwrap();
+    gate.releases.remove(0).send(()).unwrap();
+
+    let (value, ty) = eval_task
+        .await
+        .expect("gated dict_map evaluation task panicked")
+        .expect("gated dict_map evaluation failed");
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    assert_eq!(value.as_i32().unwrap(), 3);
+}
+
+#[tokio::test]
+async fn dict_entry_filter_starts_all_callbacks_and_preserves_entries() {
+    let (value, ty, started_values) = eval_with_even_gates(
+        r#"
+        let
+            filtered =
+                dict_filter
+                    (\entry ->
+                        match entry with {
+                            case (key, value) -> gate_even value;
+                        })
+                    (({ a = 1, b = 2, c = 3, d = 4 }) is Dict i32)
+        in
+            match filtered with {
+                case {b, d} -> length filtered * 100 + b * 10 + d;
+            }
+        "#,
+        4,
+    )
+    .await;
+    assert_eq!(started_values, vec![1, 2, 3, 4]);
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    assert_eq!(value.as_i32().unwrap(), 224);
+}
+
+#[tokio::test]
+async fn dict_value_filter_starts_all_async_callbacks() {
+    let (value, ty, started_values) = eval_with_even_gates(
+        r#"
+        let
+            filtered = filter gate_even
+                (({ a = 1, b = 2, c = 3, d = 4 }) is Dict i32)
+        in
+            match filtered with {
+                case {b, d} -> length filtered * 100 + b * 10 + d;
+            }
+        "#,
+        4,
+    )
+    .await;
+    assert_eq!(started_values, vec![1, 2, 3, 4]);
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    assert_eq!(value.as_i32().unwrap(), 224);
 }
 
 #[tokio::test]

@@ -116,7 +116,7 @@ impl<T: FromRex + 'static> FromRex for Vec<T> {
 impl<T: IntoRex> IntoRex for BTreeMap<String, T> {
     fn into_rex(self) -> Result<Value, EngineError> {
         self.into_iter()
-            .map(|(name, value)| Ok((Symbol::intern(&name), value.into_rex()?)))
+            .map(|(name, value)| Ok((name, value.into_rex()?)))
             .collect::<Result<BTreeMap<_, _>, _>>()
             .map(Value::Dict)
     }
@@ -129,7 +129,7 @@ impl<T: FromRex> FromRex for BTreeMap<String, T> {
         };
         fields
             .into_iter()
-            .map(|(name, value)| Ok((name.to_string(), T::from_rex(value)?)))
+            .map(|(name, value)| Ok((name, T::from_rex(value)?)))
             .collect()
     }
 }
@@ -137,7 +137,7 @@ impl<T: FromRex> FromRex for BTreeMap<String, T> {
 impl<T: IntoRex> IntoRex for HashMap<String, T> {
     fn into_rex(self) -> Result<Value, EngineError> {
         self.into_iter()
-            .map(|(name, value)| Ok((Symbol::intern(&name), value.into_rex()?)))
+            .map(|(name, value)| Ok((name, value.into_rex()?)))
             .collect::<Result<BTreeMap<_, _>, _>>()
             .map(Value::Dict)
     }
@@ -150,7 +150,7 @@ impl<T: FromRex> FromRex for HashMap<String, T> {
         };
         fields
             .into_iter()
-            .map(|(name, value)| Ok((name.to_string(), T::from_rex(value)?)))
+            .map(|(name, value)| Ok((name, T::from_rex(value)?)))
             .collect()
     }
 }

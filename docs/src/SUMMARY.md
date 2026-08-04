@@ -12,6 +12,7 @@
     - [Functions](tutorial/section1/04_functions.md)
     - [Operators](tutorial/section1/05_operators.md)
     - [Collections](tutorial/section1/06_collections.md)
+    - [Dictionaries](tutorial/section1/06_dictionaries.md)
     - [Algebraic Data Types](tutorial/section1/07_adts.md)
     - [Pattern Matching](tutorial/section1/08_match.md)
     - [Records](tutorial/section1/09_records.md)

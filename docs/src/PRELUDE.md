@@ -6,7 +6,7 @@
 
 | Type | Description |
 |---|---|
-| `Dict a` | Dictionary/record-like mapping from field labels to values. |
+| `Dict a` | Immutable mapping from string keys to values of one type. |
 | `List a` | Immutable ordered sequence. Constructors: `Empty`, `Cons`. |
 | `Option a` | Optional value (`Some` or `None`). Constructors: `Some`, `None`. |
 | `Result a b` | Result value (`Ok` or `Err`) for success/failure flows. Constructors: `Err`, `Ok`. |
@@ -231,12 +231,12 @@ Methods:
 | `/` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Division. |
 | `==` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`hash`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Equality comparison. |
 | `!=` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`hash`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Inequality comparison. |
-| `filter` | `(('a -> bool) -> (('f 'a) ->`<br>`('f 'a)))` | `List`<br>`Option` | Keep elements that satisfy a predicate. |
-| `filter_map` | `(('a -> (Option 'b)) -> (('f`<br>`'a) -> ('f 'b)))` | `List`<br>`Option` | Map and drop missing results in one pass. |
+| `filter` | `(('a -> bool) -> (('f 'a) ->`<br>`('f 'a)))` | `List`<br>`Option`<br>`Dict` | Keep elements that satisfy a predicate. |
+| `filter_map` | `(('a -> (Option 'b)) -> (('f`<br>`'a) -> ('f 'b)))` | `List`<br>`Option`<br>`Dict` | Map and drop missing results in one pass. |
 | `foldl` | `(('b -> ('a -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option` | Strict left fold. |
 | `foldr` | `(('a -> ('b -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option` | Right fold. |
 | `fold` | `(('b -> ('a -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option` | Left-style fold over a container. |
-| `map` | `(('a -> 'b) -> (('f 'a) -> ('f`<br>`'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Apply a function to each value inside a functor. |
+| `map` | `(('a -> 'b) -> (('f 'a) -> ('f`<br>`'b)))` | `List`<br>`Option`<br>`(Result 'e)`<br>`Dict` | Apply a function to each value inside a functor. |
 | `get` | `(i32 -> ('t -> 'a))` | `((List 'a), 'a)` | Get an element by index. |
 | `%` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64` | Remainder/modulo operation. |
 | `length` | `('a -> i32)` | `(List 'a)`<br>`(Dict 'a)`<br>`string` | Return the number of list elements, dictionary entries, or string Unicode scalar values. |
@@ -266,6 +266,20 @@ Methods:
 | `None` | `(Option 't)` | The empty `Option` constructor. |
 | `Ok` | `('t -> (Result 't 'e))` | Construct a successful `Result`. |
 | `Some` | `('t -> (Option 't))` | Construct a present `Option` value. |
+| `dict_empty` | `(Dict 'a)` | Construct an empty dictionary. |
+| `dict_entries` | `((Dict 'a) -> (List (string,`<br>`'a)))` | Return key/value tuples in lexicographic key order. |
+| `dict_filter` | `(((string, 'a) -> bool) ->`<br>`((Dict 'a) -> (Dict 'a)))` | Keep dictionary entries whose key/value tuple satisfies a predicate. |
+| `dict_from_entries` | `((List (string, 'a)) -> (Dict`<br>`'a))` | Construct a dictionary from key/value tuples; later duplicate keys win. |
+| `dict_get` | `(string -> ((Dict 'a) ->`<br>`(Option 'a)))` | Look up a string key, returning `Some` for a present value or `None`. |
+| `dict_has` | `(string -> ((Dict 'a) ->`<br>`bool))` | Test whether a string key is present. |
+| `dict_insert` | `(string -> ('a -> ((Dict 'a)`<br>`-> (Dict 'a))))` | Return a dictionary with a string key inserted or replaced. |
+| `dict_is_empty` | `((Dict 'a) -> bool)` | Test whether a dictionary has no entries. |
+| `dict_keys` | `((Dict 'a) -> (List string))` | Return keys in lexicographic order. |
+| `dict_map` | `(((string, 'a) -> (string,`<br>`'b)) -> ((Dict 'a) -> (Dict`<br>`'b)))` | Transform key/value tuples into a dictionary; later collisions in input-key order win. |
+| `dict_remove` | `(string -> ((Dict 'a) -> (Dict`<br>`'a)))` | Return a dictionary without a string key. |
+| `dict_singleton` | `(string -> ('a -> (Dict 'a)))` | Construct a dictionary containing one key/value entry. |
+| `dict_update` | `(string -> (((Option 'a) ->`<br>`(Option 'a)) -> ((Dict 'a) ->`<br>`(Dict 'a))))` | Insert, replace, or remove a key by transforming its optional value. |
+| `dict_values` | `((Dict 'a) -> (List 'a))` | Return values in lexicographic key order. |
 | `first` | `(i32 -> ((List 'a) -> (List`<br>`'a)))` | Return the first `n` list elements; errors if `n` is out of range. |
 | `is_err` | `((Result 't 'e) -> bool)` | Check whether a `Result` is `Err`. |
 | `is_none` | `((Option 'a) -> bool)` | Check whether an `Option` is `None`. |

@@ -42,7 +42,7 @@ pub enum Value {
     Tuple(Vec<Value>),
     List(Vec<Value>),
     Bytes(Vec<u8>),
-    Dict(BTreeMap<Symbol, Value>),
+    Dict(BTreeMap<String, Value>),
     Adt(Symbol, Vec<Value>),
 }
 
@@ -162,7 +162,7 @@ impl Value {
         }
     }
 
-    pub fn as_dict(&self) -> Result<&BTreeMap<Symbol, Value>, EngineError> {
+    pub fn as_dict(&self) -> Result<&BTreeMap<String, Value>, EngineError> {
         match self {
             Self::Dict(fields) => Ok(fields),
             other => Err(EngineError::NativeType {
@@ -347,7 +347,7 @@ enum ExportWork {
     },
     Tuple(usize),
     List(usize),
-    Dict(Vec<Symbol>),
+    Dict(Vec<String>),
     Adt {
         tag: Symbol,
         fields: usize,
@@ -425,11 +425,11 @@ fn value_from_root(
                     let definitions = field_types.clone();
                     let names = definitions
                         .iter()
-                        .map(|(name, _)| name.clone())
+                        .map(|(name, _)| name.to_string())
                         .collect::<Vec<_>>();
                     work.push(ExportWork::Dict(names.clone()));
                     for (name, field_type) in definitions.into_iter().rev() {
-                        let field = fields.get(&name).copied().ok_or_else(|| {
+                        let field = fields.get(name.as_ref()).copied().ok_or_else(|| {
                             conversion_error(
                                 path.child(format!(".{name}")),
                                 &field_type,
@@ -658,7 +658,7 @@ enum ImportWork {
     },
     Tuple(usize),
     List(usize),
-    Dict(Vec<Symbol>),
+    Dict(Vec<String>),
     Adt {
         tag: Symbol,
         fields: usize,
@@ -734,18 +734,18 @@ fn value_into_root(
                         let definitions = field_types.clone();
                         let names = definitions
                             .iter()
-                            .map(|(name, _)| name.clone())
+                            .map(|(name, _)| name.to_string())
                             .collect::<Vec<_>>();
                         let mut children = Vec::with_capacity(names.len());
                         for (name, field_type) in definitions {
-                            let field = fields.remove(&name).ok_or_else(|| {
+                            let field = fields.remove(name.as_ref()).ok_or_else(|| {
                                 conversion_error(
                                     path.child(format!(".{name}")),
                                     &field_type,
                                     "missing field",
                                 )
                             })?;
-                            children.push((name, field, field_type));
+                            children.push((name.to_string(), field, field_type));
                         }
                         work.push(ImportWork::Dict(names));
                         for (name, field, field_type) in children.into_iter().rev() {
@@ -1129,8 +1129,8 @@ mod tests {
             Value::List(vec![Value::I32(1), Value::I32(2)]),
             Value::Dict(
                 [
-                    (Symbol::intern("enabled"), Value::Bool(true)),
-                    (Symbol::intern("name"), Value::String("sample".into())),
+                    ("enabled".to_owned(), Value::Bool(true)),
+                    ("name".to_owned(), Value::String("sample".into())),
                 ]
                 .into_iter()
                 .collect(),

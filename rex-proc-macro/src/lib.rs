@@ -683,7 +683,7 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                     }
                     let enc = into_value_expr(quote!(self.#ident), &field.ty)?;
                     inserts.push(quote! {
-                        map.insert(::rex::ast::Symbol::intern(#name), #enc);
+                        map.insert(#name.to_owned(), #enc);
                     });
                 }
                 quote! {{
@@ -764,7 +764,7 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             }
                             let enc = into_value_expr(quote!(#ident), &field.ty)?;
                             inserts.push(quote! {
-                                map.insert(::rex::ast::Symbol::intern(#name), #enc);
+                                map.insert(#name.to_owned(), #enc);
                             });
                         }
                         quote! {
@@ -828,10 +828,10 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                     if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
                         name = rename;
                     }
-                    let key = quote!(::rex::ast::Symbol::intern(#name));
+                    let key = quote!(#name);
                     let decode = from_value_expr(quote!(v), &field.ty, name_expr.clone())?;
                     field_decodes.push(quote! {
-                        let v = map.remove(&#key).ok_or_else(|| ::rex::engine::EngineError::NativeType { expected: format!("missing field `{}`", #name),
+                        let v = map.remove(#key).ok_or_else(|| ::rex::engine::EngineError::NativeType { expected: format!("missing field `{}`", #name),
                             got: "dict".into(),
                         })?;
                         let #ident = #decode?;
@@ -945,10 +945,10 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
                                 name = rename;
                             }
-                            let key = quote!(::rex::ast::Symbol::intern(#name));
+                            let key = quote!(#name);
                             let decode = from_value_expr(quote!(v), &field.ty, name_expr.clone())?;
                             field_decodes.push(quote! {
-                                let v = map.remove(&#key).ok_or_else(|| ::rex::engine::EngineError::NativeType { expected: format!("missing field `{}`", #name),
+                                let v = map.remove(#key).ok_or_else(|| ::rex::engine::EngineError::NativeType { expected: format!("missing field `{}`", #name),
                                     got: "dict".into(),
                                 })?;
                                 let #ident = #decode?;

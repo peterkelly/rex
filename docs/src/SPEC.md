@@ -55,6 +55,38 @@ String literals are decoded during lexing.
 
 `Option` does not implement `Length`.
 
+## Dictionaries
+
+`Dict a` is an immutable mapping from `string` keys to values of one uniform type `a`. Runtime
+dictionary and record field maps store keys as strings; compiler identifiers and statically known
+record field names remain symbols only inside the compiler.
+
+Dictionary iteration order is ascending lexicographic string order. This order is observable in
+`dict_keys`, `dict_values`, `dict_entries`, and the collision behavior of `dict_map`.
+
+The core operations have these semantics:
+
+- `dict_get` returns `Some value` for a present key and `None` for an absent key.
+- `dict_has` tests key presence.
+- `dict_insert`, `dict_remove`, and `dict_update` return new dictionaries without changing their
+  inputs. `dict_update key f` calls `f` with the current optional value; `Some value` in the result
+  inserts or replaces the key, while `None` removes it.
+- `dict_keys`, `dict_values`, and `dict_entries` return lexicographically ordered lists.
+- `dict_from_entries` processes its input list from first to last, so the last tuple for a duplicate
+  key wins.
+
+`Dict` implements `Functor` and `Filterable`. `map`, `filter`, and `filter_map` apply their callbacks
+to values only and preserve the corresponding input keys. Callback applications for different
+entries may evaluate in parallel; callback completion order does not affect the result.
+
+`dict_map` has type `((string, a) -> (string, b)) -> Dict a -> Dict b`. Its callback applications
+may evaluate in parallel. After every callback completes, results are applied in the original
+dictionary's lexicographic key order. If multiple callbacks return the same output key, the result
+from the latest input key in that order wins.
+
+`dict_filter` has type `((string, a) -> bool) -> Dict a -> Dict a`. Its callback applications may
+also evaluate in parallel. It preserves each accepted entry's original key and value.
+
 ## Primitive Host Types
 
 The zero-arity primitive types are `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`,
