@@ -11,6 +11,7 @@ type:bool	Boolean truth value.
 type:datetime	UTC timestamp value.
 type:f32	32-bit floating-point number.
 type:f64	64-bit floating-point number.
+type:hash	BLAKE3 hash value.
 type:i16	16-bit signed integer.
 type:i32	32-bit signed integer.
 type:i64	64-bit signed integer.
@@ -87,6 +88,7 @@ fn:one	Multiplicative identity.
 fn:or_else	Provide an alternative container value.
 fn:show	Render a value as a human-readable string.
 fn:slice	Return elements in the half-open range `n..m`; errors if either bound is out of range or `m < n`.
+fn:string_to_hash	Parse a hexadecimal BLAKE3 hash string; raises an error if the string is invalid.
 fn:pure	Lift a plain value into an applicative context.
 fn:skip	Drop the first `n` elements.
 fn:sum	Sum all elements in a foldable container.

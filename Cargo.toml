@@ -28,6 +28,7 @@ version = "3.9.14"
 # External dependencies
 anyhow = "1"
 async-trait = "0.1"
+blake3 = { version = "1" }
 chrono = "0.4"
 clap = { version = "4.5", features = ["derive"] }
 futures = "0.3"

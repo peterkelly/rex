@@ -1,6 +1,7 @@
 //! Type-directed conversion between JSON and owned Rex values.
 
 use crate::engine::{EngineError, MainSignature, Value as RexValue};
+use blake3::Hash;
 use rex_ast::Symbol;
 use rex_typesystem::{
     types::{AdtDecl, BuiltinTypeId, Type, TypeKind},
@@ -161,6 +162,15 @@ fn json_to_value_for_con(
         ("uuid", []) => serde_json::from_value(json.clone())
             .map(RexValue::Uuid)
             .map_err(|json_error| error(format!("invalid uuid JSON: {json_error}"))),
+        ("hash", []) => match json {
+            JsonValue::String(value) => Hash::from_hex(value)
+                .map(RexValue::Hash)
+                .map_err(|hash_error| error(format!("invalid hash JSON: {hash_error}"))),
+            _ => Err(type_mismatch_json(
+                json,
+                &Type::builtin(BuiltinTypeId::Hash),
+            )),
+        },
         ("datetime", []) => serde_json::from_value(json.clone())
             .map(RexValue::DateTime)
             .map_err(|json_error| error(format!("invalid datetime JSON: {json_error}"))),
@@ -272,6 +282,10 @@ fn value_to_json_for_con(
         ("uuid", []) => match value {
             RexValue::Uuid(value) => serde_json::to_value(value)
                 .map_err(|json_error| error(format!("failed to serialize uuid: {json_error}"))),
+            _ => Err(type_mismatch_value(value, &named_type(name, args))),
+        },
+        ("hash", []) => match value {
+            RexValue::Hash(value) => Ok(JsonValue::String(value.to_hex().to_string())),
             _ => Err(type_mismatch_value(value, &named_type(name, args))),
         },
         ("datetime", []) => match value {

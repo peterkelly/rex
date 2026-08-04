@@ -245,6 +245,21 @@ instance DecodeJson uuid where {
             case _ -> Err (expected "string" v);
         };
 	}
+instance EncodeJson hash where {
+    encode_json = \h -> String (show h);
+}
+instance DecodeJson hash where {
+	    decode_json = \v ->
+	        match v with {
+            case String s -> (
+                match (prim_parse_hash s) with {
+                    case Some h -> Ok h;
+                    case None -> fail "expected hash string";
+                }
+              );
+            case _ -> Err (expected "string" v);
+        };
+	}
 instance EncodeJson datetime where {
     encode_json = \d -> String (show d);
 }

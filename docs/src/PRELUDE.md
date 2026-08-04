@@ -14,6 +14,7 @@
 | `datetime` | UTC timestamp value. |
 | `f32` | 32-bit floating-point number. |
 | `f64` | 64-bit floating-point number. |
+| `hash` | BLAKE3 hash value. |
 | `i16` | 16-bit signed integer. |
 | `i32` | 32-bit signed integer. |
 | `i64` | 64-bit signed integer. |
@@ -228,8 +229,8 @@ Methods:
 | `ap` | `(('f ('a -> 'b)) -> (('f 'a)`<br>`-> ('f 'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Apply wrapped functions to wrapped values. |
 | `default` | `'a` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Canonical default value for a type. For `Result a e`, this requires `Default a`. |
 | `/` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Division. |
-| `==` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Equality comparison. |
-| `!=` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Inequality comparison. |
+| `==` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`hash`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Equality comparison. |
+| `!=` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`hash`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Inequality comparison. |
 | `filter` | `(('a -> bool) -> (('f 'a) ->`<br>`('f 'a)))` | `List`<br>`Option` | Keep elements that satisfy a predicate. |
 | `filter_map` | `(('a -> (Option 'b)) -> (('f`<br>`'a) -> ('f 'b)))` | `List`<br>`Option` | Map and drop missing results in one pass. |
 | `foldl` | `(('b -> ('a -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option` | Strict left fold. |
@@ -251,7 +252,7 @@ Methods:
 | `skip` | `(i32 -> (('f 'a) -> ('f 'a)))` | `List` | Drop the first `n` elements. |
 | `zip` | `(('f 'a) -> (('f 'b) -> ('f`<br>`('a, 'b))))` | `List` | Pair elements from two containers by position. |
 | `unzip` | `(('f ('a, 'b)) -> (('f 'a),`<br>`('f 'b)))` | `List` | Split a container of pairs into a pair of containers. |
-| `show` | `('a -> string)` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`uuid`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Render a value as a human-readable string. |
+| `show` | `('a -> string)` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`uuid`<br>`hash`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Render a value as a human-readable string. |
 | `-` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Subtraction. |
 
 ### Other Built-ins
@@ -275,6 +276,7 @@ Methods:
 | `mean` | `Foldable 'f, Field 'a => (('f`<br>`'a) -> 'a)` | Arithmetic mean over numeric foldables. |
 | `min` | `Foldable 'f, Ord 'a => (('f`<br>`'a) -> 'a)` | Minimum element by ordering. |
 | `slice` | `(i32 -> (i32 -> ((List 'a) ->`<br>`(List 'a))))` | Return elements in the half-open range `n..m`; errors if either bound is out of range or `m < n`. |
+| `string_to_hash` | `(string -> hash)` | Parse a hexadecimal BLAKE3 hash string; raises an error if the string is invalid. |
 | `sum` | `Foldable 'f, AdditiveMonoid 'a`<br>`=> (('f 'a) -> 'a)` | Sum all elements in a foldable container. |
 | `unwrap` | `((Option 'a) -> 'a)`<br><br>`((Result 't 'e) -> 't)` | Extract the inner value from `Some`/`Ok`, or raise an error for `None`/`Err`. |
 | `||` | `(bool -> (bool -> bool))` | Boolean disjunction. |

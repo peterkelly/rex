@@ -9,6 +9,7 @@ use std::{
     },
 };
 
+use blake3::Hash;
 use rex::{
     Rex,
     ast::Symbol,
@@ -277,6 +278,42 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
         },
         other => panic!("expected type error, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn hash_values_cross_native_runtime_boundaries() {
+    let expected = blake3::hash(b"rex native hash");
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
+        module.export_value("expected_hash", expected)?;
+        module.export("identity_hash", |_: &(), value: Hash| {
+            Ok::<Hash, EngineError>(value)
+        })
+    })
+    .unwrap();
+
+    let (_, value, ty) = common::eval_source(
+        builder,
+        "(identity_hash expected_hash, expected_hash == identity_hash expected_hash, show expected_hash)",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::Hash),
+            Type::builtin(BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::String),
+        ])
+    );
+
+    let items = common::tuple_items(&value);
+    assert_eq!(items[0].to_rust::<Hash>().unwrap(), expected);
+    assert!(items[1].to_rust::<bool>().unwrap());
+    assert_eq!(
+        items[2].to_rust::<String>().unwrap(),
+        expected.to_hex().to_string()
+    );
 }
 
 #[derive(Clone, Debug, PartialEq, Rex)]

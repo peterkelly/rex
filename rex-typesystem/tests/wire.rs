@@ -52,6 +52,7 @@ fn zero_arity_builtin_types_serialize_as_builtin_types() {
         WireType::from_type(&Type::builtin(BuiltinTypeId::Bool)),
         WireType::from_type(&Type::builtin(BuiltinTypeId::String)),
         WireType::from_type(&Type::builtin(BuiltinTypeId::Uuid)),
+        WireType::from_type(&Type::builtin(BuiltinTypeId::Hash)),
         WireType::from_type(&Type::builtin(BuiltinTypeId::DateTime)),
     ];
 
@@ -71,6 +72,7 @@ fn zero_arity_builtin_types_serialize_as_builtin_types() {
             { "kind": "builtin", "name": "bool" },
             { "kind": "builtin", "name": "string" },
             { "kind": "builtin", "name": "uuid" },
+            { "kind": "builtin", "name": "hash" },
             { "kind": "builtin", "name": "datetime" }
         ]),
     );

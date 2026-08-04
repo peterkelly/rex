@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use blake3::Hash;
 use chrono::{DateTime, Utc};
 use rex_ast::Symbol;
 use rex_typesystem::types::{RexType, Scheme, Type};
@@ -62,6 +63,7 @@ impl_internal_scalar!(f32, root_as_f32, alloc_root_f32);
 impl_internal_scalar!(f64, root_as_f64, alloc_root_f64);
 impl_internal_scalar!(String, root_as_string, alloc_root_string);
 impl_internal_scalar!(Uuid, root_as_uuid, alloc_root_uuid);
+impl_internal_scalar!(Hash, root_as_hash, alloc_root_hash);
 impl_internal_scalar!(DateTime<Utc>, root_as_datetime, alloc_root_datetime);
 
 fn function_type(arguments: impl IntoIterator<Item = Type>, result: Type) -> Type {

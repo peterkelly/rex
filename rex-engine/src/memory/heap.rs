@@ -5,6 +5,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use blake3::Hash;
 use chrono::{DateTime, Utc};
 use rex_ast::Symbol;
 use rex_typesystem::types::{BuiltinTypeId, Type, TypedExpr};
@@ -806,6 +807,10 @@ impl RootScope<'_> {
         self.alloc_reference(Cell::Uuid(value))
     }
 
+    pub(crate) fn alloc_root_hash(&mut self, value: Hash) -> Result<RootedPtr, EngineError> {
+        self.alloc_reference(Cell::Hash(value))
+    }
+
     pub(crate) fn alloc_root_datetime(
         &mut self,
         value: DateTime<Utc>,
@@ -1098,6 +1103,10 @@ impl RootScope<'_> {
         self.get_cell_from_rooted_ptr(root)?.cell_as_uuid()
     }
 
+    pub(crate) fn root_as_hash(&self, root: RootedPtr) -> Result<Hash, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_hash()
+    }
+
     pub(crate) fn root_as_datetime(&self, root: RootedPtr) -> Result<DateTime<Utc>, EngineError> {
         self.get_cell_from_rooted_ptr(root)?.cell_as_datetime()
     }
@@ -1266,6 +1275,7 @@ pub(super) enum Cell {
     F64(f64),
     String(String),
     Uuid(Uuid),
+    Hash(Hash),
     DateTime(DateTime<Utc>),
     Tuple(Vec<InternalPtr>),
     Empty,
@@ -1301,6 +1311,7 @@ impl Cell {
             Cell::F64(..) => "f64",
             Cell::String(..) => "string",
             Cell::Uuid(..) => "uuid",
+            Cell::Hash(..) => "hash",
             Cell::DateTime(..) => "datetime",
             Cell::Tuple(..) => "tuple",
             Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. } => "list",
@@ -1416,6 +1427,13 @@ impl Cell {
         }
     }
 
+    pub(super) fn cell_as_hash(&self) -> Result<Hash, EngineError> {
+        match self {
+            Cell::Hash(v) => Ok(*v),
+            _ => Err(self.cell_type_error("hash")),
+        }
+    }
+
     pub(super) fn cell_as_datetime(&self) -> Result<DateTime<Utc>, EngineError> {
         match self {
             Cell::DateTime(v) => Ok(*v),
@@ -1471,6 +1489,7 @@ fn infer_cell_type(heap: &Heap, cell: &Cell) -> Result<Type, EngineError> {
         Cell::F64(..) => Ok(Type::builtin(BuiltinTypeId::F64)),
         Cell::String(..) => Ok(Type::builtin(BuiltinTypeId::String)),
         Cell::Uuid(..) => Ok(Type::builtin(BuiltinTypeId::Uuid)),
+        Cell::Hash(..) => Ok(Type::builtin(BuiltinTypeId::Hash)),
         Cell::DateTime(..) => Ok(Type::builtin(BuiltinTypeId::DateTime)),
         Cell::Tuple(elems) => {
             let mut tys = Vec::with_capacity(elems.len());
@@ -1628,6 +1647,7 @@ impl Collection for Cell {
             | Cell::F64(_)
             | Cell::String(_)
             | Cell::Uuid(_)
+            | Cell::Hash(_)
             | Cell::DateTime(_)
             | Cell::BinaryData(_)
             | Cell::Empty

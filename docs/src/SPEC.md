@@ -55,6 +55,15 @@ String literals are decoded during lexing.
 
 `Option` does not implement `Length`.
 
+## Primitive Host Types
+
+The zero-arity primitive types are `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`,
+`f32`, `f64`, `bool`, `string`, `uuid`, `hash`, and `datetime`. The `hash` type corresponds to a
+`blake3::Hash` in Rust. At JSON boundaries, hash values are exactly 32 bytes encoded as hexadecimal
+strings; Rex emits the canonical lowercase 64-character representation. `show` uses the same
+representation. `string_to_hash : string -> hash` accepts a valid hexadecimal BLAKE3 hash and
+raises an evaluation error for invalid input.
+
 ## Program Entry Points
 
 A Rex source is a compilation unit with zero or more declarations and an optional

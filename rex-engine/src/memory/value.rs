@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, fmt, sync::Arc};
 
+use blake3::Hash;
 use chrono::{DateTime, Utc};
 use rex_ast::Symbol;
 use rex_typesystem::{
@@ -36,6 +37,7 @@ pub enum Value {
     F64(f64),
     String(String),
     Uuid(Uuid),
+    Hash(Hash),
     DateTime(DateTime<Utc>),
     Tuple(Vec<Value>),
     List(Vec<Value>),
@@ -60,6 +62,7 @@ impl Value {
             Self::F64(_) => "f64",
             Self::String(_) => "string",
             Self::Uuid(_) => "uuid",
+            Self::Hash(_) => "hash",
             Self::DateTime(_) => "datetime",
             Self::Tuple(_) => "tuple",
             Self::List(_) => "list",
@@ -193,6 +196,7 @@ impl Value {
             Self::F64(value) => number!(value, "f64"),
             Self::String(value) => format!("{value:?}"),
             Self::Uuid(value) => value.to_string(),
+            Self::Hash(value) => value.to_hex().to_string(),
             Self::DateTime(value) => value.to_string(),
             Self::Tuple(items) => format!(
                 "({})",
@@ -531,6 +535,12 @@ fn value_from_root(
                                 .map(Value::Uuid)
                                 .map_err(|_| mismatch(scope))?,
                         ),
+                        ("hash", []) => Some(
+                            scope
+                                .root_as_hash(root)
+                                .map(Value::Hash)
+                                .map_err(|_| mismatch(scope))?,
+                        ),
                         ("datetime", []) => Some(
                             scope
                                 .root_as_datetime(root)
@@ -768,6 +778,7 @@ fn value_into_root(
                                 Some(scope.alloc_root_string(value)?)
                             }
                             ("uuid", [], Value::Uuid(value)) => Some(scope.alloc_root_uuid(value)?),
+                            ("hash", [], Value::Hash(value)) => Some(scope.alloc_root_hash(value)?),
                             ("datetime", [], Value::DateTime(value)) => {
                                 Some(scope.alloc_root_datetime(value)?)
                             }

@@ -319,6 +319,7 @@ Common built-in types include:
 - `f32` (float literal type)
 - `string`
 - `uuid`
+- `hash`
 - `datetime`
 
 ### Function Types

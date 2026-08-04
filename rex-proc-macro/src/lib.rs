@@ -653,6 +653,7 @@ fn is_builtin_rust_type(ty: &syn::TypePath) -> bool {
             | "String"
             | "str"
             | "Uuid"
+            | "Hash"
             | "DateTime"
     )
 }

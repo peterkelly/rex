@@ -46,6 +46,11 @@ struct Boxed<T> {
     value: T,
 }
 
+#[derive(Rex, Clone, Debug, PartialEq)]
+struct HashedValue {
+    hash: blake3::Hash,
+}
+
 #[derive(Rex, Debug, PartialEq)]
 enum Maybe<T> {
     Just(T),
@@ -56,6 +61,18 @@ enum Maybe<T> {
 fn derive_from_rex_rejects_qualified_foreign_constructor() {
     let value = Value::Adt(Symbol::intern("another.module.Just"), vec![Value::I32(1)]);
     assert!(Maybe::<i32>::from_rex(value).is_err());
+}
+
+#[test]
+fn derive_treats_hash_as_a_primitive_field() {
+    let expected = HashedValue {
+        hash: blake3::hash(b"derived hash"),
+    };
+    let family = HashedValue::rex_adt_family().unwrap();
+    assert_eq!(family.len(), 1);
+
+    let value = expected.clone().into_rex().unwrap();
+    assert_eq!(HashedValue::from_rex(value).unwrap(), expected);
 }
 
 #[derive(Rex, Debug, PartialEq)]

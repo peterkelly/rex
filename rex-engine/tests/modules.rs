@@ -2219,6 +2219,28 @@ async fn std_json_encode_decode_smoke() {
 }
 
 #[tokio::test]
+async fn std_json_hash_roundtrip_uses_hex_strings() {
+    let builder = builder_with_prelude();
+    let expected = blake3::hash(b"rex std json hash");
+    let hex = expected.to_hex().to_string();
+    let source = format!(
+        r#"
+        import std.json as Json;
+
+        let original = string_to_hash "{hex}" in
+        match (Json.from_json (Json.to_json original)) with {{
+          case Ok decoded -> if decoded == original then show decoded else "mismatch";
+          case Err error -> error.message;
+        }}
+"#
+    );
+
+    let (value, ty) = run_snippet(builder, &source).await.unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
+    assert_eq!(value.to_rust::<String>().unwrap(), hex);
+}
+
+#[tokio::test]
 async fn std_json_roundtrip_nested() {
     let builder = builder_with_prelude();
 

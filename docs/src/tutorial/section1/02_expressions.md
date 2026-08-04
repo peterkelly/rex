@@ -15,7 +15,7 @@ This page introduces the “everyday” expression forms you’ll use constantly
 )
 ```
 
-Common primitive types are `bool`, `i32`, `f32`, `string` (plus `uuid`, `datetime` if enabled by
+Common primitive types are `bool`, `i32`, `f32`, `string` (plus `uuid`, `hash`, `datetime` if enabled by
 the host).
 
 ### Integers vs floats

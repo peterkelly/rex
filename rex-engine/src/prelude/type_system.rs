@@ -51,6 +51,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             BuiltinTypeId::F64,
             BuiltinTypeId::String,
             BuiltinTypeId::Uuid,
+            BuiltinTypeId::Hash,
             BuiltinTypeId::DateTime,
         ];
         for builtin in eq_types {
@@ -293,6 +294,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             BuiltinTypeId::F64,
             BuiltinTypeId::String,
             BuiltinTypeId::Uuid,
+            BuiltinTypeId::Hash,
             BuiltinTypeId::DateTime,
         ];
         for builtin in show_types {
@@ -764,6 +766,17 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             ),
         );
         ts.add_value(
+            "prim_parse_hash",
+            Scheme::new(
+                vec![],
+                vec![],
+                Type::fun(
+                    Type::builtin(BuiltinTypeId::String),
+                    option_of(Type::builtin(BuiltinTypeId::Hash)),
+                ),
+            ),
+        );
+        ts.add_value(
             "prim_parse_datetime",
             Scheme::new(
                 vec![],
@@ -796,6 +809,7 @@ pub(super) fn inject_standard_prelude(
         BuiltinTypeId::Bool,
         BuiltinTypeId::String,
         BuiltinTypeId::Uuid,
+        BuiltinTypeId::Hash,
         BuiltinTypeId::DateTime,
     ];
     for prim in prims {
@@ -860,6 +874,15 @@ pub(super) fn inject_standard_prelude(
     ts.add_value(
         "||",
         scheme!(Type::fun(&bool_ty, Type::fun(&bool_ty, &bool_ty))),
+    );
+
+    // Primitive conversions
+    ts.add_value(
+        "string_to_hash",
+        scheme!(Type::fun(
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::Hash),
+        )),
     );
 
     // Collection helpers (type class based)

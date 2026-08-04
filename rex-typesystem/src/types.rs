@@ -3,6 +3,7 @@ use crate::{
     typesystem::TypeVarSupply,
     unification::{Subst, subst_is_empty},
 };
+use blake3::Hash;
 use chrono::{DateTime, Utc};
 use rex_ast::{Pattern, Symbol};
 use rpds::HashTrieMapSync;
@@ -32,6 +33,7 @@ pub enum BuiltinTypeId {
     Bool,
     String,
     Uuid,
+    Hash,
     DateTime,
     List,
     Dict,
@@ -60,6 +62,7 @@ impl BuiltinTypeId {
             Self::Bool => "bool",
             Self::String => "string",
             Self::Uuid => "uuid",
+            Self::Hash => "hash",
             Self::DateTime => "datetime",
             Self::List => "List",
             Self::Dict => "Dict",
@@ -96,6 +99,7 @@ impl BuiltinTypeId {
             "bool" => Some(Self::Bool),
             "string" => Some(Self::String),
             "uuid" => Some(Self::Uuid),
+            "hash" => Some(Self::Hash),
             "datetime" => Some(Self::DateTime),
             "List" => Some(Self::List),
             "Dict" => Some(Self::Dict),
@@ -1213,6 +1217,12 @@ impl RexType for &str {
 impl RexType for Uuid {
     fn rex_type() -> Type {
         Type::builtin(BuiltinTypeId::Uuid)
+    }
+}
+
+impl RexType for Hash {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::Hash)
     }
 }
 

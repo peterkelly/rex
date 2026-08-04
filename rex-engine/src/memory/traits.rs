@@ -5,6 +5,7 @@ use std::{
     collections::{BTreeMap, HashMap},
 };
 
+use blake3::Hash;
 use chrono::{DateTime, Utc};
 use rex_ast::Symbol;
 use uuid::Uuid;
@@ -66,6 +67,7 @@ impl_rex_scalar!(f32, F32);
 impl_rex_scalar!(f64, F64);
 impl_rex_scalar!(String, String);
 impl_rex_scalar!(Uuid, Uuid);
+impl_rex_scalar!(Hash, Hash);
 impl_rex_scalar!(DateTime<Utc>, DateTime);
 
 impl IntoRex for &str {

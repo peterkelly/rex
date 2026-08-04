@@ -96,6 +96,32 @@ async fn compile_program_returns_evaluator() {
 }
 
 #[tokio::test]
+async fn eval_hash_show_and_string_conversion() {
+    let expected = blake3::hash(b"rex hash conversion");
+    let hex = expected.to_hex().to_string();
+    let source = format!(r#"let value = string_to_hash "{hex}" in (value, show value)"#);
+    let expr = parse(&source);
+    let value = eval_expr(Builder::with_prelude(()).unwrap(), expr.as_ref())
+        .await
+        .unwrap();
+
+    let Value::Tuple(values) = value else {
+        panic!("expected tuple");
+    };
+    assert_eq!(values[0].to_rust::<blake3::Hash>().unwrap(), expected);
+    assert_eq!(values[1].to_rust::<String>().unwrap(), hex);
+
+    let invalid = parse(r#"string_to_hash "not-a-hash""#);
+    match eval_expr(Builder::with_prelude(()).unwrap(), invalid.as_ref()).await {
+        Err(EngineError::Custom(message)) => {
+            assert!(message.starts_with("invalid hash string:"), "{message}");
+        }
+        Err(other) => panic!("expected custom error, got {other:?}"),
+        Ok(_) => panic!("expected invalid hash to fail"),
+    }
+}
+
+#[tokio::test]
 async fn compiler_is_consumed_by_compile_program() {
     let builder = Builder::with_prelude(()).unwrap();
     let compiler = builder.build_compiler();

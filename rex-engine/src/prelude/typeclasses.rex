@@ -465,6 +465,11 @@ instance Eq uuid where {
     != = prim_ne;
 }
 
+instance Eq hash where {
+    == = prim_eq;
+    != = prim_ne;
+}
+
 instance Eq datetime where {
     == = prim_eq;
     != = prim_ne;
@@ -648,6 +653,10 @@ instance Show string where {
 }
 
 instance Show uuid where {
+    show = prim_show;
+}
+
+instance Show hash where {
     show = prim_show;
 }
 

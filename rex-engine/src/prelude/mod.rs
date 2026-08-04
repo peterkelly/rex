@@ -59,6 +59,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+use blake3::Hash;
 use chrono::{DateTime, Utc};
 use rex_ast::{CompilationUnit, Decl, Symbol};
 use rex_parser::parse;
@@ -133,6 +134,7 @@ where
     inject_order_ops(engine)?;
     inject_show_ops(engine)?;
     inject_boolean_ops(engine)?;
+    inject_hash_ops(engine)?;
     inject_numeric_ops(engine)?;
     inject_list_builtins(engine)?;
     inject_option_result_builtins(engine)?;
@@ -681,6 +683,8 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
     engine.export("prim_ne", |_: &State, a: String, b: String| Ok(a != b))?;
     engine.export("prim_eq", |_: &State, a: Uuid, b: Uuid| Ok(a == b))?;
     engine.export("prim_ne", |_: &State, a: Uuid, b: Uuid| Ok(a != b))?;
+    engine.export("prim_eq", |_: &State, a: Hash, b: Hash| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: Hash, b: Hash| Ok(a != b))?;
     engine.export(
         "prim_eq",
         |_: &State, a: DateTime<Utc>, b: DateTime<Utc>| Ok(a == b),
@@ -953,6 +957,7 @@ fn inject_show_ops<State: Clone + Send + Sync + 'static>(
     engine.export("prim_show", |_: &State, x: f64| Ok(x.to_string()))?;
     engine.export("prim_show", |_: &State, x: String| Ok(x))?;
     engine.export("prim_show", |_: &State, x: Uuid| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: Hash| Ok(x.to_hex().to_string()))?;
     engine.export("prim_show", |_: &State, x: DateTime<Utc>| Ok(x.to_string()))?;
     Ok(())
 }
@@ -962,6 +967,16 @@ fn inject_boolean_ops<State: Clone + Send + Sync + 'static>(
 ) -> Result<(), EngineError> {
     engine.export("(&&)", |_: &State, a: bool, b: bool| Ok(a && b))?;
     engine.export("(||)", |_: &State, a: bool, b: bool| Ok(a || b))?;
+    Ok(())
+}
+
+fn inject_hash_ops<State: Clone + Send + Sync + 'static>(
+    engine: &mut Builder<State>,
+) -> Result<(), EngineError> {
+    engine.export("string_to_hash", |_: &State, value: String| {
+        Hash::from_hex(&value)
+            .map_err(|error| EngineError::Custom(format!("invalid hash string: {error}")))
+    })?;
     Ok(())
 }
 
@@ -1390,6 +1405,20 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             let parsed = Uuid::parse_str(&s)
                 .ok()
                 .map(|uuid| scope.alloc_root_uuid(uuid))
+                .transpose()?;
+            option_from_root(scope, parsed)
+        })?;
+    }
+
+    {
+        let string_ty = Type::builtin(BuiltinTypeId::String);
+        let hash_ty = Type::builtin(BuiltinTypeId::Hash);
+        let scheme = scheme!(Type::fun(&string_ty, Type::option(hash_ty)));
+        engine.export_native("prim_parse_hash", scheme, 1, |scope, _, args| {
+            let s = scope.root_as_string(args[0])?;
+            let parsed = Hash::from_hex(&s)
+                .ok()
+                .map(|hash| scope.alloc_root_hash(hash))
                 .transpose()?;
             option_from_root(scope, parsed)
         })?;

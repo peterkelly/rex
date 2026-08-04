@@ -3,10 +3,10 @@ mod common;
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{Builder, CompileOptions, Value, standard_type_system},
+    engine::{Builder, CompileOptions, IntoRex, Value, standard_type_system},
     json::{json_to_rex, rex_to_json},
     parser::parse as parse_rex,
-    typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply},
+    typesystem::{AdtDecl, BuiltinTypeId, RexType, Type, TypeSystem, TypeVarSupply},
 };
 use serde::Serialize;
 use serde_json::json;
@@ -27,6 +27,10 @@ fn mk_unit_enum(name: &str, variants: &[&str]) -> AdtDecl {
 
 fn fixed_uuid() -> Uuid {
     Uuid::parse_str("12345678-1234-5678-90ab-cdef12345678").unwrap()
+}
+
+fn fixed_hash() -> blake3::Hash {
+    blake3::hash(b"rex")
 }
 
 #[derive(Rex, Serialize)]
@@ -52,6 +56,10 @@ fn primitive_roundtrip() {
         (Type::builtin(BuiltinTypeId::Bool), json!(true)),
         (Type::builtin(BuiltinTypeId::I32), json!(-7)),
         (Type::builtin(BuiltinTypeId::String), json!("hello")),
+        (
+            Type::builtin(BuiltinTypeId::Hash),
+            json!(fixed_hash().to_hex().to_string()),
+        ),
     ];
 
     for (ty, expected_json) in cases {
@@ -59,6 +67,27 @@ fn primitive_roundtrip() {
         let actual_json = rex_to_json(&handle, &ty, &ts).unwrap();
         assert_eq!(actual_json, expected_json);
     }
+}
+
+#[test]
+fn hash_uses_builtin_type_and_owned_value_conversions() {
+    let hash = fixed_hash();
+    assert_eq!(
+        <blake3::Hash as RexType>::rex_type(),
+        Type::builtin(BuiltinTypeId::Hash)
+    );
+
+    let value = hash.into_rex().unwrap();
+    assert_eq!(value, Value::Hash(hash));
+    assert_eq!(value.to_rust::<blake3::Hash>().unwrap(), hash);
+}
+
+#[test]
+fn hash_json_rejects_non_hex_strings() {
+    let ts = mk_type_system();
+    let hash_ty = Type::builtin(BuiltinTypeId::Hash);
+    assert!(json_to_rex(&json!("not-a-hash"), &hash_ty, &ts).is_err());
+    assert!(json_to_rex(&json!(42), &hash_ty, &ts).is_err());
 }
 
 #[test]

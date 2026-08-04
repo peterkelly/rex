@@ -8,6 +8,7 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
+blake3 = { workspace = true }
 thiserror = { workspace = true }
 rex-ast = { path = "../rex-ast", version = "3.9.14" }
 chrono = { workspace = true }
