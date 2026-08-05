@@ -83,10 +83,11 @@ pub(crate) fn keyword_doc(word: &str) -> Option<&'static str> {
 
 pub(crate) fn type_doc(word: &str) -> Option<&'static str> {
     match word {
-        "bool" => Some("Boolean type."),
-        "string" => Some("UTF-8 string type."),
-        "uuid" => Some("UUID type."),
-        "datetime" => Some("Datetime type."),
+        "Bool" => Some("Boolean type."),
+        "String" => Some("UTF-8 string type."),
+        "UUID" => Some("UUID type."),
+        "Hash" => Some("BLAKE3 hash type."),
+        "DateTime" => Some("Datetime type."),
         "u8" => Some("Unsigned 8-bit integer."),
         "u16" => Some("Unsigned 16-bit integer."),
         "u32" => Some("Unsigned 32-bit integer."),

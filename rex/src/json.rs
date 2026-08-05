@@ -135,7 +135,7 @@ fn json_to_value_for_con(
     ts: &TypeSystem,
 ) -> Result<RexValue, EngineError> {
     match (name.as_ref(), args) {
-        ("bool", []) => match json {
+        ("Bool", []) => match json {
             JsonValue::Bool(value) => Ok(RexValue::Bool(*value)),
             _ => Err(type_mismatch_json(
                 json,
@@ -152,17 +152,17 @@ fn json_to_value_for_con(
         ("i64", []) => Ok(RexValue::I64(json_i64(json)?)),
         ("f32", []) => Ok(RexValue::F32(json_f64(json)? as f32)),
         ("f64", []) => Ok(RexValue::F64(json_f64(json)?)),
-        ("string", []) => match json {
+        ("String", []) => match json {
             JsonValue::String(value) => Ok(RexValue::String(value.clone())),
             _ => Err(type_mismatch_json(
                 json,
                 &Type::builtin(BuiltinTypeId::String),
             )),
         },
-        ("uuid", []) => serde_json::from_value(json.clone())
+        ("UUID", []) => serde_json::from_value(json.clone())
             .map(RexValue::Uuid)
             .map_err(|json_error| error(format!("invalid uuid JSON: {json_error}"))),
-        ("hash", []) => match json {
+        ("Hash", []) => match json {
             JsonValue::String(value) => Hash::from_hex(value)
                 .map(RexValue::Hash)
                 .map_err(|hash_error| error(format!("invalid hash JSON: {hash_error}"))),
@@ -171,7 +171,7 @@ fn json_to_value_for_con(
                 &Type::builtin(BuiltinTypeId::Hash),
             )),
         },
-        ("datetime", []) => serde_json::from_value(json.clone())
+        ("DateTime", []) => serde_json::from_value(json.clone())
             .map(RexValue::DateTime)
             .map_err(|json_error| error(format!("invalid datetime JSON: {json_error}"))),
         ("Option", [inner]) => match json {
@@ -258,7 +258,7 @@ fn value_to_json_for_con(
         };
     }
     match (name.as_ref(), args) {
-        ("bool", []) => scalar!(Bool, JsonValue::Bool),
+        ("Bool", []) => scalar!(Bool, JsonValue::Bool),
         ("u8", []) => scalar!(U8, |v| JsonValue::Number(u64::from(v).into())),
         ("u16", []) => scalar!(U16, |v| JsonValue::Number(u64::from(v).into())),
         ("u32", []) => scalar!(U32, |v| JsonValue::Number(u64::from(v).into())),
@@ -273,20 +273,20 @@ fn value_to_json_for_con(
         ("f64", []) => scalar!(F64, |v| Number::from_f64(v)
             .map(JsonValue::Number)
             .unwrap_or(JsonValue::Null)),
-        ("string", []) => match value {
+        ("String", []) => match value {
             RexValue::String(value) => Ok(JsonValue::String(value.clone())),
             _ => Err(type_mismatch_value(value, &named_type(name, args))),
         },
-        ("uuid", []) => match value {
+        ("UUID", []) => match value {
             RexValue::Uuid(value) => serde_json::to_value(value)
                 .map_err(|json_error| error(format!("failed to serialize uuid: {json_error}"))),
             _ => Err(type_mismatch_value(value, &named_type(name, args))),
         },
-        ("hash", []) => match value {
+        ("Hash", []) => match value {
             RexValue::Hash(value) => Ok(JsonValue::String(value.to_hex().to_string())),
             _ => Err(type_mismatch_value(value, &named_type(name, args))),
         },
-        ("datetime", []) => match value {
+        ("DateTime", []) => match value {
             RexValue::DateTime(value) => serde_json::to_value(value)
                 .map_err(|json_error| error(format!("failed to serialize datetime: {json_error}"))),
             _ => Err(type_mismatch_value(value, &named_type(name, args))),

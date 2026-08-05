@@ -69,11 +69,11 @@ fn zero_arity_builtin_types_serialize_as_builtin_types() {
             { "kind": "builtin", "name": "i64" },
             { "kind": "builtin", "name": "f32" },
             { "kind": "builtin", "name": "f64" },
-            { "kind": "builtin", "name": "bool" },
-            { "kind": "builtin", "name": "string" },
-            { "kind": "builtin", "name": "uuid" },
-            { "kind": "builtin", "name": "hash" },
-            { "kind": "builtin", "name": "datetime" }
+            { "kind": "builtin", "name": "Bool" },
+            { "kind": "builtin", "name": "String" },
+            { "kind": "builtin", "name": "UUID" },
+            { "kind": "builtin", "name": "Hash" },
+            { "kind": "builtin", "name": "DateTime" }
         ]),
     );
 
@@ -136,7 +136,7 @@ fn result_wire_type_uses_user_facing_argument_order() {
     );
 
     let wire = WireType::from_type(&typ);
-    assert_eq!(named_arg_names(&wire), vec!["i32", "string"]);
+    assert_eq!(named_arg_names(&wire), vec!["i32", "String"]);
 
     let json = assert_serialized(
         &wire,
@@ -145,7 +145,7 @@ fn result_wire_type_uses_user_facing_argument_order() {
             "name": "Result",
             "args": [
                 { "kind": "builtin", "name": "i32" },
-                { "kind": "builtin", "name": "string" }
+                { "kind": "builtin", "name": "String" }
             ]
         }),
     );
@@ -165,14 +165,14 @@ fn partial_result_wire_type_preserves_fixed_error_type() {
     );
 
     let wire = WireType::from_type(&typ);
-    assert_eq!(named_arg_names(&wire), vec!["string"]);
+    assert_eq!(named_arg_names(&wire), vec!["String"]);
     assert_serialized(
         &wire,
         json!({
             "kind": "builtin",
             "name": "Result",
             "args": [
-                { "kind": "builtin", "name": "string" }
+                { "kind": "builtin", "name": "String" }
             ]
         }),
     );
@@ -194,7 +194,7 @@ fn user_defined_type_constructor_serializes_as_named_type() {
             "name": "Workflow",
             "arity": 1,
             "args": [
-                { "kind": "builtin", "name": "string" }
+                { "kind": "builtin", "name": "String" }
             ]
         }),
     );
@@ -216,12 +216,12 @@ fn tuple_type_serializes_items_in_order() {
             "kind": "tuple",
             "items": [
                 { "kind": "builtin", "name": "i32" },
-                { "kind": "builtin", "name": "string" },
+                { "kind": "builtin", "name": "String" },
                 {
                     "kind": "builtin",
                     "name": "Option",
                     "args": [
-                        { "kind": "builtin", "name": "bool" }
+                        { "kind": "builtin", "name": "Bool" }
                     ]
                 }
             ]
@@ -256,9 +256,9 @@ fn function_type_serializes_flat_parameter_list() {
             "kind": "fun",
             "params": [
                 { "kind": "builtin", "name": "i32" },
-                { "kind": "builtin", "name": "string" }
+                { "kind": "builtin", "name": "String" }
             ],
-            "ret": { "kind": "builtin", "name": "bool" }
+            "ret": { "kind": "builtin", "name": "Bool" }
         }),
     );
     assert_eq!(wire.to_type().expect("decode function"), typ);
@@ -280,9 +280,9 @@ fn function_type_with_function_argument_preserves_nested_function() {
             "params": [{
                 "kind": "fun",
                 "params": [{ "kind": "builtin", "name": "i32" }],
-                "ret": { "kind": "builtin", "name": "string" }
+                "ret": { "kind": "builtin", "name": "String" }
             }],
-            "ret": { "kind": "builtin", "name": "bool" }
+            "ret": { "kind": "builtin", "name": "Bool" }
         }),
     );
     assert_eq!(wire.to_type().expect("decode higher-order function"), typ);
@@ -307,7 +307,7 @@ fn record_type_from_internal_representation_serializes_sorted_fields() {
                 },
                 {
                     "name": "z",
-                    "type": { "kind": "builtin", "name": "bool" }
+                    "type": { "kind": "builtin", "name": "Bool" }
                 }
             ]
         }),
@@ -322,7 +322,7 @@ fn records_deserialized_from_unsorted_json_decode_to_sorted_internal_fields() {
             WireField {
                 name: "z".to_string(),
                 typ: WireType::Builtin {
-                    name: "bool".to_string(),
+                    name: "Bool".to_string(),
                     args: vec![],
                 },
             },
@@ -343,7 +343,7 @@ fn records_deserialized_from_unsorted_json_decode_to_sorted_internal_fields() {
             "fields": [
                 {
                     "name": "z",
-                    "type": { "kind": "builtin", "name": "bool" }
+                    "type": { "kind": "builtin", "name": "Bool" }
                 },
                 {
                     "name": "a",
@@ -425,7 +425,7 @@ fn over_applied_constructor_serializes_extra_layer_as_app() {
                     { "kind": "builtin", "name": "i32" }
                 ]
             },
-            "arg": { "kind": "builtin", "name": "string" }
+            "arg": { "kind": "builtin", "name": "String" }
         }),
     );
     assert_eq!(wire.to_type().expect("decode over-applied type"), typ);
@@ -605,7 +605,7 @@ fn adt_decl_with_type_params_serializes_params_and_variants() {
                     "name": "Present",
                     "args": [
                         { "kind": "var", "name": "a" },
-                        { "kind": "builtin", "name": "string" }
+                        { "kind": "builtin", "name": "String" }
                     ]
                 }
             ]
@@ -654,11 +654,11 @@ fn adt_decl_with_record_tuple_and_result_fields_serializes_nested_types() {
                         "fields": [
                             {
                                 "name": "id",
-                                "type": { "kind": "builtin", "name": "uuid" }
+                                "type": { "kind": "builtin", "name": "UUID" }
                             },
                             {
                                 "name": "ok",
-                                "type": { "kind": "builtin", "name": "bool" }
+                                "type": { "kind": "builtin", "name": "Bool" }
                             }
                         ]
                     },
@@ -666,14 +666,14 @@ fn adt_decl_with_record_tuple_and_result_fields_serializes_nested_types() {
                         "kind": "tuple",
                         "items": [
                             { "kind": "builtin", "name": "i32" },
-                            { "kind": "builtin", "name": "string" }
+                            { "kind": "builtin", "name": "String" }
                         ]
                     },
                     {
                         "kind": "builtin",
                         "name": "Result",
                         "args": [
-                            { "kind": "builtin", "name": "string" },
+                            { "kind": "builtin", "name": "String" },
                             { "kind": "builtin", "name": "i32" }
                         ]
                     }
@@ -745,7 +745,7 @@ fn bundle_with_monomorphic_types_serializes_type_map_without_adts() {
                     "type": { "kind": "builtin", "name": "i32" }
                 },
                 "flag": {
-                    "type": { "kind": "builtin", "name": "bool" }
+                    "type": { "kind": "builtin", "name": "Bool" }
                 }
             }
         }),
@@ -802,7 +802,7 @@ fn bundle_includes_transitive_adt_declarations() {
                             "name": "Outer",
                             "arity": 0
                         }],
-                        "ret": { "kind": "builtin", "name": "string" }
+                        "ret": { "kind": "builtin", "name": "String" }
                     }
                 }
             },
@@ -864,7 +864,7 @@ fn bundle_register_into_installs_adts_and_returns_schemes() {
             variants: vec![WireAdtVariant {
                 name: "RunSpec".to_string(),
                 args: vec![WireType::Builtin {
-                    name: "string".to_string(),
+                    name: "String".to_string(),
                     args: vec![],
                 }],
             }],
@@ -888,7 +888,7 @@ fn bundle_register_into_installs_adts_and_returns_schemes() {
                 "name": "RunSpec",
                 "variants": [{
                     "name": "RunSpec",
-                    "args": [{ "kind": "builtin", "name": "string" }]
+                    "args": [{ "kind": "builtin", "name": "String" }]
                 }]
             }]
         }),
@@ -969,7 +969,7 @@ fn wire_type_rejects_too_many_builtin_args_after_serialization() {
                 args: vec![],
             },
             WireType::Builtin {
-                name: "string".to_string(),
+                name: "String".to_string(),
                 args: vec![],
             },
         ],
@@ -982,7 +982,7 @@ fn wire_type_rejects_too_many_builtin_args_after_serialization() {
             "name": "List",
             "args": [
                 { "kind": "builtin", "name": "i32" },
-                { "kind": "builtin", "name": "string" }
+                { "kind": "builtin", "name": "String" }
             ]
         }),
     );

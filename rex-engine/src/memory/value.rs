@@ -49,7 +49,7 @@ pub enum Value {
 impl Value {
     pub fn value_type_name(&self) -> &'static str {
         match self {
-            Self::Bool(_) => "bool",
+            Self::Bool(_) => "Bool",
             Self::U8(_) => "u8",
             Self::U16(_) => "u16",
             Self::U32(_) => "u32",
@@ -60,10 +60,10 @@ impl Value {
             Self::I64(_) => "i64",
             Self::F32(_) => "f32",
             Self::F64(_) => "f64",
-            Self::String(_) => "string",
-            Self::Uuid(_) => "uuid",
-            Self::Hash(_) => "hash",
-            Self::DateTime(_) => "datetime",
+            Self::String(_) => "String",
+            Self::Uuid(_) => "UUID",
+            Self::Hash(_) => "Hash",
+            Self::DateTime(_) => "DateTime",
             Self::Tuple(_) => "tuple",
             Self::List(_) => "list",
             Self::Bytes(_) => "bytes",
@@ -457,7 +457,7 @@ fn value_from_root(
                         conversion_error(&path, &expected, root_type_name(scope, root))
                     };
                     let scalar = match (name.as_ref(), args.as_slice()) {
-                        ("bool", []) => Some(
+                        ("Bool", []) => Some(
                             scope
                                 .root_as_bool(root)
                                 .map(Value::Bool)
@@ -523,25 +523,25 @@ fn value_from_root(
                                 .map(Value::F64)
                                 .map_err(|_| mismatch(scope))?,
                         ),
-                        ("string", []) => Some(
+                        ("String", []) => Some(
                             scope
                                 .root_as_string(root)
                                 .map(Value::String)
                                 .map_err(|_| mismatch(scope))?,
                         ),
-                        ("uuid", []) => Some(
+                        ("UUID", []) => Some(
                             scope
                                 .root_as_uuid(root)
                                 .map(Value::Uuid)
                                 .map_err(|_| mismatch(scope))?,
                         ),
-                        ("hash", []) => Some(
+                        ("Hash", []) => Some(
                             scope
                                 .root_as_hash(root)
                                 .map(Value::Hash)
                                 .map_err(|_| mismatch(scope))?,
                         ),
-                        ("datetime", []) => Some(
+                        ("DateTime", []) => Some(
                             scope
                                 .root_as_datetime(root)
                                 .map(Value::DateTime)
@@ -763,7 +763,7 @@ fn value_into_root(
                         };
                         let name = con.name();
                         let root = match (name.as_ref(), args.as_slice(), value) {
-                            ("bool", [], Value::Bool(value)) => Some(scope.alloc_root_bool(value)?),
+                            ("Bool", [], Value::Bool(value)) => Some(scope.alloc_root_bool(value)?),
                             ("u8", [], Value::U8(value)) => Some(scope.alloc_root_u8(value)?),
                             ("u16", [], Value::U16(value)) => Some(scope.alloc_root_u16(value)?),
                             ("u32", [], Value::U32(value)) => Some(scope.alloc_root_u32(value)?),
@@ -774,12 +774,12 @@ fn value_into_root(
                             ("i64", [], Value::I64(value)) => Some(scope.alloc_root_i64(value)?),
                             ("f32", [], Value::F32(value)) => Some(scope.alloc_root_f32(value)?),
                             ("f64", [], Value::F64(value)) => Some(scope.alloc_root_f64(value)?),
-                            ("string", [], Value::String(value)) => {
+                            ("String", [], Value::String(value)) => {
                                 Some(scope.alloc_root_string(value)?)
                             }
-                            ("uuid", [], Value::Uuid(value)) => Some(scope.alloc_root_uuid(value)?),
-                            ("hash", [], Value::Hash(value)) => Some(scope.alloc_root_hash(value)?),
-                            ("datetime", [], Value::DateTime(value)) => {
+                            ("UUID", [], Value::Uuid(value)) => Some(scope.alloc_root_uuid(value)?),
+                            ("Hash", [], Value::Hash(value)) => Some(scope.alloc_root_hash(value)?),
+                            ("DateTime", [], Value::DateTime(value)) => {
                                 Some(scope.alloc_root_datetime(value)?)
                             }
                             ("List", [element_type], Value::Bytes(bytes))
@@ -1157,7 +1157,7 @@ mod tests {
                     ref path,
                     ref expected,
                     ref got,
-                } if path == "$[1]" && expected == "i32" && got == "bool"
+                } if path == "$[1]" && expected == "i32" && got == "Bool"
             ));
             Ok::<(), EngineError>(())
         })

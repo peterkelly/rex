@@ -41,7 +41,7 @@ whenever you mix application with multiple infix operators.
 `x.field` is *field projection syntax*, not an operator you can partially apply:
 
 ```rex
-type User = User { name: string };
+type User = User { name: String };
 
 let u: User = User { name = "Ada" } in u.name
 ```

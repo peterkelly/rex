@@ -376,6 +376,33 @@ fn infer_type_annotation_ok() {
 }
 
 #[test]
+fn renamed_builtin_type_annotations_use_capitalized_names() {
+    for (name, id) in [
+        ("Bool", BuiltinTypeId::Bool),
+        ("String", BuiltinTypeId::String),
+        ("UUID", BuiltinTypeId::Uuid),
+        ("Hash", BuiltinTypeId::Hash),
+        ("DateTime", BuiltinTypeId::DateTime),
+    ] {
+        let expr = parse_expr(&format!(r"\(x: {name}) -> x"));
+        let mut ts = standard_type_system().unwrap();
+        let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
+        let builtin = Type::builtin(id);
+        assert_eq!(ty, Type::fun(builtin.clone(), builtin), "{name}");
+    }
+
+    for name in ["bool", "string", "uuid", "hash", "datetime"] {
+        let expr = parse_expr(&format!(r"\(x: {name}) -> x"));
+        let mut ts = standard_type_system().unwrap();
+        let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
+        assert!(
+            matches!(&err, TypeError::UnknownTypeName(unknown) if unknown.as_ref() == name),
+            "{name}: {err:?}"
+        );
+    }
+}
+
+#[test]
 fn infer_float_literal_specializes_to_f64_annotation() {
     let expr = parse_expr("let x: f64 = 3.14 in x");
     let mut ts = standard_type_system().unwrap();
@@ -943,8 +970,8 @@ fn infer_if_branch_type_mismatch_error() {
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::Unification(a, b) => {
-            let ok = (a == "i32" && b == "string") || (a == "string" && b == "i32");
-            assert!(ok, "expected i32 vs string, got {a} vs {b}");
+            let ok = (a == "i32" && b == "String") || (a == "String" && b == "i32");
+            assert!(ok, "expected i32 vs String, got {a} vs {b}");
         }
         other => panic!("expected unification error, got {other:?}"),
     }
@@ -985,8 +1012,8 @@ fn infer_if_cond_not_bool_error() {
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::Unification(a, b) => {
-            let ok = (a == "bool" && b == "i32") || (a == "i32" && b == "bool");
-            assert!(ok, "expected bool vs i32, got {a} vs {b}");
+            let ok = (a == "Bool" && b == "i32") || (a == "i32" && b == "Bool");
+            assert!(ok, "expected Bool vs i32, got {a} vs {b}");
         }
         other => panic!("expected unification error, got {other:?}"),
     }
@@ -1007,8 +1034,8 @@ fn infer_list_element_mismatch_error() {
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::Unification(a, b) => {
-            let ok = (a == "i32" && b == "bool") || (a == "bool" && b == "i32");
-            assert!(ok, "expected i32 vs bool, got {a} vs {b}");
+            let ok = (a == "i32" && b == "Bool") || (a == "Bool" && b == "i32");
+            assert!(ok, "expected i32 vs Bool, got {a} vs {b}");
         }
         other => panic!("expected unification error, got {other:?}"),
     }
@@ -1021,8 +1048,8 @@ fn infer_dict_value_mismatch_error() {
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::Unification(a, b) => {
-            let ok = (a == "i32" && b == "bool") || (a == "bool" && b == "i32");
-            assert!(ok, "expected i32 vs bool, got {a} vs {b}");
+            let ok = (a == "i32" && b == "Bool") || (a == "Bool" && b == "i32");
+            assert!(ok, "expected i32 vs Bool, got {a} vs {b}");
         }
         other => panic!("expected unification error, got {other:?}"),
     }
@@ -1053,8 +1080,8 @@ fn infer_match_arm_type_mismatch_error() {
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::Unification(a, b) => {
-            let ok = (a == "i32" && b == "string") || (a == "string" && b == "i32");
-            assert!(ok, "expected i32 vs string, got {a} vs {b}");
+            let ok = (a == "i32" && b == "String") || (a == "String" && b == "i32");
+            assert!(ok, "expected i32 vs String, got {a} vs {b}");
         }
         other => panic!("expected unification error, got {other:?}"),
     }
@@ -1361,7 +1388,7 @@ fn infer_hole_in_arithmetic_is_numeric_constrained() {
 
 #[test]
 fn infer_hole_arithmetic_conflicting_annotation_failure() {
-    let expr = parse_expr("let x : string = (? + 1) in x");
+    let expr = parse_expr("let x : String = (? + 1) in x");
     let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::Unification(_, _)), "err={err:#?}");

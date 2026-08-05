@@ -26,28 +26,28 @@ obligations." For LLMs, this is a better fit: the model can produce a coarse str
 expected type at the hole, retrieve candidate repairs, and select one.
 
 ```rex,interactive
-fn parse_ph : string -> Result f32 string = \raw ->
+fn parse_ph : String -> Result f32 String = \raw ->
   if raw == "7.3" then Ok 7.3 else Err "bad reading";
 
-fn classify_ph : f32 -> string = \ph ->
+fn classify_ph : f32 -> String = \ph ->
   if ph < 6.8 then "acidic"
   else if ph > 7.8 then "alkaline"
   else "stable";
 
-fn qc_label_from_sensor : string -> Result string string = \raw ->
+fn qc_label_from_sensor : String -> Result String String = \raw ->
   match (parse_ph raw) with {
     case Ok ph -> Ok (classify_ph ph);
     case Err e -> Err e;
   };
 
 let sensor_reading = "7.3" in
-let qc_label : Result string string = ? in
+let qc_label : Result String String = ? in
 qc_label
 ```
 
 In an LSP-enabled editor (including the browser playground), placing the cursor on `?` exposes
 hole-filling actions and semantic candidates such as `qc_label_from_sensor sensor_reading`. The
-expected type at the hole is `Result string string`, so the model can fill a semantically meaningful
+expected type at the hole is `Result String String`, so the model can fill a semantically meaningful
 real-world step without guessing. The same machinery is consumed by VS Code and by external LLM
 tooling.
 
@@ -77,9 +77,9 @@ This does not prove semantic correctness. It proves local type plausibility and 
 efficiency. The mechanism narrows the action space; it does not replace domain reasoning.
 
 ```rex,interactive
-fn mk : i32 -> string = \n -> "value";
+fn mk : i32 -> String = \n -> "value";
 let x = 1 in
-let y : string = ? in
+let y : String = ? in
 y
 ```
 
@@ -115,13 +115,13 @@ browser. Paste a snippet with a hole, place the cursor on the hole, and inspect 
 and semantic suggestions.
 
 ```rex,interactive
-fn parse_i32 : string -> Result string i32 = \s ->
+fn parse_i32 : String -> Result String i32 = \s ->
   if s == "42" then Ok 42 else Err "bad-int";
 
 fn plus1 : i32 -> i32 = \n -> n + 1;
 
 let input = "42" in
-let out : Result string i32 = ? in
+let out : Result String i32 = ? in
 out
 ```
 
@@ -347,10 +347,10 @@ Before returning generated Rex code:
 Top-level mutual recursion:
 
 ```rex,interactive
-fn even : i32 -> bool = \n ->
+fn even : i32 -> Bool = \n ->
   if n == 0 then true else odd (n - 1);
 
-fn odd : i32 -> bool = \n ->
+fn odd : i32 -> Bool = \n ->
   if n == 0 then false else even (n - 1);
 
 even 10

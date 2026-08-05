@@ -70,10 +70,10 @@ semicolon terminates the top-level declaration, so multi-line bodies do not depe
 Top-level `fn` declarations are mutually recursive, so they can reference each other:
 
 ```rex,interactive
-fn even n: i32 -> bool =
+fn even n: i32 -> Bool =
   if n == 0 then true else odd (n - 1);
 
-fn odd n: i32 -> bool =
+fn odd n: i32 -> Bool =
   if n == 0 then false else even (n - 1);
 
 even 10

@@ -12,7 +12,7 @@ Model a `User` record, read its fields, and produce an updated copy.
 ## Step 1: define and update
 
 ```rex,interactive
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let
   u: User = User { name = "Ada", age = 36 },
@@ -30,7 +30,7 @@ in
 ## Step 2: update multiple fields
 
 ```rex,interactive
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let
   u: User = User { name = "Ada", age = 36 },
@@ -66,7 +66,7 @@ match s with {
 Problem: define `birthday : User -> User` and apply it two times.
 
 ```rex,interactive
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let
   birthday = \u -> { u with { age = u.age + 1 } },
@@ -83,7 +83,7 @@ Why this works: each `birthday` call returns a new `User` with `age` incremented
 Problem: add a boolean field and set it to `true`.
 
 ```rex,interactive
-type User = User { name: string, age: i32, admin: bool };
+type User = User { name: String, age: i32, admin: Bool };
 
 let
   promote = \u -> { u with { admin = true } },

@@ -10,7 +10,7 @@ Related reading: [N-queens problem](https://en.wikipedia.org/wiki/Eight_queens_p
 fn abs_i32 : i32 -> i32 = \x ->
   if x < 0 then 0 - x else x;
 
-fn is_safe : i32 -> List i32 -> i32 -> bool = \col placed dist ->
+fn is_safe : i32 -> List i32 -> i32 -> Bool = \col placed dist ->
   match placed with {
     case [] -> true;
     case c::rest ->

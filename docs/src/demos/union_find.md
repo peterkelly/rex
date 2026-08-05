@@ -34,7 +34,7 @@ fn union : UF -> i32 -> i32 -> UF = \uf a b ->
   in
     if ra == rb then uf else set_parent uf rb ra;
 
-fn connected : UF -> i32 -> i32 -> bool = \uf a b -> find uf a == find uf b;
+fn connected : UF -> i32 -> i32 -> Bool = \uf a b -> find uf a == find uf b;
 
 let
   uf0 = UF { p0 = 0, p1 = 1, p2 = 2, p3 = 3, p4 = 4 },

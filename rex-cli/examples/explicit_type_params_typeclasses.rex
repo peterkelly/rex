@@ -28,7 +28,7 @@ instance<a> Total (Pair a) where {
 
 let
     boxed_number: Box i32 = put 41,
-    boxed_word: Box string = put "rex",
+    boxed_word: Box String = put "rex",
     count: i32 = total (Pair "left" "right")
 in
     (get_or 0 boxed_number + 1, get_or "" boxed_word, count)

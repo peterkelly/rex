@@ -49,8 +49,8 @@ async fn assert_even_odd_tuple(source: &str) {
 async fn top_level_functions_are_mutually_recursive_when_contiguous() {
     assert_even_odd_tuple(
         r#"
-        fn even (n: i32) -> bool = if n == 0 then true else odd (n - 1);
-        fn odd (n: i32) -> bool = if n == 0 then false else even (n - 1);
+        fn even (n: i32) -> Bool = if n == 0 then true else odd (n - 1);
+        fn odd (n: i32) -> Bool = if n == 0 then false else even (n - 1);
         (even 10, odd 10, even 11, odd 11)
         "#,
     )
@@ -63,9 +63,9 @@ async fn top_level_functions_are_mutually_recursive_when_contiguous() {
 async fn top_level_functions_are_mutually_recursive_when_split_by_type_decl() {
     assert_even_odd_tuple(
         r#"
-        fn even (n: i32) -> bool = if n == 0 then true else odd (n - 1);
+        fn even (n: i32) -> Bool = if n == 0 then true else odd (n - 1);
         type Marker = Marker;
-        fn odd (n: i32) -> bool = if n == 0 then false else even (n - 1);
+        fn odd (n: i32) -> Bool = if n == 0 then false else even (n - 1);
         (even 10, odd 10, even 11, odd 11)
         "#,
     )

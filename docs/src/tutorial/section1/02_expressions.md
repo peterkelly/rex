@@ -15,7 +15,7 @@ This page introduces the “everyday” expression forms you’ll use constantly
 )
 ```
 
-Common primitive types are `bool`, `i32`, `f32`, `string` (plus `uuid`, `hash`, `datetime` if enabled by
+Common primitive types are `Bool`, `i32`, `f32`, `String` (plus `UUID`, `Hash`, `DateTime` if enabled by
 the host).
 
 ### Integers vs floats
@@ -68,7 +68,7 @@ let x = 10 in
 `if` requires both branches and they must have the same type:
 
 ```rex
-// Not OK: the branches disagree ("string" vs "i32")
+// Not OK: the branches disagree ("String" vs "i32")
 if true then "yes" else 0
 ```
 
@@ -88,7 +88,7 @@ If you try to compare a type without an `Eq` / `Ord` instance, typechecking will
 
 ## Working with strings
 
-String concatenation uses `+` (via `AdditiveMonoid string`):
+String concatenation uses `+` (via `AdditiveMonoid String`):
 
 ```rex,interactive
 "Rex " + "rocks"

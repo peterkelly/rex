@@ -1,5 +1,5 @@
 class MyEq a where {
-    eq : a -> a -> bool;
+    eq : a -> a -> Bool;
 }
 class MyOrd a <= MyEq a where {
     my_cmp : a -> a -> i32;

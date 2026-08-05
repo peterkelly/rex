@@ -139,7 +139,7 @@ async fn compile_rejects_invalid_programs() {
             "#,
             |e| matches!(e, TypeError::NonExhaustiveMatch { .. }),
         ),
-        ("type_annotation_must_match", "let x: bool = 1 in x", |e| {
+        ("type_annotation_must_match", "let x: Bool = 1 in x", |e| {
             matches!(e, TypeError::Unification(..) | TypeError::NoInstance(..))
         }),
         (
@@ -279,7 +279,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "function_body_must_match_declared_return_type",
             r#"
-            fn f (x: i32) -> bool = x;
+            fn f (x: i32) -> Bool = x;
             f 1
             "#,
             |e| matches!(e, TypeError::Unification(..)),

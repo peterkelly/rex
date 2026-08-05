@@ -31,10 +31,11 @@ const keywordDocs = new Map([
 ]);
 
 const typeDocs = new Map([
-  ['bool', 'Boolean type.'],
-  ['string', 'UTF-8 string type.'],
-  ['uuid', 'UUID type.'],
-  ['datetime', 'Datetime type.'],
+  ['Bool', 'Boolean type.'],
+  ['String', 'UTF-8 string type.'],
+  ['UUID', 'UUID type.'],
+  ['Hash', 'BLAKE3 hash type.'],
+  ['DateTime', 'Datetime type.'],
   ['u8', 'Unsigned 8-bit integer.'],
   ['u16', 'Unsigned 16-bit integer.'],
   ['u32', 'Unsigned 32-bit integer.'],

@@ -6,25 +6,25 @@
 
 | Type | Description |
 |---|---|
+| `Bool` | Boolean truth value. |
+| `DateTime` | UTC timestamp value. |
 | `Dict a` | Immutable mapping from string keys to values of one type. |
+| `Hash` | BLAKE3 hash value. |
 | `List a` | Immutable ordered sequence. Constructors: `Empty`, `Cons`. |
 | `Option a` | Optional value (`Some` or `None`). Constructors: `Some`, `None`. |
 | `Result a b` | Result value (`Ok` or `Err`) for success/failure flows. Constructors: `Err`, `Ok`. |
-| `bool` | Boolean truth value. |
-| `datetime` | UTC timestamp value. |
+| `String` | UTF-8 string value. |
+| `UUID` | UUID value. |
 | `f32` | 32-bit floating-point number. |
 | `f64` | 64-bit floating-point number. |
-| `hash` | BLAKE3 hash value. |
 | `i16` | 16-bit signed integer. |
 | `i32` | 32-bit signed integer. |
 | `i64` | 64-bit signed integer. |
 | `i8` | 8-bit signed integer. |
-| `string` | UTF-8 string value. |
 | `u16` | 16-bit unsigned integer. |
 | `u32` | 32-bit unsigned integer. |
 | `u64` | 64-bit unsigned integer. |
 | `u8` | 8-bit unsigned integer. |
-| `uuid` | UUID value. |
 
 ## Built-in Type Classes
 
@@ -84,8 +84,8 @@ Types supporting equality/inequality comparison.
 Superclasses: _none_
 
 Methods:
-- `==`: `Eq 'a => ('a -> ('a -> bool))`. Equality comparison.
-- `!=`: `Eq 'a => ('a -> ('a -> bool))`. Inequality comparison.
+- `==`: `Eq 'a => ('a -> ('a -> Bool))`. Equality comparison.
+- `!=`: `Eq 'a => ('a -> ('a -> Bool))`. Inequality comparison.
 
 ### `Field`
 Types supporting division in addition to ring operations.
@@ -100,7 +100,7 @@ Functors supporting filtering and partial mapping.
 Superclasses: `Functor`
 
 Methods:
-- `filter`: `Filterable 'f => (('a -> bool) -> (('f 'a) -> ('f 'a)))`. Keep elements that satisfy a predicate.
+- `filter`: `Filterable 'f => (('a -> Bool) -> (('f 'a) -> ('f 'a)))`. Keep elements that satisfy a predicate.
 - `filter_map`: `Filterable 'f => (('a -> (Option 'b)) -> (('f 'a) -> ('f 'b)))`. Map and drop missing results in one pass.
 
 ### `Foldable`
@@ -169,10 +169,10 @@ Superclasses: `Eq`
 
 Methods:
 - `cmp`: `Ord 'a => ('a -> ('a -> i32))`. Three-way comparison returning negative/zero/positive `i32`.
-- `<`: `Ord 'a => ('a -> ('a -> bool))`. Less-than comparison.
-- `<=`: `Ord 'a => ('a -> ('a -> bool))`. Less-than-or-equal comparison.
-- `>`: `Ord 'a => ('a -> ('a -> bool))`. Greater-than comparison.
-- `>=`: `Ord 'a => ('a -> ('a -> bool))`. Greater-than-or-equal comparison.
+- `<`: `Ord 'a => ('a -> ('a -> Bool))`. Less-than comparison.
+- `<=`: `Ord 'a => ('a -> ('a -> Bool))`. Less-than-or-equal comparison.
+- `>`: `Ord 'a => ('a -> ('a -> Bool))`. Greater-than comparison.
+- `>=`: `Ord 'a => ('a -> ('a -> Bool))`. Greater-than-or-equal comparison.
 
 ### `Ring`
 Types supporting additive group plus multiplication.
@@ -205,7 +205,7 @@ Types that can be converted to user-facing strings (Haskell-style naming).
 Superclasses: _none_
 
 Methods:
-- `show`: `Show 'a => ('a -> string)`. Render a value as a human-readable string.
+- `show`: `Show 'a => ('a -> String)`. Render a value as a human-readable string.
 
 ### `Subtractive`
 Types supporting binary subtraction.
@@ -222,16 +222,16 @@ Methods:
 | Function | Signature | Implemented On | Description |
 |---|---|---|---|
 | `negate` | `('a -> 'a)` | `i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Additive inverse. |
-| `zero` | `'a` | `(List 'a)`<br>`string`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Additive identity. |
-| `+` | `('a -> ('a -> 'a))` | `(List 'a)`<br>`string`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Addition (or concatenation for strings). |
+| `zero` | `'a` | `(List 'a)`<br>`String`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Additive identity. |
+| `+` | `('a -> ('a -> 'a))` | `(List 'a)`<br>`String`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Addition (or concatenation for strings). |
 | `or_else` | `((('f 'a) -> ('f 'a)) -> (('f`<br>`'a) -> ('f 'a)))` | `List`<br>`Option`<br>`(Result 'e)` | Provide an alternative container value. |
 | `pure` | `('a -> ('f 'a))` | `List`<br>`Option`<br>`(Result 'e)` | Lift a plain value into an applicative context. |
 | `ap` | `(('f ('a -> 'b)) -> (('f 'a)`<br>`-> ('f 'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Apply wrapped functions to wrapped values. |
-| `default` | `'a` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Canonical default value for a type. For `Result a e`, this requires `Default a`. |
+| `default` | `'a` | `Bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Canonical default value for a type. For `Result a e`, this requires `Default a`. |
 | `/` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Division. |
-| `==` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`hash`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Equality comparison. |
-| `!=` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`hash`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Inequality comparison. |
-| `filter` | `(('a -> bool) -> (('f 'a) ->`<br>`('f 'a)))` | `List`<br>`Option`<br>`Dict` | Keep elements that satisfy a predicate. |
+| `==` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Bool`<br>`String`<br>`UUID`<br>`Hash`<br>`DateTime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Equality comparison. |
+| `!=` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Bool`<br>`String`<br>`UUID`<br>`Hash`<br>`DateTime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Inequality comparison. |
+| `filter` | `(('a -> Bool) -> (('f 'a) ->`<br>`('f 'a)))` | `List`<br>`Option`<br>`Dict` | Keep elements that satisfy a predicate. |
 | `filter_map` | `(('a -> (Option 'b)) -> (('f`<br>`'a) -> ('f 'b)))` | `List`<br>`Option`<br>`Dict` | Map and drop missing results in one pass. |
 | `foldl` | `(('b -> ('a -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option` | Strict left fold. |
 | `foldr` | `(('a -> ('b -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option` | Right fold. |
@@ -239,27 +239,27 @@ Methods:
 | `map` | `(('a -> 'b) -> (('f 'a) -> ('f`<br>`'b)))` | `List`<br>`Option`<br>`(Result 'e)`<br>`Dict` | Apply a function to each value inside a functor. |
 | `get` | `(i32 -> ('t -> 'a))` | `((List 'a), 'a)` | Get an element by index. |
 | `%` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64` | Remainder/modulo operation. |
-| `length` | `('a -> i32)` | `(List 'a)`<br>`(Dict 'a)`<br>`string` | Return the number of list elements, dictionary entries, or string Unicode scalar values. |
+| `length` | `('a -> i32)` | `(List 'a)`<br>`(Dict 'a)`<br>`String` | Return the number of list elements, dictionary entries, or string Unicode scalar values. |
 | `bind` | `(('a -> ('m 'b)) -> (('m 'a)`<br>`-> ('m 'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Monadic flat-map/sequencing operation. |
 | `one` | `'a` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Multiplicative identity. |
 | `*` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Multiplication. |
-| `cmp` | `('a -> ('a -> i32))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string` | Three-way comparison returning negative/zero/positive `i32`. |
-| `<` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string` | Less-than comparison. |
-| `<=` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string` | Less-than-or-equal comparison. |
-| `>` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string` | Greater-than comparison. |
-| `>=` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string` | Greater-than-or-equal comparison. |
+| `cmp` | `('a -> ('a -> i32))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Three-way comparison returning negative/zero/positive `i32`. |
+| `<` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Less-than comparison. |
+| `<=` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Less-than-or-equal comparison. |
+| `>` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Greater-than comparison. |
+| `>=` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Greater-than-or-equal comparison. |
 | `take` | `(i32 -> (('f 'a) -> ('f 'a)))` | `List` | Keep only the first `n` elements. |
 | `skip` | `(i32 -> (('f 'a) -> ('f 'a)))` | `List` | Drop the first `n` elements. |
 | `zip` | `(('f 'a) -> (('f 'b) -> ('f`<br>`('a, 'b))))` | `List` | Pair elements from two containers by position. |
 | `unzip` | `(('f ('a, 'b)) -> (('f 'a),`<br>`('f 'b)))` | `List` | Split a container of pairs into a pair of containers. |
-| `show` | `('a -> string)` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`uuid`<br>`hash`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Render a value as a human-readable string. |
+| `show` | `('a -> String)` | `Bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String`<br>`UUID`<br>`Hash`<br>`DateTime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Render a value as a human-readable string. |
 | `-` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Subtraction. |
 
 ### Other Built-ins
 
 | Function | Signature | Description |
 |---|---|---|
-| `&&` | `(bool -> (bool -> bool))` | Boolean conjunction. |
+| `&&` | `(Bool -> (Bool -> Bool))` | Boolean conjunction. |
 | `Cons` | `('a -> ((List 'a) -> (List`<br>`'a)))` | Construct a non-empty list from head and tail. |
 | `Empty` | `(List 'a)` | The empty list constructor. |
 | `Err` | `('e -> (Result 't 'e))` | Construct a failed `Result`. |
@@ -267,30 +267,30 @@ Methods:
 | `Ok` | `('t -> (Result 't 'e))` | Construct a successful `Result`. |
 | `Some` | `('t -> (Option 't))` | Construct a present `Option` value. |
 | `dict_empty` | `(Dict 'a)` | Construct an empty dictionary. |
-| `dict_entries` | `((Dict 'a) -> (List (string,`<br>`'a)))` | Return key/value tuples in lexicographic key order. |
-| `dict_filter` | `(((string, 'a) -> bool) ->`<br>`((Dict 'a) -> (Dict 'a)))` | Keep dictionary entries whose key/value tuple satisfies a predicate. |
-| `dict_from_entries` | `((List (string, 'a)) -> (Dict`<br>`'a))` | Construct a dictionary from key/value tuples; later duplicate keys win. |
-| `dict_get` | `(string -> ((Dict 'a) ->`<br>`(Option 'a)))` | Look up a string key, returning `Some` for a present value or `None`. |
-| `dict_has` | `(string -> ((Dict 'a) ->`<br>`bool))` | Test whether a string key is present. |
-| `dict_insert` | `(string -> ('a -> ((Dict 'a)`<br>`-> (Dict 'a))))` | Return a dictionary with a string key inserted or replaced. |
-| `dict_is_empty` | `((Dict 'a) -> bool)` | Test whether a dictionary has no entries. |
-| `dict_keys` | `((Dict 'a) -> (List string))` | Return keys in lexicographic order. |
-| `dict_map` | `(((string, 'a) -> (string,`<br>`'b)) -> ((Dict 'a) -> (Dict`<br>`'b)))` | Transform key/value tuples into a dictionary; later collisions in input-key order win. |
-| `dict_remove` | `(string -> ((Dict 'a) -> (Dict`<br>`'a)))` | Return a dictionary without a string key. |
-| `dict_singleton` | `(string -> ('a -> (Dict 'a)))` | Construct a dictionary containing one key/value entry. |
-| `dict_update` | `(string -> (((Option 'a) ->`<br>`(Option 'a)) -> ((Dict 'a) ->`<br>`(Dict 'a))))` | Insert, replace, or remove a key by transforming its optional value. |
+| `dict_entries` | `((Dict 'a) -> (List (String,`<br>`'a)))` | Return key/value tuples in lexicographic key order. |
+| `dict_filter` | `(((String, 'a) -> Bool) ->`<br>`((Dict 'a) -> (Dict 'a)))` | Keep dictionary entries whose key/value tuple satisfies a predicate. |
+| `dict_from_entries` | `((List (String, 'a)) -> (Dict`<br>`'a))` | Construct a dictionary from key/value tuples; later duplicate keys win. |
+| `dict_get` | `(String -> ((Dict 'a) ->`<br>`(Option 'a)))` | Look up a string key, returning `Some` for a present value or `None`. |
+| `dict_has` | `(String -> ((Dict 'a) ->`<br>`Bool))` | Test whether a string key is present. |
+| `dict_insert` | `(String -> ('a -> ((Dict 'a)`<br>`-> (Dict 'a))))` | Return a dictionary with a string key inserted or replaced. |
+| `dict_is_empty` | `((Dict 'a) -> Bool)` | Test whether a dictionary has no entries. |
+| `dict_keys` | `((Dict 'a) -> (List String))` | Return keys in lexicographic order. |
+| `dict_map` | `(((String, 'a) -> (String,`<br>`'b)) -> ((Dict 'a) -> (Dict`<br>`'b)))` | Transform key/value tuples into a dictionary; later collisions in input-key order win. |
+| `dict_remove` | `(String -> ((Dict 'a) -> (Dict`<br>`'a)))` | Return a dictionary without a string key. |
+| `dict_singleton` | `(String -> ('a -> (Dict 'a)))` | Construct a dictionary containing one key/value entry. |
+| `dict_update` | `(String -> (((Option 'a) ->`<br>`(Option 'a)) -> ((Dict 'a) ->`<br>`(Dict 'a))))` | Insert, replace, or remove a key by transforming its optional value. |
 | `dict_values` | `((Dict 'a) -> (List 'a))` | Return values in lexicographic key order. |
 | `first` | `(i32 -> ((List 'a) -> (List`<br>`'a)))` | Return the first `n` list elements; errors if `n` is out of range. |
-| `is_err` | `((Result 't 'e) -> bool)` | Check whether a `Result` is `Err`. |
-| `is_none` | `((Option 'a) -> bool)` | Check whether an `Option` is `None`. |
-| `is_ok` | `((Result 't 'e) -> bool)` | Check whether a `Result` is `Ok`. |
-| `is_some` | `((Option 'a) -> bool)` | Check whether an `Option` is `Some`. |
+| `is_err` | `((Result 't 'e) -> Bool)` | Check whether a `Result` is `Err`. |
+| `is_none` | `((Option 'a) -> Bool)` | Check whether an `Option` is `None`. |
+| `is_ok` | `((Result 't 'e) -> Bool)` | Check whether a `Result` is `Ok`. |
+| `is_some` | `((Option 'a) -> Bool)` | Check whether an `Option` is `Some`. |
 | `last` | `(i32 -> ((List 'a) -> (List`<br>`'a)))` | Return the last `n` list elements; errors if `n` is out of range. |
 | `max` | `Foldable 'f, Ord 'a => (('f`<br>`'a) -> 'a)` | Maximum element by ordering. |
 | `mean` | `Foldable 'f, Field 'a => (('f`<br>`'a) -> 'a)` | Arithmetic mean over numeric foldables. |
 | `min` | `Foldable 'f, Ord 'a => (('f`<br>`'a) -> 'a)` | Minimum element by ordering. |
 | `slice` | `(i32 -> (i32 -> ((List 'a) ->`<br>`(List 'a))))` | Return elements in the half-open range `n..m`; errors if either bound is out of range or `m < n`. |
-| `string_to_hash` | `(string -> hash)` | Parse a hexadecimal BLAKE3 hash string; raises an error if the string is invalid. |
+| `string_to_hash` | `(String -> Hash)` | Parse a hexadecimal BLAKE3 hash string; raises an error if the string is invalid. |
 | `sum` | `Foldable 'f, AdditiveMonoid 'a`<br>`=> (('f 'a) -> 'a)` | Sum all elements in a foldable container. |
 | `unwrap` | `((Option 'a) -> 'a)`<br><br>`((Result 't 'e) -> 't)` | Extract the inner value from `Some`/`Ok`, or raise an error for `None`/`Err`. |
-| `||` | `(bool -> (bool -> bool))` | Boolean disjunction. |
+| `||` | `(Bool -> (Bool -> Bool))` | Boolean disjunction. |

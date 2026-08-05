@@ -14,7 +14,7 @@ This is a pattern you can scale up: each step is a function returning a `Result`
 steps with `bind`.
 
 ```rex,interactive
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let
   validate = \u ->
@@ -33,7 +33,7 @@ in
 Problem: increment age and append `"!"` to the user name in one transform.
 
 ```rex,interactive
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let
   birthday = \u ->
@@ -53,7 +53,7 @@ Why this works: one record update can set multiple fields at once.
 Problem: make validation fail when `name == ""`.
 
 ```rex,interactive
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let
   validate = \u ->
@@ -74,7 +74,7 @@ Problem: replace free-form strings with typed error constructors.
 
 ```rex,interactive
 type UserError = NegativeAge | EmptyName;
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let
   validate = \u ->
@@ -93,7 +93,7 @@ Instead of strings, define an error ADT:
 
 ```rex,interactive
 type UserError = NegativeAge | EmptyName;
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let
   validate = \u ->
@@ -122,7 +122,7 @@ Problem: reject ages greater than `150`.
 
 ```rex,interactive
 type UserError = NegativeAge | EmptyName | TooOld;
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let
   validate = \u ->
@@ -143,7 +143,7 @@ Why this works: the additional guard catches out-of-range ages before success.
 Problem: run two transforms (`birthday` then `normalize_name`) after validation.
 
 ```rex,interactive
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let
   validate = \u -> if u.age < 0 then Err "negative-age" else Ok u,
@@ -164,7 +164,7 @@ Why this works: each `bind` feeds a successful result into the next transform.
 Problem: compose independent validators with `bind`.
 
 ```rex,interactive
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let
   check_age = \u -> if u.age < 0 then Err "negative-age" else Ok u,

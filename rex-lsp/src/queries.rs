@@ -1393,7 +1393,7 @@ pub(crate) fn expected_type_from_syntax_context(
             }
             Expr::Ite(_span, cond, then_expr, else_expr) => {
                 if position_in_span(pos, *cond.span()) {
-                    return Some("bool".to_string());
+                    return Some("Bool".to_string());
                 }
                 visit(cond.as_ref(), pos)
                     .or_else(|| visit(then_expr.as_ref(), pos))

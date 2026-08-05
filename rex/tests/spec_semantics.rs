@@ -101,7 +101,7 @@ class Pick a where {
 instance Pick i32 where {
     pick = 0;
 }
-instance Pick bool where {
+instance Pick Bool where {
     pick = true;
 }
 pick
@@ -242,7 +242,7 @@ async fn test_let_tuple_destructuring() {
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     match handle.clone() {
         Value::String(s) => assert_eq!(s, "Hello"),
-        _ => panic!("expected string, got {}", handle.value_type_name()),
+        _ => panic!("expected String, got {}", handle.value_type_name()),
     }
     let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
@@ -253,7 +253,7 @@ async fn test_let_tuple_destructuring() {
     assert_eq!(ty, Type::builtin(BuiltinTypeId::Bool));
     match handle.clone() {
         Value::Bool(b) => assert!(b),
-        _ => panic!("expected bool, got {}", handle.value_type_name()),
+        _ => panic!("expected Bool, got {}", handle.value_type_name()),
     }
 }
 
@@ -270,7 +270,7 @@ async fn test_string_literal_escape_sequences() {
         Value::String(s) => {
             assert_eq!(s, "a\nb\r\t\\\"'?\x07\x08\x0c\x0b\0AA\u{03BB}\u{1F600}")
         }
-        _ => panic!("expected string, got {}", handle.value_type_name()),
+        _ => panic!("expected String, got {}", handle.value_type_name()),
     }
 }
 
@@ -351,7 +351,7 @@ async fn test_match_tuple_destructuring() {
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     match handle.clone() {
         Value::String(s) => assert_eq!(s, "Hello"),
-        _ => panic!("expected string, got {}", handle.value_type_name()),
+        _ => panic!("expected String, got {}", handle.value_type_name()),
     }
     let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
@@ -362,7 +362,7 @@ async fn test_match_tuple_destructuring() {
     assert_eq!(ty, Type::builtin(BuiltinTypeId::Bool));
     match handle.clone() {
         Value::Bool(b) => assert!(b),
-        _ => panic!("expected bool, got {}", handle.value_type_name()),
+        _ => panic!("expected Bool, got {}", handle.value_type_name()),
     }
 }
 
@@ -388,7 +388,7 @@ async fn test_tuple_projection() {
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     match handle.clone() {
         Value::String(s) => assert_eq!(s, "Hello"),
-        _ => panic!("expected string, got {}", handle.value_type_name()),
+        _ => panic!("expected String, got {}", handle.value_type_name()),
     }
     let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
@@ -399,6 +399,6 @@ async fn test_tuple_projection() {
     assert_eq!(ty, Type::builtin(BuiltinTypeId::Bool));
     match handle.clone() {
         Value::Bool(b) => assert!(b),
-        _ => panic!("expected bool, got {}", handle.value_type_name()),
+        _ => panic!("expected Bool, got {}", handle.value_type_name()),
     }
 }

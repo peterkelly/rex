@@ -12,7 +12,7 @@ An instance has three parts:
 
 ```rex
 class Show a where {
-  show : a -> string;
+  show : a -> String;
 }
 instance Show i32 where {
   show = \_ -> "<i32>";

@@ -1081,7 +1081,7 @@ async fn eval_option_result_helpers() {
         let
             opt = map (\x -> x + 1) (Some (1 is i32)),
             opt2 = bind (\x -> Some (x + 1)) opt,
-            res = map (\x -> x + 1) ((Ok (1 is i32)) is Result i32 string),
+            res = map (\x -> x + 1) ((Ok (1 is i32)) is Result i32 String),
             unwrapped_opt = unwrap opt2,
             unwrapped_res = unwrap res,
             ok = is_ok res,
@@ -1180,7 +1180,7 @@ async fn eval_unwrap_errors_for_empty_option_and_err_result() {
         Ok(_) => panic!("expected evaluation failure"),
     }
 
-    let err_expr = parse(r#"(unwrap ((Err "boom") is Result i32 string))"#);
+    let err_expr = parse(r#"(unwrap ((Err "boom") is Result i32 String))"#);
     match eval_expr(Builder::with_prelude(()).unwrap(), err_expr.as_ref()).await {
         Err(EngineError::Custom(msg)) => assert_eq!(msg, "called unwrap on Err"),
         Err(other) => panic!("expected custom error, got {other:?}"),

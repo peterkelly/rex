@@ -54,7 +54,7 @@ constructors instead because they self-document field names.
 Variants can carry a record payload:
 
 ```rex,interactive
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let u = User { name = "Ada", age = 36 } in
   u

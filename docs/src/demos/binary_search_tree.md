@@ -21,7 +21,7 @@ fn insert : i32 -> Tree -> Tree = \k t ->
         t;
   };
 
-fn contains : i32 -> Tree -> bool = \k t ->
+fn contains : i32 -> Tree -> Bool = \k t ->
   match t with {
     case Empty -> false;
     case Node {key, left, right} ->

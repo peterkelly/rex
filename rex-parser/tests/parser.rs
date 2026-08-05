@@ -99,7 +99,7 @@ fn test_grammar_contract_examples_parse() {
         ("type decl", "type Option a = None | Some a; ()"),
         ("fn decl", "fn id x: a -> a = x; id 1"),
         ("declare fn decl", "declare fn native : i32 -> i32; ()"),
-        ("class decl", "class Eq a where { ==: a -> a -> bool; } ()"),
+        ("class decl", "class Eq a where { ==: a -> a -> Bool; } ()"),
         (
             "instance decl",
             "instance Eq i32 where { == = prim_eq; } ()",
@@ -665,7 +665,7 @@ fn test_parse_declare_fn_decl_where_constraints() {
 #[test]
 fn test_parse_declare_fn_decl_bare_signature() {
     let code = r#"
-    declare fn info a -> string where Show a;
+    declare fn info a -> String where Show a;
     0
     "#;
     let program = parse_rex(code).unwrap();
@@ -680,7 +680,7 @@ fn test_parse_declare_fn_decl_bare_signature() {
             ));
             assert!(matches!(
                 fd.ret,
-                TypeExpr::Name(_, ref n) if n.as_ref() == "string"
+                TypeExpr::Name(_, ref n) if n.as_ref() == "String"
             ));
             assert_eq!(fd.constraints.len(), 1);
             assert!(matches!(
@@ -695,7 +695,7 @@ fn test_parse_declare_fn_decl_bare_signature() {
 #[test]
 fn test_parse_declare_fn_decl_bare_signature_with_colon() {
     let code = r#"
-    declare fn info : a -> string where Show a;
+    declare fn info : a -> String where Show a;
     0
     "#;
     let program = parse_rex(code).unwrap();
@@ -710,7 +710,7 @@ fn test_parse_declare_fn_decl_bare_signature_with_colon() {
             ));
             assert!(matches!(
                 fd.ret,
-                TypeExpr::Name(_, ref n) if n.as_ref() == "string"
+                TypeExpr::Name(_, ref n) if n.as_ref() == "String"
             ));
             assert_eq!(fd.constraints.len(), 1);
             assert!(matches!(
@@ -725,7 +725,7 @@ fn test_parse_declare_fn_decl_bare_signature_with_colon() {
 #[test]
 fn test_parse_declare_fn_decl_requires_semicolon() {
     let code = r#"
-    declare fn info : a -> string
+    declare fn info : a -> String
     0
     "#;
     let errs = parse_rex(code).unwrap_err();
@@ -1166,7 +1166,7 @@ fn test_type_annotations() {
         other => panic!("expected typed lambda, got {other:?}"),
     }
 
-    let expr = parse("let t: f32 -> str -> Result bool str = x in t");
+    let expr = parse("let t: f32 -> str -> Result Bool str = x in t");
     match expr.as_ref() {
         Expr::Let(_, _var, _, Some(ann), _def, _body) => {
             fn is_name(expr: &TypeExpr, expected: &str) -> bool {
@@ -1184,16 +1184,16 @@ fn test_type_annotations() {
                                     match fun.as_ref() {
                                         TypeExpr::App(_, fun2, arg2) => {
                                             assert!(is_name(fun2, "Result"));
-                                            assert!(is_name(arg2, "bool"));
+                                            assert!(is_name(arg2, "Bool"));
                                         }
-                                        _ => panic!("expected Result bool str"),
+                                        _ => panic!("expected Result Bool str"),
                                     }
                                     assert!(is_name(arg3, "str"));
                                 }
-                                _ => panic!("expected Result bool str"),
+                                _ => panic!("expected Result Bool str"),
                             }
                         }
-                        _ => panic!("expected f32 -> str -> Result bool str"),
+                        _ => panic!("expected f32 -> str -> Result Bool str"),
                     }
                 }
                 _ => panic!("expected function type annotation"),

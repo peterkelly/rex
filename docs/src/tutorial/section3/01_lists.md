@@ -44,7 +44,7 @@ This style also makes it easier to debug by temporarily returning an intermediat
 
 ## Filter then map
 
-Filtering needs a predicate `a -> bool`. Let’s define one:
+Filtering needs a predicate `a -> Bool`. Let’s define one:
 
 ```rex,interactive
 let
@@ -114,7 +114,7 @@ in
   filter (between 3 5) [1, 2, 3, 4, 5, 6]
 ```
 
-Why this works: `between 3 5` is a predicate function `i32 -> bool`, which is exactly what
+Why this works: `between 3 5` is a predicate function `i32 -> Bool`, which is exactly what
 `filter` expects.
 
 ### Example: naming `inc` in `let`

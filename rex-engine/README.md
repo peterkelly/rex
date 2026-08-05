@@ -124,7 +124,7 @@ Rust `Vec<T>` values convert to `Value::List` and Rex `List T`. `Vec<u8>` and ev
 Some expressions can leave overloaded values ambiguous (for example, `one` or `zero` in a polymorphic branch). During evaluation, the engine applies a small defaulting pass to pick a concrete type when possible:
 
 - Prefer primitive types already observed in the expression.
-- Fall back to `f32`, then `i32`, then `string`.
+- Fall back to `f32`, then `i32`, then `String`.
 
 ## Tests
 

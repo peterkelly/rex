@@ -1291,7 +1291,7 @@ in
 #[test]
 fn diagnostics_for_decl_type_errors_are_not_whole_document() {
     let text = r#"
-fn parse_ph : string -> Result string f64 = \raw ->
+fn parse_ph : String -> Result String f64 = \raw ->
   if raw == "7.3" then Ok 7.3 else Err "bad reading";
 "#;
     let uri = in_memory_doc_uri();
@@ -1309,13 +1309,13 @@ fn parse_ph : string -> Result string f64 = \raw ->
 
 #[test]
 fn diagnostics_for_llms_playground_decl_error_are_not_whole_document() {
-    let text = r#"fn parse_i32 : string -> Result string i32 = \s ->
+    let text = r#"fn parse_i32 : String -> Result String i32 = \s ->
   if s == "42" then Ok 42 else Err "bad-int";
 
 fn plus1 : i32 -> i32 = \n -> n + 1;
 
 let input = "42" in
-let out : Result string i32 = ? in
+let out : Result String i32 = ? in
 out"#;
     let uri = in_memory_doc_uri();
     let diags = diagnostics_from_text(&uri, text);
@@ -1677,7 +1677,7 @@ let y : i32 = ? in y
 fn expected_type_reports_if_condition_bool() {
     let text = "if true then 1 else 2";
     let ty = expected_type_for_source_public(text, 0, 3).expect("expected type at condition");
-    assert_eq!(ty, "bool");
+    assert_eq!(ty, "Bool");
 }
 
 #[test]
@@ -1794,7 +1794,7 @@ fn execute_expected_type_command_returns_object() {
         .and_then(|o| o.get("expectedType"))
         .and_then(Value::as_str)
         .expect("expectedType");
-    assert_eq!(expected, "bool");
+    assert_eq!(expected, "Bool");
 }
 
 #[test]
@@ -1864,7 +1864,7 @@ fn semantic_functions_command_caps_items_count() {
 fn execute_functions_accepting_inferred_type_command_returns_items() {
     let uri = in_memory_doc_uri();
     let text = r#"
-fn use_bool : bool -> i32 = \x -> 0;
+fn use_bool : Bool -> i32 = \x -> 0;
 let x = true in x
 "#;
     let out = execute_query_command_for_document(
@@ -1882,7 +1882,7 @@ let x = true in x
         .get("inferredType")
         .and_then(Value::as_str)
         .expect("inferredType");
-    assert_eq!(inferred, "bool");
+    assert_eq!(inferred, "Bool");
     let items = obj
         .get("items")
         .and_then(Value::as_array)
@@ -1967,8 +1967,8 @@ fn semantic_holes_command_caps_hole_count() {
 fn execute_functions_compatible_with_in_scope_values_command_returns_items() {
     let uri = in_memory_doc_uri();
     let text = r#"
-fn to_string_i32 : i32 -> string = \x -> "ok";
-let x = 1 in let y : string = ? in y
+fn to_string_i32 : i32 -> String = \x -> "ok";
+let x = 1 in let y : String = ? in y
 "#;
     let out = execute_query_command_for_document(
         CMD_FUNCTIONS_COMPATIBLE_WITH_IN_SCOPE_VALUES_AT,

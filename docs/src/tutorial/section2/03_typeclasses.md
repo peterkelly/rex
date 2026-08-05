@@ -27,8 +27,8 @@ class Marker a;
 
 ```rex
 class Eq a where {
-  == : a -> a -> bool;
-  != : a -> a -> bool;
+  == : a -> a -> Bool;
+  != : a -> a -> Bool;
 }
 ```
 
@@ -38,7 +38,7 @@ Superclasses use `<=` (read “requires”):
 
 ```rex
 class Ord a <= Eq a where {
-  < : a -> a -> bool;
+  < : a -> a -> Bool;
 }
 ```
 

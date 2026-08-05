@@ -105,7 +105,7 @@ with `is`:
 ({ a = 1, b = 2 }) is Dict i32
 ```
 
-`Dict a` has string keys and values of one uniform type `a`. Dictionary literals use identifier
+`Dict a` has `String` keys and values of one uniform type `a`. Dictionary literals use identifier
 keys, while functions such as `dict_insert` and `dict_from_entries` also accept arbitrary runtime
 strings.
 
@@ -132,7 +132,7 @@ entry wins.
 
 The ordinary `map`, `filter`, and `filter_map` functions operate on dictionary values while
 preserving their keys. When the key is also needed, use `dict_map` or `dict_filter`; their callbacks
-receive a `(string, a)` tuple:
+receive a `(String, a)` tuple:
 
 ```rex,interactive
 let

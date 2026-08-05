@@ -11,11 +11,11 @@ The prelude provides `Default` and a set of built-in instances.
 
 Built-in types with `Default`:
 
-- `bool`
+- `Bool`
 - `u8`, `u16`, `u32`, `u64`
 - `i8`, `i16`, `i32`, `i64`
 - `f32`, `f64`
-- `string`
+- `String`
 - `List a`
 - `Option a`
 - `Result a e` (when `Default a` is available)
@@ -27,7 +27,7 @@ You can implement `Default` for many ADT shapes.
 Single constructor with unnamed fields:
 
 ```rex
-type Pair = Pair i32 bool;
+type Pair = Pair i32 Bool;
 
 instance Default Pair where {
     default = Pair 42 true;
@@ -37,7 +37,7 @@ instance Default Pair where {
 Single constructor with named fields:
 
 ```rex
-type Config = Config { retries: i32, enabled: bool };
+type Config = Config { retries: i32, enabled: Bool };
 
 instance Default Config where {
     default = Config { retries = 3, enabled = false };

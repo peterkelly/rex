@@ -1460,7 +1460,7 @@ fn inject_dict_builtins<State: Clone + Send + Sync + 'static>(
                 let pair = scope.root_as_tuple(item)?;
                 if pair.len() != 2 {
                     return Err(EngineError::NativeType {
-                        expected: "(string, a)".into(),
+                        expected: "(String, a)".into(),
                         got: scope.type_name(item)?.into(),
                     });
                 }

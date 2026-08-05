@@ -1010,7 +1010,7 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
     }
     match &xs[1].1 {
         Value::String(s) => assert_eq!(s, "ok"),
-        _ => panic!("expected string, got {}", xs[1].0.value_type_name()),
+        _ => panic!("expected String, got {}", xs[1].0.value_type_name()),
     }
 }
 

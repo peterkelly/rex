@@ -314,7 +314,7 @@ async fn result_prelude() {
     let builder = Builder::with_prelude(()).unwrap();
     let (result, _, ty) = eval_expr(
         builder,
-        r#"(((Ok 42) is Result i32 string), ((Err "error") is Result i32 string))"#,
+        r#"(((Ok 42) is Result i32 String), ((Err "error") is Result i32 String))"#,
     )
     .await;
     assert_eq!(

@@ -4,7 +4,7 @@ This crate implements a Hindley-Milner style type system with parametric polymor
 
 ## Features
 
-- **Types**: primitives (`u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `uuid`, `datetime`), tuples, functions, lists (`List a`), dictionaries (`Dict a`), and registered user constructors.
+- **Types**: primitives (`u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `Bool`, `String`, `UUID`, `Hash`, `DateTime`), tuples, functions, lists (`List a`), dictionaries (`Dict a`), and registered user constructors.
 - **Schemes**: quantified types with class constraints.
 - **Type classes**: class hierarchy for additive/multiplicative monoids, semiring, additive group, ring, and field, plus instance resolution with superclass propagation.
 - **Utilities**: substitution, unification (with occurs check), instantiation, and generalization helpers.
@@ -49,7 +49,7 @@ in
   id (id 420, id 6.9, id "str")
 ```
 
-This infers to the tuple type `(i32, f32, string)`.
+This infers to the tuple type `(i32, f32, String)`.
 
 The current inference implementation covers variables, application, lambdas, let-in, if-then-else, tuples, lists, dicts, named constructors, literals, and `match`.
 
@@ -69,7 +69,7 @@ environment, the engine registers these classes and operators before running inf
 - Arithmetic: `+`, `-`, `*`, `/`, `negate`
 - Equality: `==`, `!=` (`Eq a` constraints)
 - Ordering: `<`, `<=`, `>`, `>=` (`Ord a` constraints)
-- Booleans: `&&`, `||` (bool only)
+- Booleans: `&&`, `||` (`Bool` only)
 - Monoid identities: `zero`, `one`
 
 ### Collection Combinators

@@ -1298,7 +1298,7 @@ pub(super) enum Cell {
 impl Cell {
     pub(super) fn cell_type_name(&self) -> &'static str {
         match self {
-            Cell::Bool(..) => "bool",
+            Cell::Bool(..) => "Bool",
             Cell::U8(..) => "u8",
             Cell::U16(..) => "u16",
             Cell::U32(..) => "u32",
@@ -1309,10 +1309,10 @@ impl Cell {
             Cell::I64(..) => "i64",
             Cell::F32(..) => "f32",
             Cell::F64(..) => "f64",
-            Cell::String(..) => "string",
-            Cell::Uuid(..) => "uuid",
-            Cell::Hash(..) => "hash",
-            Cell::DateTime(..) => "datetime",
+            Cell::String(..) => "String",
+            Cell::Uuid(..) => "UUID",
+            Cell::Hash(..) => "Hash",
+            Cell::DateTime(..) => "DateTime",
             Cell::Tuple(..) => "tuple",
             Cell::Empty | Cell::Cons(..) | Cell::ListSlice { .. } => "list",
             Cell::Data(..) => "data",
@@ -1339,7 +1339,7 @@ impl Cell {
     pub(super) fn cell_as_bool(&self) -> Result<bool, EngineError> {
         match self {
             Cell::Bool(v) => Ok(*v),
-            _ => Err(self.cell_type_error("bool")),
+            _ => Err(self.cell_type_error("Bool")),
         }
     }
 
@@ -1416,28 +1416,28 @@ impl Cell {
     pub(super) fn cell_as_string(&self) -> Result<String, EngineError> {
         match self {
             Cell::String(v) => Ok(v.clone()),
-            _ => Err(self.cell_type_error("string")),
+            _ => Err(self.cell_type_error("String")),
         }
     }
 
     pub(super) fn cell_as_uuid(&self) -> Result<Uuid, EngineError> {
         match self {
             Cell::Uuid(v) => Ok(*v),
-            _ => Err(self.cell_type_error("uuid")),
+            _ => Err(self.cell_type_error("UUID")),
         }
     }
 
     pub(super) fn cell_as_hash(&self) -> Result<Hash, EngineError> {
         match self {
             Cell::Hash(v) => Ok(*v),
-            _ => Err(self.cell_type_error("hash")),
+            _ => Err(self.cell_type_error("Hash")),
         }
     }
 
     pub(super) fn cell_as_datetime(&self) -> Result<DateTime<Utc>, EngineError> {
         match self {
             Cell::DateTime(v) => Ok(*v),
-            _ => Err(self.cell_type_error("datetime")),
+            _ => Err(self.cell_type_error("DateTime")),
         }
     }
 

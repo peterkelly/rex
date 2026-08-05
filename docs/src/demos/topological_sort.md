@@ -10,7 +10,7 @@ The helpers break the algorithm into pure list operations: `in_degree` counts in
 type Node = A | B | C | D;
 type Edge = Edge Node Node;
 
-fn node_eq : Node -> Node -> bool = \a b ->
+fn node_eq : Node -> Node -> Bool = \a b ->
   match (a, b) with {
     case (A, A) -> true;
     case (B, B) -> true;
@@ -19,7 +19,7 @@ fn node_eq : Node -> Node -> bool = \a b ->
     case _ -> false;
   };
 
-fn contains : List Node -> Node -> bool = \xs x ->
+fn contains : List Node -> Node -> Bool = \xs x ->
   match xs with {
     case [] -> false;
     case y::ys -> if node_eq y x then true else contains ys x;
@@ -40,7 +40,7 @@ fn reverse_go : List Node -> List Node -> List Node = \rest acc ->
 fn reverse : List Node -> List Node = \xs ->
   reverse_go xs [];
 
-fn is_empty<a> : List a -> bool = \xs ->
+fn is_empty<a> : List a -> Bool = \xs ->
   match xs with {
     case [] -> true;
     case _::_ -> false;

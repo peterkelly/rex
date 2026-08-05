@@ -33,7 +33,7 @@ Rex comments are lexical trivia and are removed before parsing:
 
 String literals are decoded during lexing.
 
-- Double-quoted (`"..."`) and single-quoted (`'...'`) literals both produce `string` values.
+- Double-quoted (`"..."`) and single-quoted (`'...'`) literals both produce `String` values.
 - C-style simple escapes are supported: `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\\`, `\"`,
   `\'`, and `\?`.
 - Octal escapes use one to three octal digits (`\0` through `\777`).
@@ -57,7 +57,7 @@ String literals are decoded during lexing.
 
 ## Dictionaries
 
-`Dict a` is an immutable mapping from `string` keys to values of one uniform type `a`. Runtime
+`Dict a` is an immutable mapping from `String` keys to values of one uniform type `a`. Runtime
 dictionary and record field maps store keys as strings; compiler identifiers and statically known
 record field names remain symbols only inside the compiler.
 
@@ -79,21 +79,21 @@ The core operations have these semantics:
 to values only and preserve the corresponding input keys. Callback applications for different
 entries may evaluate in parallel; callback completion order does not affect the result.
 
-`dict_map` has type `((string, a) -> (string, b)) -> Dict a -> Dict b`. Its callback applications
+`dict_map` has type `((String, a) -> (String, b)) -> Dict a -> Dict b`. Its callback applications
 may evaluate in parallel. After every callback completes, results are applied in the original
 dictionary's lexicographic key order. If multiple callbacks return the same output key, the result
 from the latest input key in that order wins.
 
-`dict_filter` has type `((string, a) -> bool) -> Dict a -> Dict a`. Its callback applications may
+`dict_filter` has type `((String, a) -> Bool) -> Dict a -> Dict a`. Its callback applications may
 also evaluate in parallel. It preserves each accepted entry's original key and value.
 
 ## Primitive Host Types
 
 The zero-arity primitive types are `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`,
-`f32`, `f64`, `bool`, `string`, `uuid`, `hash`, and `datetime`. The `hash` type corresponds to a
+`f32`, `f64`, `Bool`, `String`, `UUID`, `Hash`, and `DateTime`. The `Hash` type corresponds to a
 `blake3::Hash` in Rust. At JSON boundaries, hash values are exactly 32 bytes encoded as hexadecimal
 strings; Rex emits the canonical lowercase 64-character representation. `show` uses the same
-representation. `string_to_hash : string -> hash` accepts a valid hexadecimal BLAKE3 hash and
+representation. `string_to_hash : String -> Hash` accepts a valid hexadecimal BLAKE3 hash and
 raises an evaluation error for invalid input.
 
 ## Program Entry Points
@@ -593,7 +593,7 @@ The candidate list is constructed in this order:
 
 1. Traverse the typed expression (depth-first) and collect every **concrete** (ground) 0-arity type
    constructor that appears as the type of a subexpression (unique, in first-seen order).
-2. Append (if not already present): `f32`, `i32`, `string`.
+2. Append (if not already present): `f32`, `i32`, `String`.
 
 ### Choosing a Default
 

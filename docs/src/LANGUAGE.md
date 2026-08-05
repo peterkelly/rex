@@ -314,13 +314,13 @@ Rex checks ADT matches for exhaustiveness and reports missing constructors.
 
 Common built-in types include:
 
-- `bool`
+- `Bool`
 - `i32` (default integer-literal fallback type)
 - `f32` (float literal type)
-- `string`
-- `uuid`
-- `hash`
-- `datetime`
+- `String`
+- `UUID`
+- `Hash`
+- `DateTime`
 
 ### Function Types
 
@@ -353,7 +353,7 @@ Nothing
 ADT variants can carry a record payload:
 
 ```rex,interactive
-type User = User { name: string, age: i32 };
+type User = User { name: String, age: i32 };
 
 let u: User = User { name = "Ada", age = 36 } in u
 ```
@@ -419,10 +419,10 @@ Top-level `fn` declarations are mutually recursive, so they can refer to each ot
 module:
 
 ```rex,interactive
-fn even n: i32 -> bool =
+fn even n: i32 -> Bool =
   if n == 0 then true else odd (n - 1);
 
-fn odd n: i32 -> bool =
+fn odd n: i32 -> Bool =
   if n == 0 then false else even (n - 1);
 
 even 10
@@ -448,7 +448,7 @@ Methods can be operators (use parentheses to refer to them as values if needed):
 
 ```rex
 class Eq a where {
-  == : a -> a -> bool;
+  == : a -> a -> Bool;
 }
 ```
 
@@ -456,7 +456,7 @@ Superclasses use `<=` (read “requires”):
 
 ```rex
 class Ord a <= Eq a where {
-  < : a -> a -> bool;
+  < : a -> a -> Bool;
 }
 ```
 
@@ -497,7 +497,7 @@ Instance contexts use `<=`:
 
 ```rex
 class Show a where {
-  show : a -> string;
+  show : a -> String;
 }
 instance Show i32 where {
   show = \_ -> "<i32>";

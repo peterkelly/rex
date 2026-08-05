@@ -7,7 +7,7 @@
 // rex --inputs main_inputs.json main_inputs.rex
 
 type SharedMeta = SharedMeta {
-    label: string,
+    label: String,
     weight: i32
 };
 
@@ -23,8 +23,8 @@ type Threshold = Threshold {
 
 type Output = Output {
     total: i32,
-    measurement_label: string,
-    threshold_label: string,
+    measurement_label: String,
+    threshold_label: String,
     combined_weight: i32
 };
 

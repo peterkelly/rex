@@ -74,7 +74,7 @@ instance<t> Size (List t) where {
     };
 }
 let
-  is_empty<a>: a -> bool = \(x: a) where Size a -> size x == 0
+  is_empty<a>: a -> Bool = \(x: a) where Size a -> size x == 0
 in
   (is_empty ([] is List i32), is_empty [1, 2, 3])
 ```
@@ -96,7 +96,7 @@ instance<t> Size (List t) where {
       case Cons _ t -> 1 + size t;
     };
 }
-type Blob = Blob { name: string, bytes: List i32 };
+type Blob = Blob { name: String, bytes: List i32 };
 
 instance Size Blob where {
   size = \b -> size b.bytes;

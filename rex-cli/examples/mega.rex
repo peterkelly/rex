@@ -9,8 +9,8 @@ let
     cube: i32 -> i32 = \x -> x * x * x,
     quad: i32 -> i32 = \x -> x * x * x * x,
     clamp: i32 -> i32 -> i32 -> i32 = \lo hi x -> if x < lo then lo else if x > hi then hi else x,
-    is_even: i32 -> bool = \x -> x % 2 == 0,
-    is_odd: i32 -> bool = \x -> x % 2 != 0,
+    is_even: i32 -> Bool = \x -> x % 2 == 0,
+    is_odd: i32 -> Bool = \x -> x % 2 != 0,
     choose: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = \a b c d e f g h i j -> if a + b > c + d then e + f + g + h + i + j else a + b + c + d,
     mega26: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = \a b c d e f g h i j k l m n o p q r s t u v w x y z ->
         a + b + c + d + e + f

@@ -49,7 +49,7 @@ async fn additive_monoid_list_concatenates_in_order() {
 async fn additive_monoid_list_requires_no_element_constraint() {
     assert_eval(
         r#"
-        let empty: List bool = zero in empty + [true, false]
+        let empty: List Bool = zero in empty + [true, false]
         "#,
         "[true, false]",
         Type::list(Type::builtin(BuiltinTypeId::Bool)),
@@ -94,7 +94,7 @@ async fn default_nested_context_option() {
 async fn default_custom_adt_single_ctor_unnamed_fields() {
     assert_eval(
         r#"
-        type Pair = Pair i32 bool;
+        type Pair = Pair i32 Bool;
 
         instance Default Pair where {
             default = Pair 42 true;
@@ -111,7 +111,7 @@ async fn default_custom_adt_single_ctor_unnamed_fields() {
 async fn default_custom_adt_single_ctor_named_fields() {
     assert_eval(
         r#"
-        type Config = Config { retries: i32, enabled: bool };
+        type Config = Config { retries: i32, enabled: Bool };
 
         instance Default Config where {
             default = Config { retries = 3, enabled = false };
@@ -370,8 +370,8 @@ async fn hkt_functor_option_and_result() {
             inc = \x -> x + 1,
             a = fmap inc (Some 1),
             b = fmap inc (None is Option i32),
-            c = fmap inc ((Ok 1) is Result i32 string),
-            d = fmap inc ((Err "bad") is Result i32 string)
+            c = fmap inc ((Ok 1) is Result i32 String),
+            d = fmap inc ((Err "bad") is Result i32 String)
         in
             (a, b, c, d)
         "#,
@@ -422,7 +422,7 @@ async fn superclass_and_instance_context() {
     assert_eval(
         r#"
         class MyEq a where {
-            eq : a -> a -> bool;
+            eq : a -> a -> Bool;
         }
         class MyOrd a <= MyEq a where {
             my_cmp : a -> a -> i32;

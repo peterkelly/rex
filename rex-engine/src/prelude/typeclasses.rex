@@ -42,21 +42,21 @@ class Integral a where {
 
 // equality and ordering
 class Eq a where {
-    == : a -> a -> bool;
-    != : a -> a -> bool;
+    == : a -> a -> Bool;
+    != : a -> a -> Bool;
 }
 
 class Ord a <= Eq a where {
     cmp : a -> a -> i32;
-    < : a -> a -> bool;
-    <= : a -> a -> bool;
-    > : a -> a -> bool;
-    >= : a -> a -> bool;
+    < : a -> a -> Bool;
+    <= : a -> a -> Bool;
+    > : a -> a -> Bool;
+    >= : a -> a -> Bool;
 }
 
 // show printing
 class Show a where {
-    show : a -> string;
+    show : a -> String;
 }
 
 // default values
@@ -95,7 +95,7 @@ class Length a where {
 }
 
 class Filterable f <= Functor f where {
-    filter<a> : (a -> bool) -> f a -> f a;
+    filter<a> : (a -> Bool) -> f a -> f a;
     filter_map<a,b> : (a -> Option b) -> f a -> f b;
 }
 
@@ -121,7 +121,7 @@ instance<a> AdditiveMonoid (List a) where {
     + = \xs ys -> foldr (\x out -> x :: out) ys xs;
 }
 
-instance AdditiveMonoid string where {
+instance AdditiveMonoid String where {
     zero = prim_zero;
     + = prim_add;
 }
@@ -455,27 +455,27 @@ instance Eq f64 where {
     != = prim_ne;
 }
 
-instance Eq bool where {
+instance Eq Bool where {
     == = prim_eq;
     != = prim_ne;
 }
 
-instance Eq string where {
+instance Eq String where {
     == = prim_eq;
     != = prim_ne;
 }
 
-instance Eq uuid where {
+instance Eq UUID where {
     == = prim_eq;
     != = prim_ne;
 }
 
-instance Eq hash where {
+instance Eq Hash where {
     == = prim_eq;
     != = prim_ne;
 }
 
-instance Eq datetime where {
+instance Eq DateTime where {
     == = prim_eq;
     != = prim_ne;
 }
@@ -600,7 +600,7 @@ instance Ord f64 <= Eq f64 where {
     >= = prim_ge;
 }
 
-instance Ord string <= Eq string where {
+instance Ord String <= Eq String where {
     cmp = prim_cmp;
     < = prim_lt;
     <= = prim_le;
@@ -609,7 +609,7 @@ instance Ord string <= Eq string where {
 }
 
 // Show instances
-instance Show bool where {
+instance Show Bool where {
     show = prim_show;
 }
 
@@ -653,24 +653,24 @@ instance Show f64 where {
     show = prim_show;
 }
 
-instance Show string where {
+instance Show String where {
     show = prim_show;
 }
 
-instance Show uuid where {
+instance Show UUID where {
     show = prim_show;
 }
 
-instance Show hash where {
+instance Show Hash where {
     show = prim_show;
 }
 
-instance Show datetime where {
+instance Show DateTime where {
     show = prim_show;
 }
 
 // Default instances
-instance Default bool where {
+instance Default Bool where {
     default = false;
 }
 
@@ -714,7 +714,7 @@ instance Default f64 where {
     default = prim_zero;
 }
 
-instance Default string where {
+instance Default String where {
     default = prim_zero;
 }
 
@@ -830,7 +830,7 @@ instance<a> Length (Dict a) where {
     length = prim_dict_length;
 }
 
-instance Length string where {
+instance Length String where {
     length = prim_string_length;
 }
 

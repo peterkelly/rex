@@ -328,7 +328,7 @@ Then Rex code can import and use those names from the module:
 ```rex
 import acme.status (Status, Failed);
 
-let fail: string -> Status = \msg -> Failed msg in
+let fail: String -> Status = \msg -> Failed msg in
 match (fail "boom") with {
   case Failed msg -> length msg;
   case _ -> 0;

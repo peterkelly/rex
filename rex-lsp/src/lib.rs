@@ -20,8 +20,8 @@ pub const MAX_SEMANTIC_CANDIDATES: usize = 64;
 pub const MAX_SEMANTIC_HOLE_FILL_ARITY: usize = 8;
 pub const MAX_SEMANTIC_HOLES: usize = 128;
 pub(crate) const BUILTIN_TYPES: &[&str] = &[
-    "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "bool", "string", "uuid",
-    "datetime", "Dict", "List", "Option", "Result",
+    "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "Bool", "String", "UUID",
+    "Hash", "DateTime", "Dict", "List", "Option", "Result",
 ];
 pub(crate) const BUILTIN_VALUES: &[&str] = &["true", "false", "null", "Some", "None", "Ok", "Err"];
 

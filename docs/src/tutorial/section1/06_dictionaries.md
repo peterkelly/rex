@@ -1,9 +1,9 @@
 # Dictionaries
 
-A dictionary in Rex is an immutable mapping from string keys to values. Its type is `Dict a`, where
+A dictionary in Rex is an immutable mapping from `String` keys to values. Its type is `Dict a`, where
 `a` is the type of every value in the dictionary:
 
-- Keys are always `string`.
+- Keys are always `String`.
 - All values in one dictionary have the same type.
 - Operations return new dictionaries; they do not change their inputs.
 
@@ -15,7 +15,7 @@ let scores = ({ alice = 10, bob = 12 }) is Dict i32 in scores
 ```
 
 Dictionary literals use identifier-shaped keys. Functions such as `dict_singleton`, `dict_insert`,
-and `dict_from_entries` accept arbitrary string values as keys, including strings containing spaces.
+and `dict_from_entries` accept arbitrary `String` values as keys, including strings containing spaces.
 
 ## Dictionary order
 
@@ -44,21 +44,21 @@ see the resulting value.
 | Function | Type |
 |---|---|
 | `dict_empty` | `Dict a` |
-| `dict_singleton` | `string -> a -> Dict a` |
-| `dict_get` | `string -> Dict a -> Option a` |
-| `dict_has` | `string -> Dict a -> bool` |
-| `dict_insert` | `string -> a -> Dict a -> Dict a` |
-| `dict_remove` | `string -> Dict a -> Dict a` |
-| `dict_update` | `string -> (Option a -> Option a) -> Dict a -> Dict a` |
-| `dict_is_empty` | `Dict a -> bool` |
-| `dict_keys` | `Dict a -> List string` |
+| `dict_singleton` | `String -> a -> Dict a` |
+| `dict_get` | `String -> Dict a -> Option a` |
+| `dict_has` | `String -> Dict a -> Bool` |
+| `dict_insert` | `String -> a -> Dict a -> Dict a` |
+| `dict_remove` | `String -> Dict a -> Dict a` |
+| `dict_update` | `String -> (Option a -> Option a) -> Dict a -> Dict a` |
+| `dict_is_empty` | `Dict a -> Bool` |
+| `dict_keys` | `Dict a -> List String` |
 | `dict_values` | `Dict a -> List a` |
-| `dict_entries` | `Dict a -> List (string, a)` |
-| `dict_from_entries` | `List (string, a) -> Dict a` |
-| `dict_map` | `((string, a) -> (string, b)) -> Dict a -> Dict b` |
-| `dict_filter` | `((string, a) -> bool) -> Dict a -> Dict a` |
+| `dict_entries` | `Dict a -> List (String, a)` |
+| `dict_from_entries` | `List (String, a) -> Dict a` |
+| `dict_map` | `((String, a) -> (String, b)) -> Dict a -> Dict b` |
+| `dict_filter` | `((String, a) -> Bool) -> Dict a -> Dict a` |
 | `map` on `Dict` | `(a -> b) -> Dict a -> Dict b` |
-| `filter` on `Dict` | `(a -> bool) -> Dict a -> Dict a` |
+| `filter` on `Dict` | `(a -> Bool) -> Dict a -> Dict a` |
 
 ## Construction
 
@@ -75,7 +75,7 @@ let numbers: Dict i32 = dict_empty in numbers
 
 ### `dict_singleton`
 
-Type: `dict_singleton : string -> a -> Dict a`
+Type: `dict_singleton : String -> a -> Dict a`
 
 `dict_singleton key value` constructs a dictionary containing exactly one entry.
 
@@ -85,7 +85,7 @@ dict_singleton "request id" "req-123"
 
 ### `dict_from_entries`
 
-Type: `dict_from_entries : List (string, a) -> Dict a`
+Type: `dict_from_entries : List (String, a) -> Dict a`
 
 `dict_from_entries entries` constructs a dictionary from a list of key/value tuples. It processes
 the list from first to last. If a key appears more than once, its last value wins. The resulting
@@ -100,7 +100,7 @@ dict_from_entries
 
 ### `dict_get`
 
-Type: `dict_get : string -> Dict a -> Option a`
+Type: `dict_get : String -> Dict a -> Option a`
 
 `dict_get key dictionary` returns `Some value` when the key exists and `None` when it does not.
 Lookup does not fail merely because a key is absent.
@@ -112,7 +112,7 @@ let scores = dict_from_entries [("alice", 10), ("bob", 12)] in
 
 ### `dict_has`
 
-Type: `dict_has : string -> Dict a -> bool`
+Type: `dict_has : String -> Dict a -> Bool`
 
 `dict_has key dictionary` reports whether the key exists, without retrieving its value.
 
@@ -123,18 +123,18 @@ let scores = dict_from_entries [("alice", 10), ("bob", 12)] in
 
 ### `dict_is_empty`
 
-Type: `dict_is_empty : Dict a -> bool`
+Type: `dict_is_empty : Dict a -> Bool`
 
 `dict_is_empty dictionary` is `true` only when the dictionary has no entries.
 
 ```rex,interactive
-let empty: Dict string = dict_empty in
+let empty: Dict String = dict_empty in
 (dict_is_empty empty, dict_is_empty (dict_singleton "name" "Rex"))
 ```
 
 ### `dict_keys`
 
-Type: `dict_keys : Dict a -> List string`
+Type: `dict_keys : Dict a -> List String`
 
 `dict_keys dictionary` returns all keys in ascending lexicographic order.
 
@@ -157,7 +157,7 @@ The result is `[2, 3, 1]`, corresponding to keys `alpha`, `middle`, and `z`.
 
 ### `dict_entries`
 
-Type: `dict_entries : Dict a -> List (string, a)`
+Type: `dict_entries : Dict a -> List (String, a)`
 
 `dict_entries dictionary` returns key/value tuples in ascending lexicographic key order.
 
@@ -169,7 +169,7 @@ dict_entries (dict_from_entries [("z", 1), ("alpha", 2), ("middle", 3)])
 
 ### `dict_insert`
 
-Type: `dict_insert : string -> a -> Dict a -> Dict a`
+Type: `dict_insert : String -> a -> Dict a -> Dict a`
 
 `dict_insert key value dictionary` returns a new dictionary. It adds an absent key or replaces the
 value of a present key. The input dictionary remains unchanged.
@@ -185,7 +185,7 @@ in
 
 ### `dict_remove`
 
-Type: `dict_remove : string -> Dict a -> Dict a`
+Type: `dict_remove : String -> Dict a -> Dict a`
 
 `dict_remove key dictionary` returns a new dictionary without that key. Removing an absent key
 returns an equivalent dictionary and is not an error.
@@ -197,7 +197,7 @@ let original = dict_from_entries [("a", 1), ("b", 2)] in
 
 ### `dict_update`
 
-Type: `dict_update : string -> (Option a -> Option a) -> Dict a -> Dict a`
+Type: `dict_update : String -> (Option a -> Option a) -> Dict a -> Dict a`
 
 `dict_update key update dictionary` calls `update` with `Some current_value` when the key is present
 or `None` when it is absent. The callback's result controls the new dictionary:
@@ -222,7 +222,7 @@ in
 
 ## Transforming entries
 
-The `dict_map` and `dict_filter` callbacks receive a two-element `(string, a)` tuple, so they can
+The `dict_map` and `dict_filter` callbacks receive a two-element `(String, a)` tuple, so they can
 inspect both the key and value. Use a tuple pattern in a `match` expression to name both parts.
 
 Callback applications for different entries may run in parallel. Rex functions are pure, so this
@@ -230,10 +230,10 @@ does not change the result.
 
 ### `dict_map`
 
-Type: `dict_map : ((string, a) -> (string, b)) -> Dict a -> Dict b`
+Type: `dict_map : ((String, a) -> (String, b)) -> Dict a -> Dict b`
 
 `dict_map transform dictionary` transforms both keys and values. The callback must return a
-`(string, b)` tuple, which becomes an entry in the result.
+`(String, b)` tuple, which becomes an entry in the result.
 
 ```rex,interactive
 let
@@ -263,7 +263,7 @@ The input order is `a`, `b`, `c`, so the final dictionary contains `"c:3"` at ke
 
 ### `dict_filter`
 
-Type: `dict_filter : ((string, a) -> bool) -> Dict a -> Dict a`
+Type: `dict_filter : ((String, a) -> Bool) -> Dict a -> Dict a`
 
 `dict_filter predicate dictionary` keeps each original entry for which the predicate returns
 `true`. The predicate can inspect both key and value. Accepted entries keep their original keys and
@@ -299,7 +299,7 @@ map
 
 ### `filter` on dictionaries
 
-Type: `filter : (a -> bool) -> Dict a -> Dict a`
+Type: `filter : (a -> Bool) -> Dict a -> Dict a`
 
 `filter predicate dictionary` tests values only and preserves the keys of accepted values. Use
 `dict_filter` when filtering depends on a key.

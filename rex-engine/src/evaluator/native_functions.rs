@@ -1280,7 +1280,7 @@ impl Coroutine for NativeDictEntryMap<RootedPtr> {
             let pair = scope.root_as_tuple(result)?;
             if pair.len() != 2 {
                 return Err(EngineError::NativeType {
-                    expected: "(string, a)".into(),
+                    expected: "(String, a)".into(),
                     got: scope.type_name(result)?.into(),
                 });
             }

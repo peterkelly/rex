@@ -4,7 +4,7 @@ This mirrors `rex-cli/examples/typeclasses_custom_show.rex`.
 
 ## Goal
 
-Define your own show-printing API that turns values into `string` without baking formatting into
+Define your own show-printing API that turns values into `String` without baking formatting into
 every call site.
 
 We’ll build it up in layers:
@@ -16,7 +16,7 @@ We’ll build it up in layers:
 
 ```rex,interactive
 class DemoShow a where {
-  demo_show : a -> string;
+  demo_show : a -> String;
 }
 type Point = Point { x: i32, y: i32 };
 
@@ -40,7 +40,7 @@ Here is the list instance from the repo example, with commentary:
 
 ```rex,interactive
 class DemoShow a where {
-  demo_show : a -> string;
+  demo_show : a -> String;
 }
 instance DemoShow i32 where {
   demo_show = \_ -> "<i32>";
@@ -70,7 +70,7 @@ Problem: format list output with semicolons.
 
 ```rex,interactive
 class DemoShow a where {
-  demo_show : a -> string;
+  demo_show : a -> String;
 }
 instance DemoShow i32 where {
   demo_show = \_ -> "<i32>";
@@ -91,21 +91,21 @@ demo_show [1, 2, 3]
 
 Why this works: only the separator string changed; the fold structure stays the same.
 
-### Example: `DemoShow bool`
+### Example: `DemoShow Bool`
 
 Problem: add show-print support for booleans.
 
 ```rex,interactive
 class DemoShow a where {
-  demo_show : a -> string;
+  demo_show : a -> String;
 }
-instance DemoShow bool where {
+instance DemoShow Bool where {
   demo_show = \b -> if b then "true!" else "false!";
 }
 (demo_show true, demo_show false)
 ```
 
-Why this works: the instance defines one method body specialized to `bool`.
+Why this works: the instance defines one method body specialized to `Bool`.
 
 ### Example: `DemoShow (Option a)`
 
@@ -113,7 +113,7 @@ Problem: print `Some(...)` and `None` for options.
 
 ```rex,interactive
 class DemoShow a where {
-  demo_show : a -> string;
+  demo_show : a -> String;
 }
 instance DemoShow i32 where {
   demo_show = \_ -> "<i32>";

@@ -6,6 +6,6 @@ fn choose<a,b> left: a -> right: b -> a =
 
 let
     total: f32 = sum3 10.0 20.0 12.0,
-    picked: string = choose "left" 99
+    picked: String = choose "left" 99
 in
     (total, picked)
