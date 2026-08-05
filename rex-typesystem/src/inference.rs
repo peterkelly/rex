@@ -596,6 +596,7 @@ fn collect_let_rec_refs(
         | Expr::Uint(..)
         | Expr::Int(..)
         | Expr::Float(..)
+        | Expr::Char(..)
         | Expr::String(..)
         | Expr::Uuid(..)
         | Expr::DateTime(..)
@@ -1232,6 +1233,7 @@ fn infer_expr_type_inner(
             let lit_ty = Type::var(supply.fresh(Some(Symbol::intern("n"))));
             Ok((vec![Predicate::new("Field", lit_ty.clone())], lit_ty))
         }
+        Expr::Char(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::Char))),
         Expr::String(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::String))),
         Expr::Uuid(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::Uuid))),
         Expr::DateTime(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::DateTime))),
@@ -1689,6 +1691,14 @@ fn infer_expr(
                     vec![Predicate::new("Field", t.clone())],
                     t.clone(),
                     TypedExpr::new(t, TypedExprKind::Float(*v)),
+                ))
+            }
+            Expr::Char(_, v) => {
+                let t = Type::builtin(BuiltinTypeId::Char);
+                Ok((
+                    vec![],
+                    t.clone(),
+                    TypedExpr::new(t, TypedExprKind::Char(*v)),
                 ))
             }
             Expr::String(_, v) => {

@@ -274,6 +274,7 @@ fn rename_expr(
         Expr::Uint(span, v) => Expr::Uint(*span, *v),
         Expr::Int(span, v) => Expr::Int(*span, *v),
         Expr::Float(span, v) => Expr::Float(*span, *v),
+        Expr::Char(span, v) => Expr::Char(*span, *v),
         Expr::String(span, v) => Expr::String(*span, v.clone()),
         Expr::Uuid(span, v) => Expr::Uuid(*span, *v),
         Expr::DateTime(span, v) => Expr::DateTime(*span, *v),

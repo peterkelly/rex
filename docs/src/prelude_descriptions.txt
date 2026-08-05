@@ -9,6 +9,7 @@ type:Option	Optional value (`Some` or `None`).
 type:Ordering	Three-way comparison result (`Less`, `Equal`, or `Greater`).
 type:Result	Result value (`Ok` or `Err`) for success/failure flows.
 type:Bool	Boolean truth value.
+type:Char	One Unicode scalar value, matching Rust's `char`.
 type:DateTime	UTC timestamp value.
 type:f32	32-bit floating-point number.
 type:f64	64-bit floating-point number.

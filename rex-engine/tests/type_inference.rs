@@ -379,6 +379,7 @@ fn infer_type_annotation_ok() {
 fn renamed_builtin_type_annotations_use_capitalized_names() {
     for (name, id) in [
         ("Bool", BuiltinTypeId::Bool),
+        ("Char", BuiltinTypeId::Char),
         ("String", BuiltinTypeId::String),
         ("UUID", BuiltinTypeId::Uuid),
         ("Hash", BuiltinTypeId::Hash),
@@ -391,7 +392,7 @@ fn renamed_builtin_type_annotations_use_capitalized_names() {
         assert_eq!(ty, Type::fun(builtin.clone(), builtin), "{name}");
     }
 
-    for name in ["bool", "string", "uuid", "hash", "datetime"] {
+    for name in ["bool", "char", "string", "uuid", "hash", "datetime"] {
         let expr = parse_expr(&format!(r"\(x: {name}) -> x"));
         let mut ts = standard_type_system().unwrap();
         let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
@@ -905,19 +906,19 @@ fn infer_get_list_type() {
 
 #[test]
 fn infer_get_tuple_type() {
-    let expr = parse_expr("(1, 'Hello', true).0");
+    let expr = parse_expr(r#"(1, "Hello", true).0"#);
     let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
 
-    let expr = parse_expr("(1, 'Hello', true).1");
+    let expr = parse_expr(r#"(1, "Hello", true).1"#);
     let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
 
-    let expr = parse_expr("(1, 'Hello', true).2");
+    let expr = parse_expr(r#"(1, "Hello", true).2"#);
     let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::Bool));

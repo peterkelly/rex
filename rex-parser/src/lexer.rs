@@ -57,7 +57,6 @@ pub enum Token {
     // Operators
     Add(Span),
     And(Span),
-    Concat(Span),
     Div(Span),
     Dot(Span),
     Eq(Span),
@@ -97,6 +96,7 @@ pub enum Token {
 
     // Literals
     Bool(bool, Span),
+    Char(char, Span),
     Float(f64, Span),
     Int(u64, Span),
     Null(Span),
@@ -148,18 +148,28 @@ fn advance_position(lexeme: &str, line: &mut usize, column: &mut usize) {
     }
 }
 
-fn invalid_string_escape(raw: &str, span: Span, error: impl Into<String>) -> LexicalError {
+fn invalid_literal(
+    kind: &'static str,
+    raw: &str,
+    span: Span,
+    error: impl Into<String>,
+) -> LexicalError {
     LexicalError::InvalidLiteral {
-        kind: "string",
+        kind,
         text: raw.to_string(),
         error: error.into(),
         span,
     }
 }
 
-fn char_from_escape_value(raw: &str, span: Span, value: u32) -> Result<char, LexicalError> {
+fn char_from_escape_value(
+    kind: &'static str,
+    raw: &str,
+    span: Span,
+    value: u32,
+) -> Result<char, LexicalError> {
     char::from_u32(value)
-        .ok_or_else(|| invalid_string_escape(raw, span, "escape sequence is not a valid character"))
+        .ok_or_else(|| invalid_literal(kind, raw, span, "escape sequence is not a valid character"))
 }
 
 fn hex_value(ch: char) -> Option<u32> {
@@ -179,6 +189,7 @@ fn octal_value(ch: char) -> Option<u32> {
 }
 
 fn parse_fixed_hex_escape(
+    kind: &'static str,
     raw: &str,
     span: Span,
     chars: &mut Peekable<Chars<'_>>,
@@ -187,14 +198,16 @@ fn parse_fixed_hex_escape(
     let mut value = 0u32;
     for _ in 0..digits {
         let Some(ch) = chars.next() else {
-            return Err(invalid_string_escape(
+            return Err(invalid_literal(
+                kind,
                 raw,
                 span,
                 format!("expected {digits} hexadecimal digits in escape sequence"),
             ));
         };
         let Some(digit) = hex_value(ch) else {
-            return Err(invalid_string_escape(
+            return Err(invalid_literal(
+                kind,
                 raw,
                 span,
                 format!("expected hexadecimal digit in escape sequence, got `{ch}`"),
@@ -202,10 +215,11 @@ fn parse_fixed_hex_escape(
         };
         value = value * 16 + digit;
     }
-    char_from_escape_value(raw, span, value)
+    char_from_escape_value(kind, raw, span, value)
 }
 
 fn parse_variable_hex_escape(
+    kind: &'static str,
     raw: &str,
     span: Span,
     chars: &mut Peekable<Chars<'_>>,
@@ -221,26 +235,29 @@ fn parse_variable_hex_escape(
         value = value
             .checked_mul(16)
             .and_then(|v| v.checked_add(digit))
-            .ok_or_else(|| invalid_string_escape(raw, span, "hex escape value is too large"))?;
+            .ok_or_else(|| invalid_literal(kind, raw, span, "hex escape value is too large"))?;
     }
     if !seen {
-        return Err(invalid_string_escape(
+        return Err(invalid_literal(
+            kind,
             raw,
             span,
             "expected hexadecimal digit after `\\x`",
         ));
     }
-    char_from_escape_value(raw, span, value)
+    char_from_escape_value(kind, raw, span, value)
 }
 
 fn parse_octal_escape(
+    kind: &'static str,
     raw: &str,
     span: Span,
     chars: &mut Peekable<Chars<'_>>,
     first: char,
 ) -> Result<char, LexicalError> {
     let Some(mut value) = octal_value(first) else {
-        return Err(invalid_string_escape(
+        return Err(invalid_literal(
+            kind,
             raw,
             span,
             format!("expected octal digit in escape sequence, got `{first}`"),
@@ -256,10 +273,10 @@ fn parse_octal_escape(
         chars.next();
         value = value * 8 + digit;
     }
-    char_from_escape_value(raw, span, value)
+    char_from_escape_value(kind, raw, span, value)
 }
 
-fn unescape_string_literal(raw: &str, span: Span) -> Result<String, LexicalError> {
+fn unescape_literal(kind: &'static str, raw: &str, span: Span) -> Result<String, LexicalError> {
     let mut out = String::new();
     let mut chars = raw.chars().peekable();
 
@@ -270,7 +287,8 @@ fn unescape_string_literal(raw: &str, span: Span) -> Result<String, LexicalError
         }
 
         let Some(escaped) = chars.next() else {
-            return Err(invalid_string_escape(
+            return Err(invalid_literal(
+                kind,
                 raw,
                 span,
                 "unterminated escape sequence",
@@ -295,12 +313,13 @@ fn unescape_string_literal(raw: &str, span: Span) -> Result<String, LexicalError
                     chars.next();
                 }
             }
-            'x' => out.push(parse_variable_hex_escape(raw, span, &mut chars)?),
-            'u' => out.push(parse_fixed_hex_escape(raw, span, &mut chars, 4)?),
-            'U' => out.push(parse_fixed_hex_escape(raw, span, &mut chars, 8)?),
-            '0'..='7' => out.push(parse_octal_escape(raw, span, &mut chars, escaped)?),
+            'x' => out.push(parse_variable_hex_escape(kind, raw, span, &mut chars)?),
+            'u' => out.push(parse_fixed_hex_escape(kind, raw, span, &mut chars, 4)?),
+            'U' => out.push(parse_fixed_hex_escape(kind, raw, span, &mut chars, 8)?),
+            '0'..='7' => out.push(parse_octal_escape(kind, raw, span, &mut chars, escaped)?),
             _ => {
-                return Err(invalid_string_escape(
+                return Err(invalid_literal(
+                    kind,
                     raw,
                     span,
                     format!("unsupported escape sequence `\\{escaped}`"),
@@ -432,9 +451,7 @@ impl Token {
                 }
 
                 // Operators
-                else if capture.name("Concat").is_some() {
-                    Token::Concat(span)
-                } else if capture.name("Add").is_some() {
+                else if capture.name("Add").is_some() {
                     Token::Add(span)
                 } else if capture.name("And").is_some() {
                     Token::And(span)
@@ -497,9 +514,28 @@ impl Token {
                 } else if capture.name("Null").is_some() {
                     Token::Null(span)
                 } else if let Some(m) = capture.name("DoubleString") {
-                    Token::String(unescape_string_literal(m.as_str(), span)?, span)
-                } else if let Some(m) = capture.name("SingleString") {
-                    Token::String(unescape_string_literal(m.as_str(), span)?, span)
+                    Token::String(unescape_literal("string", m.as_str(), span)?, span)
+                } else if let Some(m) = capture.name("Char") {
+                    let raw = m.as_str();
+                    let value = unescape_literal("char", raw, span)?;
+                    let mut chars = value.chars();
+                    let Some(value) = chars.next() else {
+                        return Err(invalid_literal(
+                            "char",
+                            raw,
+                            span,
+                            "expected exactly one Unicode scalar value, got none",
+                        ));
+                    };
+                    if chars.next().is_some() {
+                        return Err(invalid_literal(
+                            "char",
+                            raw,
+                            span,
+                            "expected exactly one Unicode scalar value, got more than one",
+                        ));
+                    }
+                    Token::Char(value, span)
                 }
 
                 // Idents
@@ -575,7 +611,6 @@ impl Token {
                 r"(?P<SkipSpace>( |\t))|",
                 r"(?P<SkipLineBreak>(\r\n|\n|\r))|",
                 // Operators
-                r"(?P<Concat>\+\+)|",
                 r"(?P<Add>\+)|",
                 r"(?P<And>&&)|",
                 r"(?P<Div>/)|",
@@ -598,7 +633,7 @@ impl Token {
                 r"(?P<Int>[0-9]+)|",
                 r"(?P<Null>\bnull\b)|",
                 r#""(?P<DoubleString>(\\"|[^"])*)"|"#,
-                r#"'(?P<SingleString>(\\'|[^'])*)'|"#,
+                r#"'(?P<Char>(\\'|[^'])*)'|"#,
                 // Idents
                 r"(?P<Ident>[_a-zA-Z]([_a-zA-Z]|[0-9])*)|",
                 // Unexpected
@@ -621,7 +656,7 @@ impl Token {
             Or(..) => Precedence(1),
             And(..) => Precedence(2),
             Eq(..) | Ne(..) | Lt(..) | Le(..) | Gt(..) | Ge(..) => Precedence(3),
-            Add(..) | Sub(..) | Concat(..) => Precedence(4),
+            Add(..) | Sub(..) => Precedence(4),
             Mul(..) | Div(..) | Mod(..) => Precedence(5),
             Ident(..) => Precedence::highest(),
             _ => Precedence::lowest(),
@@ -688,7 +723,6 @@ impl Spanned for Token {
             // Operators
             Add(span, ..) => *span,
             And(span, ..) => *span,
-            Concat(span, ..) => *span,
             Div(span, ..) => *span,
             Eq(span, ..) => *span,
             Ne(span, ..) => *span,
@@ -703,6 +737,7 @@ impl Spanned for Token {
 
             // Literals
             Bool(_, span, ..) => *span,
+            Char(_, span, ..) => *span,
             Float(_, span, ..) => *span,
             Int(_, span, ..) => *span,
             Null(span, ..) => *span,
@@ -770,7 +805,6 @@ impl Display for Token {
             // Operators
             Add(..) => write!(f, "+"),
             And(..) => write!(f, "&&"),
-            Concat(..) => write!(f, "++"),
             Div(..) => write!(f, "/"),
             Eq(..) => write!(f, "=="),
             Ne(..) => write!(f, "!="),
@@ -785,6 +819,7 @@ impl Display for Token {
 
             // Literals
             Bool(x, ..) => write!(f, "{}", x),
+            Char(x, ..) => rex_ast::char_literal(*x).fmt(f),
             Float(x, ..) => write!(f, "{}", x),
             Int(x, ..) => write!(f, "{}", x),
             Null(..) => write!(f, "null"),

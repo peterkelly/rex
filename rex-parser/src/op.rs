@@ -4,7 +4,6 @@ use std::fmt::{self, Display, Formatter};
 pub enum Operator {
     Add,
     And,
-    Concat,
     Div,
     Eq,
     Ne,
@@ -23,7 +22,6 @@ impl Display for Operator {
         let s = match self {
             Operator::Add => "+".to_string(),
             Operator::And => "&&".to_string(),
-            Operator::Concat => "++".to_string(),
             Operator::Div => "/".to_string(),
             Operator::Eq => "==".to_string(),
             Operator::Ne => "!=".to_string(),

@@ -49,6 +49,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             BuiltinTypeId::I64,
             BuiltinTypeId::F32,
             BuiltinTypeId::F64,
+            BuiltinTypeId::Char,
             BuiltinTypeId::String,
             BuiltinTypeId::Uuid,
             BuiltinTypeId::Hash,
@@ -254,6 +255,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             BuiltinTypeId::I64,
             BuiltinTypeId::F32,
             BuiltinTypeId::F64,
+            BuiltinTypeId::Char,
             BuiltinTypeId::String,
         ];
         for builtin in ord {
@@ -293,6 +295,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             BuiltinTypeId::I64,
             BuiltinTypeId::F32,
             BuiltinTypeId::F64,
+            BuiltinTypeId::Char,
             BuiltinTypeId::String,
             BuiltinTypeId::Uuid,
             BuiltinTypeId::Hash,
@@ -728,6 +731,7 @@ pub(super) fn inject_standard_prelude(
         BuiltinTypeId::F32,
         BuiltinTypeId::F64,
         BuiltinTypeId::Bool,
+        BuiltinTypeId::Char,
         BuiltinTypeId::String,
         BuiltinTypeId::Uuid,
         BuiltinTypeId::Hash,

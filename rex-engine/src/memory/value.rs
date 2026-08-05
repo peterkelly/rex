@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt, sync::Arc};
 
 use blake3::Hash;
 use chrono::{DateTime, Utc};
-use rex_ast::Symbol;
+use rex_ast::{Symbol, char_literal};
 use rex_typesystem::{
     types::{AdtDecl, Type, TypeKind},
     typesystem::TypeSystem,
@@ -35,6 +35,7 @@ pub enum Value {
     I64(i64),
     F32(f32),
     F64(f64),
+    Char(char),
     String(String),
     Uuid(Uuid),
     Hash(Hash),
@@ -60,6 +61,7 @@ impl Value {
             Self::I64(_) => "i64",
             Self::F32(_) => "f32",
             Self::F64(_) => "f64",
+            Self::Char(_) => "Char",
             Self::String(_) => "String",
             Self::Uuid(_) => "UUID",
             Self::Hash(_) => "Hash",
@@ -125,6 +127,10 @@ impl Value {
     }
 
     pub fn as_f64(&self) -> Result<f64, EngineError> {
+        self.to_rust()
+    }
+
+    pub fn as_char(&self) -> Result<char, EngineError> {
         self.to_rust()
     }
 
@@ -194,6 +200,7 @@ impl Value {
             Self::I64(value) => number!(value, "i64"),
             Self::F32(value) => number!(value, "f32"),
             Self::F64(value) => number!(value, "f64"),
+            Self::Char(value) => char_literal(*value),
             Self::String(value) => format!("{value:?}"),
             Self::Uuid(value) => value.to_string(),
             Self::Hash(value) => value.to_hex().to_string(),
@@ -523,6 +530,12 @@ fn value_from_root(
                                 .map(Value::F64)
                                 .map_err(|_| mismatch(scope))?,
                         ),
+                        ("Char", []) => Some(
+                            scope
+                                .root_as_char(root)
+                                .map(Value::Char)
+                                .map_err(|_| mismatch(scope))?,
+                        ),
                         ("String", []) => Some(
                             scope
                                 .root_as_string(root)
@@ -774,6 +787,7 @@ fn value_into_root(
                             ("i64", [], Value::I64(value)) => Some(scope.alloc_root_i64(value)?),
                             ("f32", [], Value::F32(value)) => Some(scope.alloc_root_f32(value)?),
                             ("f64", [], Value::F64(value)) => Some(scope.alloc_root_f64(value)?),
+                            ("Char", [], Value::Char(value)) => Some(scope.alloc_root_char(value)?),
                             ("String", [], Value::String(value)) => {
                                 Some(scope.alloc_root_string(value)?)
                             }

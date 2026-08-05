@@ -97,6 +97,17 @@ macro_rules! s {
 }
 
 #[macro_export]
+macro_rules! c {
+    ($x:expr) => {
+        ::std::sync::Arc::new($crate::Expr::Char($crate::Span::default(), $x))
+    };
+
+    ($span:expr; $x:expr) => {
+        ::std::sync::Arc::new($crate::Expr::Char(($span).into(), $x))
+    };
+}
+
+#[macro_export]
 macro_rules! tup {
     ($($xs:expr),* $(,)?) => {
         ::std::sync::Arc::new($crate::Expr::Tuple($crate::Span::default(), vec![$($xs),*]))

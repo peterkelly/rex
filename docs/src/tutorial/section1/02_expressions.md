@@ -11,12 +11,14 @@ This page introduces the “everyday” expression forms you’ll use constantly
 , false
 , 123
 , 3.14
+, 'λ'
 , "hello"
 )
 ```
 
-Common primitive types are `Bool`, `i32`, `f32`, `String` (plus `UUID`, `Hash`, `DateTime` if enabled by
-the host).
+Common primitive types are `Bool`, `i32`, `f32`, `Char`, and `String` (plus `UUID`, `Hash`,
+`DateTime` if enabled by the host). A character literal uses single quotes and contains exactly one
+Unicode scalar value; strings use double quotes.
 
 ### Integers vs floats
 

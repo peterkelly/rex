@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{Builder, CompileOptions, EngineError, FromRex, Value},
+    engine::{Builder, CompileOptions, EngineError, FromRex, IntoRex, Value},
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, RexType, Type},
 };
@@ -26,6 +26,24 @@ async fn infer_type(builder: Builder<()>, expr: &str) -> Type {
         .await
         .unwrap();
     program.result_type().clone()
+}
+
+#[tokio::test]
+async fn char_uses_the_rust_scalar_bridge() {
+    fn echo_char(_state: &(), value: char) -> Result<char, EngineError> {
+        Ok(value)
+    }
+
+    assert_eq!(char::rex_type(), Type::builtin(BuiltinTypeId::Char));
+    assert_eq!('😀'.into_rex().unwrap(), Value::Char('😀'));
+    assert_eq!(char::from_rex(Value::Char('\u{0301}')).unwrap(), '\u{0301}');
+
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| module.export("echo_char", echo_char)).unwrap();
+
+    let (result, _, ty) = eval_expr(builder, "echo_char '😀'").await;
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::Char));
+    assert_eq!(result, Value::Char('😀'));
 }
 
 #[tokio::test]
@@ -496,6 +514,29 @@ struct Point {
 struct ErrorInfo {
     code: i32,
     message: String,
+}
+
+#[derive(Rex, Debug, PartialEq)]
+struct CharacterRecord {
+    value: char,
+}
+
+#[tokio::test]
+async fn derived_types_accept_char_fields() {
+    fn identity(_state: &(), value: CharacterRecord) -> Result<CharacterRecord, EngineError> {
+        Ok(value)
+    }
+
+    let mut builder = Builder::with_prelude(()).unwrap();
+    CharacterRecord::inject_rex(&mut builder).unwrap();
+    common::inject_globals(&mut builder, |module| module.export("identity", identity)).unwrap();
+
+    let (result, _, ty) = eval_expr(builder, "identity (CharacterRecord { value = 'λ' })").await;
+    assert_eq!(ty, CharacterRecord::rex_type());
+    assert_eq!(
+        CharacterRecord::from_rex(result).unwrap(),
+        CharacterRecord { value: 'λ' }
+    );
 }
 
 #[tokio::test]

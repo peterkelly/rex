@@ -589,6 +589,7 @@ fn cmp_rooted_by_type(
                         got: "nan".into(),
                     })
             }
+            Some(BuiltinTypeId::Char) => compare_ord!(root_as_char, tc.name_str()),
             Some(BuiltinTypeId::String) => compare_ord!(root_as_string, tc.name_str()),
             Some(BuiltinTypeId::Uuid) => compare_ord!(root_as_uuid, tc.name_str()),
             Some(BuiltinTypeId::DateTime) => compare_ord!(root_as_datetime, tc.name_str()),
@@ -697,6 +698,8 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
     engine.export("prim_eq", |_: &State, a: f64, b: f64| Ok(a == b))?;
     engine.export("prim_ne", |_: &State, a: f64, b: f64| Ok(a != b))?;
 
+    engine.export("prim_eq", |_: &State, a: char, b: char| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: char, b: char| Ok(a != b))?;
     engine.export("prim_eq", |_: &State, a: String, b: String| Ok(a == b))?;
     engine.export("prim_ne", |_: &State, a: String, b: String| Ok(a != b))?;
     engine.export("prim_eq", |_: &State, a: Uuid, b: Uuid| Ok(a == b))?;
@@ -854,6 +857,12 @@ fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     engine.export("prim_ge", |_: &State, a: i64, b: i64| Ok(a >= b))?;
     inject_cmp!(I64, root_as_i64);
 
+    engine.export("prim_lt", |_: &State, a: char, b: char| Ok(a < b))?;
+    engine.export("prim_le", |_: &State, a: char, b: char| Ok(a <= b))?;
+    engine.export("prim_gt", |_: &State, a: char, b: char| Ok(a > b))?;
+    engine.export("prim_ge", |_: &State, a: char, b: char| Ok(a >= b))?;
+    inject_cmp!(Char, root_as_char);
+
     engine.export("prim_lt", |_: &State, a: String, b: String| Ok(a < b))?;
     engine.export("prim_le", |_: &State, a: String, b: String| Ok(a <= b))?;
     engine.export("prim_gt", |_: &State, a: String, b: String| Ok(a > b))?;
@@ -971,6 +980,7 @@ fn inject_show_ops<State: Clone + Send + Sync + 'static>(
     engine.export("prim_show", |_: &State, x: i64| Ok(x.to_string()))?;
     engine.export("prim_show", |_: &State, x: f32| Ok(x.to_string()))?;
     engine.export("prim_show", |_: &State, x: f64| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: char| Ok(x.to_string()))?;
     engine.export("prim_show", |_: &State, x: String| Ok(x))?;
     engine.export("prim_show", |_: &State, x: Uuid| Ok(x.to_string()))?;
     engine.export("prim_show", |_: &State, x: Hash| Ok(x.to_hex().to_string()))?;
@@ -2697,6 +2707,7 @@ mod tests {
             | Expr::Uint(..)
             | Expr::Int(..)
             | Expr::Float(..)
+            | Expr::Char(..)
             | Expr::String(..)
             | Expr::Uuid(..)
             | Expr::DateTime(..)

@@ -342,6 +342,7 @@ pub(crate) fn frame_for_expr(
         | TypedExprKind::Uint(_)
         | TypedExprKind::Int(_)
         | TypedExprKind::Float(_)
+        | TypedExprKind::Char(_)
         | TypedExprKind::String(_)
         | TypedExprKind::Uuid(_)
         | TypedExprKind::DateTime(_) => Frame::Literal(FrLiteral { parent, expr }),
@@ -610,6 +611,7 @@ fn eval_literal_enter(
         TypedExprKind::Uint(value) => alloc_uint_literal_as(scope, *value, &frame.expr.typ)?,
         TypedExprKind::Int(value) => alloc_int_literal_as(scope, *value, &frame.expr.typ)?,
         TypedExprKind::Float(value) => alloc_float_literal_as(scope, *value, &frame.expr.typ)?,
+        TypedExprKind::Char(value) => scope.alloc_root_char(*value)?,
         TypedExprKind::String(value) => scope.alloc_root_string(value.clone())?,
         TypedExprKind::Uuid(value) => scope.alloc_root_uuid(*value)?,
         TypedExprKind::DateTime(value) => scope.alloc_root_datetime(*value)?,

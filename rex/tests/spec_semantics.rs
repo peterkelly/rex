@@ -9,6 +9,45 @@ use rex::{
 use common::strip_type_span;
 
 #[tokio::test]
+async fn spec_char_is_one_unicode_scalar_value() {
+    let (_heap, handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), "'😀'")
+        .await
+        .unwrap();
+
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::Char));
+    assert_eq!(handle, Value::Char('😀'));
+}
+
+#[tokio::test]
+async fn spec_char_typeclasses_follow_rust_char_semantics() {
+    let (_heap, handle, ty) = common::eval_source(
+        Builder::with_prelude(()).unwrap(),
+        r#"('a' == 'a', 'a' < 'b', show '😀', let x: Char = default in x)"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::Char),
+        ])
+    );
+    assert_eq!(
+        handle,
+        Value::Tuple(vec![
+            Value::Bool(true),
+            Value::Bool(true),
+            Value::String("😀".to_owned()),
+            Value::Char('\0'),
+        ])
+    );
+}
+
+#[tokio::test]
 async fn spec_c_style_comments_are_trivia() {
     let (_heap, handle, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),

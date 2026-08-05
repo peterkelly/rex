@@ -50,6 +50,7 @@ fn zero_arity_builtin_types_serialize_as_builtin_types() {
         WireType::from_type(&Type::builtin(BuiltinTypeId::F32)),
         WireType::from_type(&Type::builtin(BuiltinTypeId::F64)),
         WireType::from_type(&Type::builtin(BuiltinTypeId::Bool)),
+        WireType::from_type(&Type::builtin(BuiltinTypeId::Char)),
         WireType::from_type(&Type::builtin(BuiltinTypeId::String)),
         WireType::from_type(&Type::builtin(BuiltinTypeId::Uuid)),
         WireType::from_type(&Type::builtin(BuiltinTypeId::Hash)),
@@ -70,6 +71,7 @@ fn zero_arity_builtin_types_serialize_as_builtin_types() {
             { "kind": "builtin", "name": "f32" },
             { "kind": "builtin", "name": "f64" },
             { "kind": "builtin", "name": "Bool" },
+            { "kind": "builtin", "name": "Char" },
             { "kind": "builtin", "name": "String" },
             { "kind": "builtin", "name": "UUID" },
             { "kind": "builtin", "name": "Hash" },
@@ -83,7 +85,8 @@ fn zero_arity_builtin_types_serialize_as_builtin_types() {
         .collect::<Result<Vec<_>, _>>()
         .expect("decode wire types");
     assert_eq!(decoded[6], Type::builtin(BuiltinTypeId::I32));
-    assert_eq!(decoded[11], Type::builtin(BuiltinTypeId::String));
+    assert_eq!(decoded[11], Type::builtin(BuiltinTypeId::Char));
+    assert_eq!(decoded[12], Type::builtin(BuiltinTypeId::String));
 }
 
 #[test]

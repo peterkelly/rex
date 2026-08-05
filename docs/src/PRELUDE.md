@@ -1,12 +1,13 @@
 # Built-in types & functions
 
-> This page is auto-generated from the prelude source. Run `cargo run -p rex --bin gen_prelude_docs` to refresh it.
+> This page is auto-generated from the prelude source. Run `cargo run -p rex-cli --bin gen_prelude_docs` to refresh it.
 
 ## Built-in Types
 
 | Type | Description |
 |---|---|
 | `Bool` | Boolean truth value. |
+| `Char` | One Unicode scalar value, matching Rust's `char`. |
 | `DateTime` | UTC timestamp value. |
 | `Dict a` | Immutable mapping from string keys to values of one type. |
 | `Hash` | BLAKE3 hash value. |
@@ -228,10 +229,10 @@ Methods:
 | `or_else` | `((('f 'a) -> ('f 'a)) -> (('f`<br>`'a) -> ('f 'a)))` | `List`<br>`Option`<br>`(Result 'e)` | Provide an alternative container value. |
 | `pure` | `('a -> ('f 'a))` | `List`<br>`Option`<br>`(Result 'e)` | Lift a plain value into an applicative context. |
 | `ap` | `(('f ('a -> 'b)) -> (('f 'a)`<br>`-> ('f 'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Apply wrapped functions to wrapped values. |
-| `default` | `'a` | `Bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Canonical default value for a type. For `Result a e`, this requires `Default a`. |
+| `default` | `'a` | `Bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Char`<br>`String`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Canonical default value for a type. For `Result a e`, this requires `Default a`. |
 | `/` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Division. |
-| `==` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Bool`<br>`String`<br>`UUID`<br>`Hash`<br>`DateTime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Equality comparison. |
-| `!=` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Bool`<br>`String`<br>`UUID`<br>`Hash`<br>`DateTime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Inequality comparison. |
+| `==` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Bool`<br>`Char`<br>`String`<br>`UUID`<br>`Hash`<br>`DateTime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Equality comparison. |
+| `!=` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Bool`<br>`Char`<br>`String`<br>`UUID`<br>`Hash`<br>`DateTime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Inequality comparison. |
 | `filter` | `(('a -> Bool) -> (('f 'a) ->`<br>`('f 'a)))` | `List`<br>`Option`<br>`Dict` | Keep elements that satisfy a predicate. |
 | `filter_map` | `(('a -> (Option 'b)) -> (('f`<br>`'a) -> ('f 'b)))` | `List`<br>`Option`<br>`Dict` | Map and drop missing results in one pass. |
 | `foldl` | `(('b -> ('a -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option` | Strict left fold. |
@@ -244,16 +245,16 @@ Methods:
 | `bind` | `(('a -> ('m 'b)) -> (('m 'a)`<br>`-> ('m 'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Monadic flat-map/sequencing operation. |
 | `one` | `'a` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Multiplicative identity. |
 | `*` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Multiplication. |
-| `cmp` | `('a -> ('a -> Ordering))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Three-way comparison returning `Less`, `Equal`, or `Greater`. |
-| `<` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Less-than comparison. |
-| `<=` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Less-than-or-equal comparison. |
-| `>` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Greater-than comparison. |
-| `>=` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Greater-than-or-equal comparison. |
+| `cmp` | `('a -> ('a -> Ordering))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Char`<br>`String` | Three-way comparison returning `Less`, `Equal`, or `Greater`. |
+| `<` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Char`<br>`String` | Less-than comparison. |
+| `<=` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Char`<br>`String` | Less-than-or-equal comparison. |
+| `>` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Char`<br>`String` | Greater-than comparison. |
+| `>=` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Char`<br>`String` | Greater-than-or-equal comparison. |
 | `take` | `(u64 -> (('f 'a) -> ('f 'a)))` | `List` | Keep only the first `n` elements. |
 | `skip` | `(u64 -> (('f 'a) -> ('f 'a)))` | `List` | Drop the first `n` elements. |
 | `zip` | `(('f 'a) -> (('f 'b) -> ('f`<br>`('a, 'b))))` | `List` | Pair elements from two containers by position. |
 | `unzip` | `(('f ('a, 'b)) -> (('f 'a),`<br>`('f 'b)))` | `List` | Split a container of pairs into a pair of containers. |
-| `show` | `('a -> String)` | `Bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String`<br>`UUID`<br>`Hash`<br>`DateTime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Render a value as a human-readable string. |
+| `show` | `('a -> String)` | `Bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`Char`<br>`String`<br>`UUID`<br>`Hash`<br>`DateTime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Render a value as a human-readable string. |
 | `-` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Subtraction. |
 
 ### Other Built-ins

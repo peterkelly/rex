@@ -29,11 +29,14 @@ Rex comments are lexical trivia and are removed before parsing:
 - Nested block comments are not supported.
 - The legacy `{- ... -}` spelling is ordinary syntax, not a comment.
 
-## String Literals
+## Character and String Literals
 
-String literals are decoded during lexing.
+Character and string literals are decoded during lexing.
 
-- Double-quoted (`"..."`) and single-quoted (`'...'`) literals both produce `String` values.
+- Double-quoted (`"..."`) literals produce `String` values.
+- Single-quoted (`'...'`) literals produce `Char` values and must decode to exactly one Unicode
+  scalar value. `Char` has the same value domain as Rust's `char`: surrogate code points and values
+  above `U+10FFFF` are rejected, while every valid Unicode scalar value is accepted.
 - C-style simple escapes are supported: `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\\`, `\"`,
   `\'`, and `\?`.
 - Octal escapes use one to three octal digits (`\0` through `\777`).
@@ -42,6 +45,8 @@ String literals are decoded during lexing.
   eight hexadecimal digits.
 - Backslash-newline is a line continuation and produces no character.
 - Unsupported or malformed escape sequences are lexical errors.
+- At JSON boundaries, `Char` is represented by a JSON string containing exactly one Unicode scalar
+  value.
 
 ## Length
 
@@ -90,7 +95,8 @@ also evaluate in parallel. It preserves each accepted entry's original key and v
 ## Primitive Host Types
 
 The zero-arity primitive types are `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`,
-`f32`, `f64`, `Bool`, `String`, `UUID`, `Hash`, and `DateTime`. The `Hash` type corresponds to a
+`f32`, `f64`, `Bool`, `Char`, `String`, `UUID`, `Hash`, and `DateTime`. `Char` corresponds exactly
+to Rust's `char` and implements `RexType`, `IntoRex`, and `FromRex`. The `Hash` type corresponds to a
 `blake3::Hash` in Rust. At JSON boundaries, hash values are exactly 32 bytes encoded as hexadecimal
 strings; Rex emits the canonical lowercase 64-character representation. `show` uses the same
 representation. `string_to_hash : String -> Hash` accepts a valid hexadecimal BLAKE3 hash and

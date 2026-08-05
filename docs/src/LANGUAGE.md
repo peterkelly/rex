@@ -317,6 +317,7 @@ Common built-in types include:
 - `Bool`
 - `i32` (default integer-literal fallback type)
 - `f32` (float literal type)
+- `Char` (one Unicode scalar value, written with single quotes)
 - `String`
 - `UUID`
 - `Hash`

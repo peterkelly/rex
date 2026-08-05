@@ -1639,6 +1639,7 @@ pub(crate) fn collect_hole_spans(expr: &Expr, out: &mut Vec<Span>) {
         | Expr::Uint(..)
         | Expr::Int(..)
         | Expr::Float(..)
+        | Expr::Char(..)
         | Expr::String(..)
         | Expr::Uuid(..)
         | Expr::DateTime(..) => {}
@@ -1735,6 +1736,7 @@ pub(crate) fn expected_type_from_syntax_context(
             | Expr::Uint(..)
             | Expr::Int(..)
             | Expr::Float(..)
+            | Expr::Char(..)
             | Expr::String(..)
             | Expr::Uuid(..)
             | Expr::DateTime(..)

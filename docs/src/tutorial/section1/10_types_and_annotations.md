@@ -8,7 +8,7 @@ This page is about the “tools” you use to make types explicit when inference
 
 Examples of primitive and constructed types:
 
-- `Bool`, `i32`, `f32`, `String`
+- `Bool`, `i32`, `f32`, `Char`, `String`
 - `(a, b)` for tuples
 - `List a`, `Option a`, `Promise a`, `Result a e` (prelude/built-in constructors)
 

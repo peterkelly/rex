@@ -50,7 +50,7 @@ impl Var {
 impl Display for Var {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.name.as_ref() {
-            "+" | "-" | "*" | "/" | "==" | ">=" | ">" | "<=" | "<" | "++" | "." => {
+            "+" | "-" | "*" | "/" | "==" | ">=" | ">" | "<=" | "<" | "." => {
                 '('.fmt(f)?;
                 self.name.fmt(f)?;
                 ')'.fmt(f)
@@ -587,6 +587,27 @@ impl CompilationUnit {
 
 pub type LetRecBinding = (Var, Vec<Symbol>, Option<TypeExpr>, Arc<Expr>);
 
+/// Format a Unicode scalar value as a Rex character literal.
+pub fn char_literal(value: char) -> String {
+    let escaped = match value {
+        '\x07' => "\\a".to_owned(),
+        '\x08' => "\\b".to_owned(),
+        '\x0c' => "\\f".to_owned(),
+        '\n' => "\\n".to_owned(),
+        '\r' => "\\r".to_owned(),
+        '\t' => "\\t".to_owned(),
+        '\x0b' => "\\v".to_owned(),
+        '\\' => "\\\\".to_owned(),
+        '\'' => "\\'".to_owned(),
+        value if value.is_control() && (value as u32) <= 0xffff => {
+            format!("\\u{:04x}", value as u32)
+        }
+        value if value.is_control() => format!("\\U{:08x}", value as u32),
+        value => value.to_string(),
+    };
+    format!("'{escaped}'")
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Expr {
@@ -594,6 +615,7 @@ pub enum Expr {
     Uint(Span, u64),               // 69
     Int(Span, i64),                // -420
     Float(Span, f64),              // 3.14
+    Char(Span, char),              // 'x'
     String(Span, String),          // "hello"
     Uuid(Span, Uuid),              // a550c18e-36e1-4f6d-8c8e-2d2b1e5f3c3a
     DateTime(Span, DateTime<Utc>), // 2023-01-01T12:00:00Z
@@ -682,6 +704,7 @@ fn drain_expr(expr: &mut Expr, stack: &mut Vec<Arc<Expr>>) {
         | Expr::Uint(..)
         | Expr::Int(..)
         | Expr::Float(..)
+        | Expr::Char(..)
         | Expr::String(..)
         | Expr::Uuid(..)
         | Expr::DateTime(..)
@@ -710,6 +733,7 @@ impl Expr {
             | Self::Uint(span, ..)
             | Self::Int(span, ..)
             | Self::Float(span, ..)
+            | Self::Char(span, ..)
             | Self::String(span, ..)
             | Self::Uuid(span, ..)
             | Self::DateTime(span, ..)
@@ -750,6 +774,7 @@ impl Expr {
             Expr::Uint(_, x) => Expr::Uint(span, *x),
             Expr::Int(_, x) => Expr::Int(span, *x),
             Expr::Float(_, x) => Expr::Float(span, *x),
+            Expr::Char(_, x) => Expr::Char(span, *x),
             Expr::String(_, x) => Expr::String(span, x.clone()),
             Expr::Uuid(_, x) => Expr::Uuid(span, *x),
             Expr::DateTime(_, x) => Expr::DateTime(span, *x),
@@ -817,6 +842,7 @@ impl Expr {
             Expr::Uint(_, x) => Expr::Uint(Span::default(), *x),
             Expr::Int(_, x) => Expr::Int(Span::default(), *x),
             Expr::Float(_, x) => Expr::Float(Span::default(), *x),
+            Expr::Char(_, x) => Expr::Char(Span::default(), *x),
             Expr::String(_, x) => Expr::String(Span::default(), x.clone()),
             Expr::Uuid(_, x) => Expr::Uuid(Span::default(), *x),
             Expr::DateTime(_, x) => Expr::DateTime(Span::default(), *x),
@@ -934,6 +960,7 @@ impl Display for Expr {
             Self::Uint(_span, x) => x.fmt(f),
             Self::Int(_span, x) => x.fmt(f),
             Self::Float(_span, x) => x.fmt(f),
+            Self::Char(_span, x) => char_literal(*x).fmt(f),
             Self::String(_span, x) => write!(f, "{:?}", x),
             Self::Uuid(_span, x) => x.fmt(f),
             Self::DateTime(_span, x) => x.fmt(f),
@@ -995,6 +1022,7 @@ impl Display for Expr {
                     | Self::Uint(..)
                     | Self::Int(..)
                     | Self::Float(..)
+                    | Self::Char(..)
                     | Self::String(..)
                     | Self::List(..)
                     | Self::Tuple(..)

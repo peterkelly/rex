@@ -61,6 +61,7 @@ impl_internal_scalar!(i32, root_as_i32, alloc_root_i32);
 impl_internal_scalar!(i64, root_as_i64, alloc_root_i64);
 impl_internal_scalar!(f32, root_as_f32, alloc_root_f32);
 impl_internal_scalar!(f64, root_as_f64, alloc_root_f64);
+impl_internal_scalar!(char, root_as_char, alloc_root_char);
 impl_internal_scalar!(String, root_as_string, alloc_root_string);
 impl_internal_scalar!(Uuid, root_as_uuid, alloc_root_uuid);
 impl_internal_scalar!(Hash, root_as_hash, alloc_root_hash);

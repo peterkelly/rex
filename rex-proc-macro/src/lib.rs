@@ -650,6 +650,7 @@ fn is_builtin_rust_type(ty: &syn::TypePath) -> bool {
             | "i64"
             | "f32"
             | "f64"
+            | "char"
             | "String"
             | "str"
             | "Uuid"

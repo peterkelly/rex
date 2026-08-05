@@ -63,7 +63,6 @@ pub(crate) fn name_token_at_position(
             Token::Mul(span) => ("*".to_string(), *span, false),
             Token::Div(span) => ("/".to_string(), *span, false),
             Token::Mod(span) => ("%".to_string(), *span, false),
-            Token::Concat(span) => ("++".to_string(), *span, false),
             Token::Eq(span) => ("==".to_string(), *span, false),
             Token::Ne(span) => ("!=".to_string(), *span, false),
             Token::Lt(span) => ("<".to_string(), *span, false),
@@ -421,6 +420,7 @@ pub(crate) fn collect_default_record_updates(expr: &Expr, out: &mut Vec<(Span, V
         | Expr::Uint(..)
         | Expr::Int(..)
         | Expr::Float(..)
+        | Expr::Char(..)
         | Expr::String(..)
         | Expr::Uuid(..)
         | Expr::DateTime(..)
@@ -498,6 +498,7 @@ pub(crate) fn find_let_binding_for_def_range_in_expr(
         | Expr::Uint(..)
         | Expr::Int(..)
         | Expr::Float(..)
+        | Expr::Char(..)
         | Expr::String(..)
         | Expr::Uuid(..)
         | Expr::DateTime(..)
@@ -582,6 +583,7 @@ pub(crate) fn collect_unbound_var_spans(
         | Expr::Uint(..)
         | Expr::Int(..)
         | Expr::Float(..)
+        | Expr::Char(..)
         | Expr::String(..)
         | Expr::Uuid(..)
         | Expr::DateTime(..)

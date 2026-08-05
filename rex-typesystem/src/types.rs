@@ -31,6 +31,7 @@ pub enum BuiltinTypeId {
     F32,
     F64,
     Bool,
+    Char,
     String,
     Uuid,
     Hash,
@@ -60,6 +61,7 @@ impl BuiltinTypeId {
             Self::F32 => "f32",
             Self::F64 => "f64",
             Self::Bool => "Bool",
+            Self::Char => "Char",
             Self::String => "String",
             Self::Uuid => "UUID",
             Self::Hash => "Hash",
@@ -97,6 +99,7 @@ impl BuiltinTypeId {
             "f32" => Some(Self::F32),
             "f64" => Some(Self::F64),
             "Bool" => Some(Self::Bool),
+            "Char" => Some(Self::Char),
             "String" => Some(Self::String),
             "UUID" => Some(Self::Uuid),
             "Hash" => Some(Self::Hash),
@@ -703,6 +706,7 @@ fn drain_typed_expr_kind(kind: &mut TypedExprKind, stack: &mut Vec<Arc<TypedExpr
         | TypedExprKind::Uint(..)
         | TypedExprKind::Int(..)
         | TypedExprKind::Float(..)
+        | TypedExprKind::Char(..)
         | TypedExprKind::String(..)
         | TypedExprKind::Uuid(..)
         | TypedExprKind::DateTime(..)
@@ -805,6 +809,7 @@ impl TypedExpr {
             TypedExprKind::Uint(v) => TypedExprKind::Uint(*v),
             TypedExprKind::Int(v) => TypedExprKind::Int(*v),
             TypedExprKind::Float(v) => TypedExprKind::Float(*v),
+            TypedExprKind::Char(v) => TypedExprKind::Char(*v),
             TypedExprKind::String(v) => TypedExprKind::String(v.clone()),
             TypedExprKind::Uuid(v) => TypedExprKind::Uuid(*v),
             TypedExprKind::DateTime(v) => TypedExprKind::DateTime(*v),
@@ -886,6 +891,7 @@ pub enum TypedExprKind {
     Uint(u64),
     Int(i64),
     Float(f64),
+    Char(char),
     String(String),
     Uuid(Uuid),
     DateTime(DateTime<Utc>),
@@ -1199,6 +1205,12 @@ impl RexType for f32 {
 impl RexType for f64 {
     fn rex_type() -> Type {
         Type::builtin(BuiltinTypeId::F64)
+    }
+}
+
+impl RexType for char {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::Char)
     }
 }
 

@@ -748,6 +748,7 @@ impl AstBuilder {
         if let Some(token) = first_token(node) {
             match token {
                 Token::Bool(val, span, ..) => return Ok(Expr::Bool(*span, *val)),
+                Token::Char(val, span, ..) => return Ok(Expr::Char(*span, *val)),
                 Token::Float(val, span, ..) => return Ok(Expr::Float(*span, *val)),
                 Token::Int(val, span, ..) => return Ok(Expr::Uint(*span, *val)),
                 Token::String(val, span, ..) => return Ok(Expr::String(*span, val.clone())),
@@ -1252,7 +1253,6 @@ fn make_binary_expr(lhs: Expr, operator: &Token, rhs: Expr) -> Expr {
     let name = match operator {
         Token::Add(..) => Operator::Add.to_string(),
         Token::And(..) => Operator::And.to_string(),
-        Token::Concat(..) => Operator::Concat.to_string(),
         Token::Div(..) => Operator::Div.to_string(),
         Token::Eq(..) => Operator::Eq.to_string(),
         Token::Ne(..) => Operator::Ne.to_string(),
@@ -1401,7 +1401,6 @@ fn operator_token_name(token: &Token) -> Option<&'static str> {
     match token {
         Token::Add(..) => Some("+"),
         Token::And(..) => Some("&&"),
-        Token::Concat(..) => Some("++"),
         Token::Div(..) => Some("/"),
         Token::Eq(..) => Some("=="),
         Token::Ne(..) => Some("!="),
@@ -1422,7 +1421,6 @@ fn is_left_associative_binary(token: &Token) -> bool {
         token,
         Token::Add(..)
             | Token::And(..)
-            | Token::Concat(..)
             | Token::Div(..)
             | Token::Mul(..)
             | Token::Mod(..)

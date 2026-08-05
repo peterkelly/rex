@@ -484,7 +484,7 @@ fn render_markdown(
     let mut out = String::new();
     out.push_str("# Built-in types & functions\n\n");
     out.push_str(
-        "> This page is auto-generated from the prelude source. Run `cargo run -p rex --bin gen_prelude_docs` to refresh it.\n\n",
+        "> This page is auto-generated from the prelude source. Run `cargo run -p rex-cli --bin gen_prelude_docs` to refresh it.\n\n",
     );
 
     out.push_str("## Built-in Types\n\n");

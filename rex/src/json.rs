@@ -152,6 +152,28 @@ fn json_to_value_for_con(
         ("i64", []) => Ok(RexValue::I64(json_i64(json)?)),
         ("f32", []) => Ok(RexValue::F32(json_f64(json)? as f32)),
         ("f64", []) => Ok(RexValue::F64(json_f64(json)?)),
+        ("Char", []) => match json {
+            JsonValue::String(value) => {
+                let mut chars = value.chars();
+                let Some(value) = chars.next() else {
+                    return Err(error(
+                        "invalid Char JSON: expected exactly one Unicode scalar value, got none"
+                            .into(),
+                    ));
+                };
+                if chars.next().is_some() {
+                    return Err(error(
+                        "invalid Char JSON: expected exactly one Unicode scalar value, got more than one"
+                            .into(),
+                    ));
+                }
+                Ok(RexValue::Char(value))
+            }
+            _ => Err(type_mismatch_json(
+                json,
+                &Type::builtin(BuiltinTypeId::Char),
+            )),
+        },
         ("String", []) => match json {
             JsonValue::String(value) => Ok(RexValue::String(value.clone())),
             _ => Err(type_mismatch_json(
@@ -273,6 +295,7 @@ fn value_to_json_for_con(
         ("f64", []) => scalar!(F64, |v| Number::from_f64(v)
             .map(JsonValue::Number)
             .unwrap_or(JsonValue::Null)),
+        ("Char", []) => scalar!(Char, |v: char| JsonValue::String(v.to_string())),
         ("String", []) => match value {
             RexValue::String(value) => Ok(JsonValue::String(value.clone())),
             _ => Err(type_mismatch_value(value, &named_type(name, args))),

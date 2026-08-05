@@ -918,6 +918,9 @@ Fields of type `Vec<T>` are exposed as `List T` and convert to/from Rex lists.
 When constructing or updating derived records from Rex code, use list literals
 directly for these fields.
 
+Rust `char` is a built-in bridge type corresponding to Rex `Char`; it can be used directly in
+injected function signatures and fields of derived types.
+
 That means `MyType::inject_rex(&mut builder)?` is enough for acyclic graphs of derived ADTs. You do
 not need to manually register dependencies in topological order. Cyclic ADT families are still not
 supported by this registration path.

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rex_ast::{
     Decl, Expr, ImportClause, NameRef, Pattern, Scope, Span, Symbol, TypeExpr, Var, app,
-    assert_expr_eq, b, d, f, l, s, tup, u, v,
+    assert_expr_eq, b, c, d, f, l, s, tup, u, v,
 };
 use rex_parser::error::ParseError;
 use rex_parser::{MAX_AST_DEPTH, parse as parse_rex, span};
@@ -223,6 +223,58 @@ fn test_parse_string_escape_sequences() {
         s!("a\nb\r\t\\\"'?\x07\x08\x0c\x0b\0AA\u{03BB}\u{1F600}");
         ignore span
     );
+}
+
+#[test]
+fn test_parse_char_literals() {
+    for (source, expected) in [
+        (r#"'a'"#, 'a'),
+        (r#"'😀'"#, '😀'),
+        (r#"'\n'"#, '\n'),
+        (r#"'\''"#, '\''),
+        (r#"'\u03bb'"#, '\u{03bb}'),
+        (r#"'\U0001F600'"#, '\u{1f600}'),
+        (r#"'\u0301'"#, '\u{0301}'),
+        (r#"'\ufdd0'"#, '\u{fdd0}'),
+        (r#"'\U0010ffff'"#, char::MAX),
+    ] {
+        assert_expr_eq!(parse(source), c!(expected); ignore span);
+    }
+}
+
+#[test]
+fn test_char_literal_display_roundtrips() {
+    for value in [
+        'a', '😀', '\n', '\'', '\\', '\u{0301}', '\u{0000}', '\u{fdd0}',
+    ] {
+        let rendered = c!(value).to_string();
+        assert_expr_eq!(parse(&rendered), c!(value); ignore span);
+    }
+}
+
+#[test]
+fn test_char_literals_require_exactly_one_rust_char() {
+    for source in [
+        r#"''"#,
+        r#"'ab'"#,
+        r#"'e\u0301'"#,
+        r#"'\ud800'"#,
+        r#"'\U00110000'"#,
+    ] {
+        let errors = parse_rex(source).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("invalid char literal")),
+            "source={source:?}, errors={errors:#?}"
+        );
+    }
+}
+
+#[test]
+fn test_single_quotes_are_chars_and_double_quotes_are_strings() {
+    assert!(matches!(parse("'x'").as_ref(), Expr::Char(_, 'x')));
+    assert!(matches!(parse(r#""x""#).as_ref(), Expr::String(_, value) if value == "x"));
 }
 
 #[test]

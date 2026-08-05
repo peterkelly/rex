@@ -799,6 +799,10 @@ impl RootScope<'_> {
         self.alloc_reference(Cell::F64(value))
     }
 
+    pub(crate) fn alloc_root_char(&mut self, value: char) -> Result<RootedPtr, EngineError> {
+        self.alloc_reference(Cell::Char(value))
+    }
+
     pub(crate) fn alloc_root_string(&mut self, value: String) -> Result<RootedPtr, EngineError> {
         self.alloc_reference(Cell::String(value))
     }
@@ -1095,6 +1099,10 @@ impl RootScope<'_> {
         self.get_cell_from_rooted_ptr(root)?.cell_as_f64()
     }
 
+    pub(crate) fn root_as_char(&self, root: RootedPtr) -> Result<char, EngineError> {
+        self.get_cell_from_rooted_ptr(root)?.cell_as_char()
+    }
+
     pub(crate) fn root_as_string(&self, root: RootedPtr) -> Result<String, EngineError> {
         self.get_cell_from_rooted_ptr(root)?.cell_as_string()
     }
@@ -1273,6 +1281,7 @@ pub(super) enum Cell {
     I64(i64),
     F32(f32),
     F64(f64),
+    Char(char),
     String(String),
     Uuid(Uuid),
     Hash(Hash),
@@ -1309,6 +1318,7 @@ impl Cell {
             Cell::I64(..) => "i64",
             Cell::F32(..) => "f32",
             Cell::F64(..) => "f64",
+            Cell::Char(..) => "Char",
             Cell::String(..) => "String",
             Cell::Uuid(..) => "UUID",
             Cell::Hash(..) => "Hash",
@@ -1413,6 +1423,13 @@ impl Cell {
         }
     }
 
+    pub(super) fn cell_as_char(&self) -> Result<char, EngineError> {
+        match self {
+            Cell::Char(v) => Ok(*v),
+            _ => Err(self.cell_type_error("Char")),
+        }
+    }
+
     pub(super) fn cell_as_string(&self) -> Result<String, EngineError> {
         match self {
             Cell::String(v) => Ok(v.clone()),
@@ -1487,6 +1504,7 @@ fn infer_cell_type(heap: &Heap, cell: &Cell) -> Result<Type, EngineError> {
         Cell::I64(..) => Ok(Type::builtin(BuiltinTypeId::I64)),
         Cell::F32(..) => Ok(Type::builtin(BuiltinTypeId::F32)),
         Cell::F64(..) => Ok(Type::builtin(BuiltinTypeId::F64)),
+        Cell::Char(..) => Ok(Type::builtin(BuiltinTypeId::Char)),
         Cell::String(..) => Ok(Type::builtin(BuiltinTypeId::String)),
         Cell::Uuid(..) => Ok(Type::builtin(BuiltinTypeId::Uuid)),
         Cell::Hash(..) => Ok(Type::builtin(BuiltinTypeId::Hash)),
@@ -1645,6 +1663,7 @@ impl Collection for Cell {
             | Cell::I64(_)
             | Cell::F32(_)
             | Cell::F64(_)
+            | Cell::Char(_)
             | Cell::String(_)
             | Cell::Uuid(_)
             | Cell::Hash(_)

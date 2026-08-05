@@ -65,6 +65,7 @@ impl_rex_scalar!(i32, I32);
 impl_rex_scalar!(i64, I64);
 impl_rex_scalar!(f32, F32);
 impl_rex_scalar!(f64, F64);
+impl_rex_scalar!(char, Char);
 impl_rex_scalar!(String, String);
 impl_rex_scalar!(Uuid, Uuid);
 impl_rex_scalar!(Hash, Hash);

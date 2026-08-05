@@ -345,6 +345,7 @@ fn validate_import_uses_expr(
         | Expr::Uint(..)
         | Expr::Int(..)
         | Expr::Float(..)
+        | Expr::Char(..)
         | Expr::String(..)
         | Expr::Uuid(..)
         | Expr::DateTime(..)
@@ -1121,6 +1122,7 @@ fn rewrite_import_uses_expr(
         Expr::Uint(span, v) => Expr::Uint(*span, *v),
         Expr::Int(span, v) => Expr::Int(*span, *v),
         Expr::Float(span, v) => Expr::Float(*span, *v),
+        Expr::Char(span, v) => Expr::Char(*span, *v),
         Expr::String(span, v) => Expr::String(*span, v.clone()),
         Expr::Uuid(span, v) => Expr::Uuid(*span, *v),
         Expr::DateTime(span, v) => Expr::DateTime(*span, *v),

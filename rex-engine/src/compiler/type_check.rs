@@ -171,6 +171,7 @@ where
                 | TypedExprKind::Uint(..)
                 | TypedExprKind::Int(..)
                 | TypedExprKind::Float(..)
+                | TypedExprKind::Char(..)
                 | TypedExprKind::String(..)
                 | TypedExprKind::Uuid(..)
                 | TypedExprKind::DateTime(..) => {}
@@ -236,6 +237,7 @@ fn first_hole_span(expr: &Expr) -> Option<Span> {
             | Expr::Uint(..)
             | Expr::Int(..)
             | Expr::Float(..)
+            | Expr::Char(..)
             | Expr::String(..)
             | Expr::Uuid(..)
             | Expr::DateTime(..)
@@ -361,6 +363,7 @@ fn collect_default_candidates(expr: &TypedExpr, out: &mut Vec<Type>) {
             | TypedExprKind::Uint(..)
             | TypedExprKind::Int(..)
             | TypedExprKind::Float(..)
+            | TypedExprKind::Char(..)
             | TypedExprKind::String(..)
             | TypedExprKind::Uuid(..)
             | TypedExprKind::DateTime(..)

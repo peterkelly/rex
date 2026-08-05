@@ -76,10 +76,10 @@ TypeField          <- IDENT COLON TypeExpr
 Expr               <- UnaryExpr (BinaryOp cut(UnaryExpr))*
 BinaryOp           <- BINARY_OPERATOR
 UnaryExpr          <- ApplicationExpr (IS TypeExpr)*
-ApplicationExpr    <- PostfixExpr (&(PAREN_L / BRACKET_L / BRACE_L / BOOL / FLOAT / INT / STRING / QUESTION / IDENT / BACK_SLASH / LET / IF / MATCH) cut(PostfixExpr))*
+ApplicationExpr    <- PostfixExpr (&(PAREN_L / BRACKET_L / BRACE_L / BOOL / CHAR / FLOAT / INT / STRING / QUESTION / IDENT / BACK_SLASH / LET / IF / MATCH) cut(PostfixExpr))*
 PostfixExpr        <- AtomExpr (DOT FieldName)*
 FieldName          <- IDENT / INT
-AtomExpr           <- &PAREN_L cut(ParenExpr) / &BRACKET_L cut(ListExpr) / &BRACE_L cut(BraceExpr) / BOOL / FLOAT / INT / STRING / HoleExpr / IdentExpr / &BACK_SLASH cut(LambdaExpr) / &LET cut(LetExpr) / &IF cut(IfExpr) / &MATCH cut(MatchExpr) / &SUB cut(NegExpr)
+AtomExpr           <- &PAREN_L cut(ParenExpr) / &BRACKET_L cut(ListExpr) / &BRACE_L cut(BraceExpr) / BOOL / CHAR / FLOAT / INT / STRING / HoleExpr / IdentExpr / &BACK_SLASH cut(LambdaExpr) / &LET cut(LetExpr) / &IF cut(IfExpr) / &MATCH cut(MatchExpr) / &SUB cut(NegExpr)
 HoleExpr           <- QUESTION
 IdentExpr          <- IDENT
 BraceExpr          <- DictExpr / RecordUpdateExpr

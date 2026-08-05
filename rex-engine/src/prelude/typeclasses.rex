@@ -460,6 +460,11 @@ instance Eq Bool where {
     != = prim_ne;
 }
 
+instance Eq Char where {
+    == = prim_eq;
+    != = prim_ne;
+}
+
 instance Eq String where {
     == = prim_eq;
     != = prim_ne;
@@ -600,6 +605,14 @@ instance Ord f64 <= Eq f64 where {
     >= = prim_ge;
 }
 
+instance Ord Char <= Eq Char where {
+    cmp = prim_cmp;
+    < = prim_lt;
+    <= = prim_le;
+    > = prim_gt;
+    >= = prim_ge;
+}
+
 instance Ord String <= Eq String where {
     cmp = prim_cmp;
     < = prim_lt;
@@ -650,6 +663,10 @@ instance Show f32 where {
 }
 
 instance Show f64 where {
+    show = prim_show;
+}
+
+instance Show Char where {
     show = prim_show;
 }
 
@@ -712,6 +729,10 @@ instance Default f32 where {
 
 instance Default f64 where {
     default = prim_zero;
+}
+
+instance Default Char where {
+    default = '\0';
 }
 
 instance Default String where {

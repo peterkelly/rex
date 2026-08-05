@@ -55,6 +55,7 @@ fn primitive_roundtrip() {
     let cases = vec![
         (Type::builtin(BuiltinTypeId::Bool), json!(true)),
         (Type::builtin(BuiltinTypeId::I32), json!(-7)),
+        (Type::builtin(BuiltinTypeId::Char), json!("😀")),
         (Type::builtin(BuiltinTypeId::String), json!("hello")),
         (
             Type::builtin(BuiltinTypeId::Hash),
@@ -67,6 +68,20 @@ fn primitive_roundtrip() {
         let actual_json = rex_to_json(&handle, &ty, &ts).unwrap();
         assert_eq!(actual_json, expected_json);
     }
+}
+
+#[test]
+fn char_json_requires_exactly_one_unicode_scalar() {
+    let ts = mk_type_system();
+    let char_ty = Type::builtin(BuiltinTypeId::Char);
+
+    assert!(json_to_rex(&json!(""), &char_ty, &ts).is_err());
+    assert!(json_to_rex(&json!("ab"), &char_ty, &ts).is_err());
+    assert!(json_to_rex(&json!("e\u{0301}"), &char_ty, &ts).is_err());
+    assert_eq!(
+        json_to_rex(&json!("\u{0301}"), &char_ty, &ts).unwrap(),
+        Value::Char('\u{0301}')
+    );
 }
 
 #[test]
