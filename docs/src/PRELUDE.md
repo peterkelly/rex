@@ -222,8 +222,8 @@ Methods:
 | Function | Signature | Implemented On | Description |
 |---|---|---|---|
 | `negate` | `('a -> 'a)` | `i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Additive inverse. |
-| `zero` | `'a` | `string`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Additive identity. |
-| `+` | `('a -> ('a -> 'a))` | `string`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Addition (or concatenation for strings). |
+| `zero` | `'a` | `(List 'a)`<br>`string`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Additive identity. |
+| `+` | `('a -> ('a -> 'a))` | `(List 'a)`<br>`string`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Addition (or concatenation for strings). |
 | `or_else` | `((('f 'a) -> ('f 'a)) -> (('f`<br>`'a) -> ('f 'a)))` | `List`<br>`Option`<br>`(Result 'e)` | Provide an alternative container value. |
 | `pure` | `('a -> ('f 'a))` | `List`<br>`Option`<br>`(Result 'e)` | Lift a plain value into an applicative context. |
 | `ap` | `(('f ('a -> 'b)) -> (('f 'a)`<br>`-> ('f 'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Apply wrapped functions to wrapped values. |

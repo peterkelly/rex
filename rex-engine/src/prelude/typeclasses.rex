@@ -116,6 +116,11 @@ class Indexable t a where {
 }
 
 // AdditiveMonoid instances
+instance<a> AdditiveMonoid (List a) where {
+    zero = [];
+    + = \xs ys -> foldr (\x out -> x :: out) ys xs;
+}
+
 instance AdditiveMonoid string where {
     zero = prim_zero;
     + = prim_add;

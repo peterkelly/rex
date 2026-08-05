@@ -435,6 +435,18 @@ Here `f` is polymorphic over the `Functor` dictionary; at each call site, the en
 `map` using the argument type (`List i32` vs `Option i32`) and dispatches to the corresponding
 instance method body.
 
+### Prelude List Additive Monoid
+
+The prelude defines `AdditiveMonoid (List a)` for every element type `a`, with no constraint on
+`a`. Its identity `zero` is `[]`, and `xs + ys` concatenates `xs` and `ys` in that order.
+
+```rex,interactive
+[1, 2, 3] + [4, 5, 6]
+```
+
+Regression: `additive_monoid_list_concatenates_in_order` and
+`additive_monoid_list_requires_no_element_constraint` (`rex/tests/typeclasses_system.rs`).
+
 ### Prelude List Ranges
 
 The prelude exposes strict list range helpers:

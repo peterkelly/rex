@@ -36,6 +36,28 @@ async fn default_nested_context_list() {
 }
 
 #[tokio::test]
+async fn additive_monoid_list_concatenates_in_order() {
+    assert_eval(
+        "[1, 2, 3] + [4, 5, 6]",
+        "[1i32, 2i32, 3i32, 4i32, 5i32, 6i32]",
+        Type::list(Type::builtin(BuiltinTypeId::I32)),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn additive_monoid_list_requires_no_element_constraint() {
+    assert_eval(
+        r#"
+        let empty: List bool = zero in empty + [true, false]
+        "#,
+        "[true, false]",
+        Type::list(Type::builtin(BuiltinTypeId::Bool)),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn pattern_field_renaming() {
     assert_eval(
         r#"
