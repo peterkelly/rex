@@ -1,5 +1,7 @@
 mod common;
 
+use std::collections::{BTreeMap, HashMap};
+
 use rex::{
     Rex,
     ast::Symbol,
@@ -100,6 +102,14 @@ async fn vec_rex_type() {
 
     let ty = infer_type(builder, r#"return_vec "hello""#).await;
     assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
+}
+
+#[test]
+fn string_maps_rex_type() {
+    let expected = Type::dict(Type::builtin(BuiltinTypeId::I32));
+
+    assert_eq!(<BTreeMap<String, i32> as RexType>::rex_type(), expected);
+    assert_eq!(<HashMap<String, i32> as RexType>::rex_type(), expected);
 }
 
 #[tokio::test]

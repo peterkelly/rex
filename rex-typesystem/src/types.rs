@@ -9,7 +9,7 @@ use rex_ast::{Pattern, Symbol};
 use rpds::HashTrieMapSync;
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt::{self, Display, Formatter},
     mem,
     sync::Arc,
@@ -1235,6 +1235,18 @@ impl RexType for DateTime<Utc> {
 impl<T: RexType> RexType for Vec<T> {
     fn rex_type() -> Type {
         Type::app(Type::builtin(BuiltinTypeId::List), T::rex_type())
+    }
+}
+
+impl<T: RexType> RexType for BTreeMap<String, T> {
+    fn rex_type() -> Type {
+        Type::dict(T::rex_type())
+    }
+}
+
+impl<T: RexType> RexType for HashMap<String, T> {
+    fn rex_type() -> Type {
+        Type::dict(T::rex_type())
     }
 }
 
