@@ -728,7 +728,7 @@ pub(crate) fn hole_fill_candidates_at_position(
         }
     }
 
-    let mut out: Vec<(usize, usize, String, String)> = Vec::new();
+    let mut out: Vec<(usize, usize, bool, String, String)> = Vec::new();
     for (name, schemes) in values {
         let name = name.to_string();
         if !is_ident_like(&name) {
@@ -781,17 +781,29 @@ pub(crate) fn hole_fill_candidates_at_position(
             }
 
             let replacement = format!("{name} {}", rendered_args.join(" "));
-            out.push((unresolved, adapter_uses, name.clone(), replacement));
+            let is_fallback = !preferred_names.contains(name.as_str());
+            out.push((
+                unresolved,
+                adapter_uses,
+                is_fallback,
+                name.clone(),
+                replacement,
+            ));
         }
     }
 
-    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
-    out.dedup_by(|a, b| a.2 == b.2 && a.3 == b.3);
+    out.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(a.1.cmp(&b.1))
+            .then(a.2.cmp(&b.2))
+            .then(a.3.cmp(&b.3))
+    });
+    out.dedup_by(|a, b| a.3 == b.3 && a.4 == b.4);
     if out.len() > MAX_SEMANTIC_CANDIDATES {
         out.truncate(MAX_SEMANTIC_CANDIDATES);
     }
     out.into_iter()
-        .map(|(_u, _a, name, replacement)| (name, replacement))
+        .map(|(_u, _a, _fallback, name, replacement)| (name, replacement))
         .collect()
 }
 

@@ -611,7 +611,7 @@ pub(crate) fn functions_producing_expected_type_at_position(
         }
     }
 
-    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    sort_semantic_type_candidates(&mut out, &preferred_names);
     out.dedup();
     if out.len() > MAX_SEMANTIC_CANDIDATES {
         out.truncate(MAX_SEMANTIC_CANDIDATES);
@@ -661,7 +661,7 @@ pub(crate) fn functions_accepting_inferred_type_at_position(
         }
     }
 
-    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    sort_semantic_type_candidates(&mut out, &preferred_names);
     out.dedup();
     if out.len() > MAX_SEMANTIC_CANDIDATES {
         out.truncate(MAX_SEMANTIC_CANDIDATES);
@@ -715,7 +715,7 @@ pub(crate) fn adapters_from_inferred_to_expected_at_position(
         }
     }
 
-    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    sort_semantic_type_candidates(&mut out, &preferred_names);
     out.dedup();
     if out.len() > MAX_SEMANTIC_CANDIDATES {
         out.truncate(MAX_SEMANTIC_CANDIDATES);
@@ -736,24 +736,45 @@ pub(crate) fn functions_compatible_with_in_scope_values_at_position(
     }
 
     let mut out = Vec::new();
+    let mut seen = HashSet::new();
     for (name, replacement) in hole_fill_candidates_at_position(session, uri, text, position) {
         if replacement.contains('?') {
             continue;
         }
         if let Some(types) = produced_by_name.get(&name) {
             for typ in types {
-                out.push(format!("{name} : {typ} => {replacement}"));
+                let candidate = format!("{name} : {typ} => {replacement}");
+                if seen.insert(candidate.clone()) {
+                    out.push(candidate);
+                }
             }
         } else {
-            out.push(format!("{name} => {replacement}"));
+            let candidate = format!("{name} => {replacement}");
+            if seen.insert(candidate.clone()) {
+                out.push(candidate);
+            }
         }
     }
-    out.sort();
-    out.dedup();
+    // Preserve hole-fill ranking so user declarations are not displaced by a
+    // growing prelude before the result limit is applied.
     if out.len() > MAX_SEMANTIC_CANDIDATES {
         out.truncate(MAX_SEMANTIC_CANDIDATES);
     }
     out
+}
+
+fn sort_semantic_type_candidates(
+    candidates: &mut [(String, String)],
+    preferred_names: &BTreeSet<Symbol>,
+) {
+    candidates.sort_by(|left, right| {
+        let left_is_fallback = !preferred_names.contains(left.0.as_str());
+        let right_is_fallback = !preferred_names.contains(right.0.as_str());
+        left_is_fallback
+            .cmp(&right_is_fallback)
+            .then(left.0.cmp(&right.0))
+            .then(left.1.cmp(&right.1))
+    });
 }
 
 pub fn execute_query_command_for_document(

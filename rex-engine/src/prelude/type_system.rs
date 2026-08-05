@@ -818,6 +818,8 @@ pub(super) fn inject_standard_prelude(
         )),
     );
 
+    inject_string_builtin_schemes(ts);
+
     // Collection helpers (type class based)
     let sum_scheme = scheme!(&mut ts.supply; forall [f, a]
         where [Foldable(f), AdditiveMonoid(a)]
@@ -1030,4 +1032,94 @@ pub(super) fn inject_standard_prelude(
     ts.add_value("is_err", is_err_scheme);
 
     Ok(())
+}
+
+// Register the user-facing string function signatures in the standard type system.
+fn inject_string_builtin_schemes(ts: &mut TypeSystem) {
+    let bool_ty = Type::builtin(BuiltinTypeId::Bool);
+    let char_ty = Type::builtin(BuiltinTypeId::Char);
+    let string_ty = Type::builtin(BuiltinTypeId::String);
+    let u8_ty = Type::builtin(BuiltinTypeId::U8);
+    let u64_ty = Type::builtin(BuiltinTypeId::U64);
+    let list_char_ty = Type::list(char_ty.clone());
+    let list_string_ty = Type::list(string_ty.clone());
+    let list_u8_ty = Type::list(u8_ty);
+    let option_char_ty = Type::option(char_ty);
+    let option_string_ty = Type::option(string_ty.clone());
+    let option_u64_ty = Type::option(u64_ty.clone());
+
+    let mut add = |name: &str, args: &[Type], result: Type| {
+        let typ = args
+            .iter()
+            .rev()
+            .fold(result, |out, arg| Type::fun(arg.clone(), out));
+        ts.add_value(name, Scheme::new(vec![], vec![], typ));
+    };
+
+    add(
+        "string_get",
+        &[u64_ty.clone(), string_ty.clone()],
+        option_char_ty,
+    );
+    add(
+        "string_slice",
+        &[u64_ty.clone(), u64_ty.clone(), string_ty.clone()],
+        option_string_ty.clone(),
+    );
+    add(
+        "string_contains",
+        &[string_ty.clone(), string_ty.clone()],
+        bool_ty.clone(),
+    );
+    add(
+        "string_starts_with",
+        &[string_ty.clone(), string_ty.clone()],
+        bool_ty.clone(),
+    );
+    add(
+        "string_ends_with",
+        &[string_ty.clone(), string_ty.clone()],
+        bool_ty,
+    );
+    add(
+        "string_find",
+        &[string_ty.clone(), string_ty.clone()],
+        option_u64_ty,
+    );
+    add(
+        "string_split",
+        &[string_ty.clone(), string_ty.clone()],
+        list_string_ty.clone(),
+    );
+    add(
+        "string_join",
+        &[string_ty.clone(), list_string_ty],
+        string_ty.clone(),
+    );
+    add(
+        "string_replace",
+        &[string_ty.clone(), string_ty.clone(), string_ty.clone()],
+        string_ty.clone(),
+    );
+    for name in [
+        "string_trim",
+        "string_trim_start",
+        "string_trim_end",
+        "string_to_lower",
+        "string_to_upper",
+    ] {
+        add(name, std::slice::from_ref(&string_ty), string_ty.clone());
+    }
+    add(
+        "string_to_chars",
+        std::slice::from_ref(&string_ty),
+        list_char_ty.clone(),
+    );
+    add("chars_to_string", &[list_char_ty], string_ty.clone());
+    add(
+        "string_to_utf8",
+        std::slice::from_ref(&string_ty),
+        list_u8_ty.clone(),
+    );
+    add("utf8_to_string", &[list_u8_ty], option_string_ty);
 }

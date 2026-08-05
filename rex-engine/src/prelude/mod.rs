@@ -52,6 +52,7 @@ macro_rules! scheme {
     }};
 }
 
+mod strings;
 mod type_system;
 
 use std::{
@@ -136,6 +137,7 @@ where
     inject_show_ops(engine)?;
     inject_boolean_ops(engine)?;
     inject_hash_ops(engine)?;
+    strings::inject_string_builtins(engine)?;
     inject_numeric_ops(engine)?;
     inject_list_builtins(engine)?;
     inject_option_result_builtins(engine)?;

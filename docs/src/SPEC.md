@@ -48,6 +48,34 @@ Character and string literals are decoded during lexing.
 - At JSON boundaries, `Char` is represented by a JSON string containing exactly one Unicode scalar
   value.
 
+### String Operations
+
+String operations put selectors and modifiers first and the primary input value last, matching the
+rest of the collection API. For example, `string_contains needle haystack`,
+`string_split separator input`, and `string_replace needle replacement input` can be partially
+applied to form reusable predicates or transformations.
+
+- String positions are zero-based Unicode scalar indices, never UTF-8 byte offsets.
+  `string_get index input` returns the scalar at `index`, while
+  `string_slice start end input` uses a half-open `start..end` range. `string_get` returns `None`
+  for an out-of-bounds index. `string_slice` returns `None` unless
+  `0 <= start <= end <= length input`; an empty in-bounds range returns `Some ""`.
+- `string_contains needle haystack`, `string_starts_with prefix input`, and
+  `string_ends_with suffix input` perform literal substring tests. `string_find needle haystack`
+  returns the first matching Unicode scalar index or `None`; an empty needle is found at index zero.
+- `string_split separator input` splits at non-overlapping literal matches and preserves empty
+  segments, including trailing segments. An empty separator produces an empty segment at each end
+  and one string for every Unicode scalar in between. `string_join separator parts` inserts the
+  separator only between adjacent elements.
+- `string_replace needle replacement input` replaces every non-overlapping literal match. An empty
+  needle inserts the replacement at every Unicode scalar boundary, including both ends.
+- `string_trim`, `string_trim_start`, and `string_trim_end` remove Unicode whitespace as classified
+  by Rust's `char::is_whitespace`. `string_to_lower` and `string_to_upper` apply Unicode case
+  mappings and may change the number of scalar values.
+- `string_to_chars` and `chars_to_string` convert losslessly between strings and lists of Unicode
+  scalar values. `string_to_utf8` returns the UTF-8 bytes of a string. `utf8_to_string` returns
+  `Some` for valid UTF-8 and `None` for an invalid byte sequence.
+
 ## Length
 
 `length` returns a `u64` and is implemented for lists, dictionaries, and strings:

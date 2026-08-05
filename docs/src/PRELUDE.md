@@ -271,6 +271,7 @@ Methods:
 | `None` | `(Option 't)` | The empty `Option` constructor. |
 | `Ok` | `('t -> (Result 't 'e))` | Construct a successful `Result`. |
 | `Some` | `('t -> (Option 't))` | Construct a present `Option` value. |
+| `chars_to_string` | `((List Char) -> String)` | Concatenate the Unicode scalar values in `chars` into a string. |
 | `dict_empty` | `(Dict 'a)` | Construct an empty dictionary. |
 | `dict_entries` | `((Dict 'a) -> (List (String,`<br>`'a)))` | Return key/value tuples in lexicographic key order. |
 | `dict_filter` | `(((String, 'a) -> Bool) ->`<br>`((Dict 'a) -> (Dict 'a)))` | Keep dictionary entries whose key/value tuple satisfies a predicate. |
@@ -295,7 +296,24 @@ Methods:
 | `mean` | `Foldable 'f, Field 'a => (('f`<br>`'a) -> 'a)` | Arithmetic mean over numeric foldables. |
 | `min` | `Foldable 'f, Ord 'a => (('f`<br>`'a) -> 'a)` | Minimum element by ordering. |
 | `slice` | `(i32 -> (i32 -> ((List 'a) ->`<br>`(List 'a))))` | Return elements in the half-open range `n..m`; errors if either bound is out of range or `m < n`. |
+| `string_contains` | `(String -> (String -> Bool))` | Return whether `haystack` contains the substring `needle`; called as `string_contains needle haystack`. |
+| `string_ends_with` | `(String -> (String -> Bool))` | Return whether `input` ends with `suffix`; called as `string_ends_with suffix input`. |
+| `string_find` | `(String -> (String -> (Option`<br>`u64)))` | Find `needle` in `haystack`, returning its first Unicode scalar index or `None`. |
+| `string_get` | `(u64 -> (String -> (Option`<br>`Char)))` | Return the character at Unicode scalar `index` in `input`, or `None` when out of bounds. |
+| `string_join` | `(String -> ((List String) ->`<br>`String))` | Join `parts`, inserting `separator` between adjacent strings; called as `string_join separator parts`. |
+| `string_replace` | `(String -> (String -> (String`<br>`-> String)))` | Replace every non-overlapping `needle` in `input` with `replacement`; called as `string_replace needle replacement input`. |
+| `string_slice` | `(u64 -> (u64 -> (String ->`<br>`(Option String))))` | Return the half-open Unicode scalar range `start..end` from `input`, or `None` for invalid bounds. |
+| `string_split` | `(String -> (String -> (List`<br>`String)))` | Split `input` at each non-overlapping `separator`; called as `string_split separator input`. |
+| `string_starts_with` | `(String -> (String -> Bool))` | Return whether `input` starts with `prefix`; called as `string_starts_with prefix input`. |
+| `string_to_chars` | `(String -> (List Char))` | Return the Unicode scalar values in `input` as a character list. |
 | `string_to_hash` | `(String -> Hash)` | Parse a hexadecimal BLAKE3 hash string; raises an error if the string is invalid. |
+| `string_to_lower` | `(String -> String)` | Convert `input` using the Unicode lowercase mapping. |
+| `string_to_upper` | `(String -> String)` | Convert `input` using the Unicode uppercase mapping. |
+| `string_to_utf8` | `(String -> (List u8))` | Encode `input` as its UTF-8 byte sequence. |
+| `string_trim` | `(String -> String)` | Remove Unicode whitespace from both ends of `input`. |
+| `string_trim_end` | `(String -> String)` | Remove Unicode whitespace from the end of `input`. |
+| `string_trim_start` | `(String -> String)` | Remove Unicode whitespace from the start of `input`. |
 | `sum` | `Foldable 'f, AdditiveMonoid 'a`<br>`=> (('f 'a) -> 'a)` | Sum all elements in a foldable container. |
 | `unwrap` | `((Option 'a) -> 'a)`<br><br>`((Result 't 'e) -> 't)` | Extract the inner value from `Some`/`Ok`, or raise an error for `None`/`Err`. |
+| `utf8_to_string` | `((List u8) -> (Option String))` | Decode `bytes` as UTF-8, returning `None` when the byte sequence is invalid. |
 | `||` | `(Bool -> (Bool -> Bool))` | Boolean disjunction. |
