@@ -41,10 +41,10 @@ jobs:
       # - run: cargo install mdbook-mermaid --locked
       # - run: cargo install mdbook-linkcheck --locked
 
-      - name: Verify generated prelude docs are up to date
+      - name: Verify generated built-in docs are up to date
         run: |
           cargo run -p rex-cli --bin gen_prelude_docs
-          git diff --exit-code docs/src/PRELUDE.md
+          git diff --exit-code docs/src/BUILTINS.md
 
       - name: Build docs
         run: |

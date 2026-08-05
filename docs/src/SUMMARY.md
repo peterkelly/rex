@@ -63,7 +63,7 @@
 
 # Built-ins
 
-- [Built-in types & functions](PRELUDE.md)
+- [Built-in types & functions](BUILTINS.md)
 
 # Reference
 

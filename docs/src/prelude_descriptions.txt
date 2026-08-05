@@ -1,8 +1,8 @@
-# key<TAB>description
+# Types: key<TAB>description
+# Functions: key<TAB>call form<TAB>description
 # keys:
 # - type:<type name>
-# - class:<class name>
-# - fn:<function name>
+# - fn:<function name> (function entries also include a call form)
 type:Dict	Immutable mapping from string keys to values of one type.
 type:List	Immutable ordered sequence.
 type:Option	Optional value (`Some` or `None`).
@@ -24,114 +24,92 @@ type:u32	32-bit unsigned integer.
 type:u64	64-bit unsigned integer.
 type:u8	8-bit unsigned integer.
 type:UUID	UUID value.
-class:AdditiveGroup	Types supporting additive inverse.
-class:AdditiveMonoid	Types with additive identity and associative addition.
-class:Alternative	Applicative types with a fallback choice operation.
-class:Applicative	Functors that can lift values and apply wrapped functions.
-class:Default	Types with a canonical default value.
-class:Divisive	Types supporting division.
-class:Eq	Types supporting equality/inequality comparison.
-class:Field	Types supporting division in addition to ring operations.
-class:Filterable	Functors supporting filtering and partial mapping.
-class:Foldable	Containers that can be reduced with folds.
-class:Functor	Type constructors that support structure-preserving mapping.
-class:Indexable	Containers that support indexed element access.
-class:Integral	Integral numeric types supporting modulo.
-class:Length	Collections and strings whose length can be measured.
-class:Monad	Applicatives supporting dependent sequencing (`bind`).
-class:MultiplicativeMonoid	Types with multiplicative identity and associative multiplication.
-class:Ord	Types with total ordering comparisons.
-class:Show	Types that can be converted to user-facing strings (Haskell-style naming).
-class:Ring	Types supporting additive group plus multiplication.
-class:Semiring	Types supporting additive and multiplicative monoid operations.
-class:Sequence	Ordered containers with slicing/zipping operations.
-class:Subtractive	Types supporting binary subtraction.
-fn:!=	Inequality comparison.
-fn:%	Remainder/modulo operation.
-fn:&&	Boolean conjunction.
-fn:*	Multiplication.
-fn:+	Addition (or concatenation for strings).
-fn:-	Subtraction.
-fn:/	Division.
-fn:<	Less-than comparison.
-fn:<=	Less-than-or-equal comparison.
-fn:==	Equality comparison.
-fn:>	Greater-than comparison.
-fn:>=	Greater-than-or-equal comparison.
-fn:Cons	Construct a non-empty list from head and tail.
-fn:Empty	The empty list constructor.
-fn:Err	Construct a failed `Result`.
-fn:Equal	Construct an `Ordering` result for equal values.
-fn:Greater	Construct an `Ordering` result when the left value is greater.
-fn:Less	Construct an `Ordering` result when the left value is less.
-fn:None	The empty `Option` constructor.
-fn:Ok	Construct a successful `Result`.
-fn:Some	Construct a present `Option` value.
-fn:ap	Apply wrapped functions to wrapped values.
-fn:bind	Monadic flat-map/sequencing operation.
-fn:chars_to_string	Concatenate the Unicode scalar values in `chars` into a string.
-fn:cmp	Three-way comparison returning `Less`, `Equal`, or `Greater`.
-fn:length	Return the number of list elements, dictionary entries, or string Unicode scalar values.
-fn:default	Canonical default value for a type. For `Result a e`, this requires `Default a`.
-fn:dict_empty	Construct an empty dictionary.
-fn:dict_entries	Return key/value tuples in lexicographic key order.
-fn:dict_filter	Keep dictionary entries whose key/value tuple satisfies a predicate.
-fn:dict_from_entries	Construct a dictionary from key/value tuples; later duplicate keys win.
-fn:dict_get	Look up a string key, returning `Some` for a present value or `None`.
-fn:dict_has	Test whether a string key is present.
-fn:dict_insert	Return a dictionary with a string key inserted or replaced.
-fn:dict_is_empty	Test whether a dictionary has no entries.
-fn:dict_keys	Return keys in lexicographic order.
-fn:dict_map	Transform key/value tuples into a dictionary; later collisions in input-key order win.
-fn:dict_remove	Return a dictionary without a string key.
-fn:dict_singleton	Construct a dictionary containing one key/value entry.
-fn:dict_update	Insert, replace, or remove a key by transforming its optional value.
-fn:dict_values	Return values in lexicographic key order.
-fn:filter	Keep elements that satisfy a predicate.
-fn:filter_map	Map and drop missing results in one pass.
-fn:first	Return the first `n` list elements; errors if `n` is out of range.
-fn:fold	Left-style fold over a container.
-fn:foldl	Strict left fold.
-fn:foldr	Right fold.
-fn:get	Get an element by index.
-fn:is_err	Check whether a `Result` is `Err`.
-fn:is_none	Check whether an `Option` is `None`.
-fn:is_ok	Check whether a `Result` is `Ok`.
-fn:is_some	Check whether an `Option` is `Some`.
-fn:last	Return the last `n` list elements; errors if `n` is out of range.
-fn:map	Apply a function to each value inside a functor.
-fn:max	Maximum element by ordering.
-fn:mean	Arithmetic mean over numeric foldables.
-fn:min	Minimum element by ordering.
-fn:negate	Additive inverse.
-fn:one	Multiplicative identity.
-fn:or_else	Provide an alternative container value.
-fn:show	Render a value as a human-readable string.
-fn:slice	Return elements in the half-open range `n..m`; errors if either bound is out of range or `m < n`.
-fn:string_contains	Return whether `haystack` contains the substring `needle`; called as `string_contains needle haystack`.
-fn:string_ends_with	Return whether `input` ends with `suffix`; called as `string_ends_with suffix input`.
-fn:string_find	Find `needle` in `haystack`, returning its first Unicode scalar index or `None`.
-fn:string_get	Return the character at Unicode scalar `index` in `input`, or `None` when out of bounds.
-fn:string_join	Join `parts`, inserting `separator` between adjacent strings; called as `string_join separator parts`.
-fn:string_replace	Replace every non-overlapping `needle` in `input` with `replacement`; called as `string_replace needle replacement input`.
-fn:string_slice	Return the half-open Unicode scalar range `start..end` from `input`, or `None` for invalid bounds.
-fn:string_split	Split `input` at each non-overlapping `separator`; called as `string_split separator input`.
-fn:string_starts_with	Return whether `input` starts with `prefix`; called as `string_starts_with prefix input`.
-fn:string_to_chars	Return the Unicode scalar values in `input` as a character list.
-fn:string_to_hash	Parse a hexadecimal BLAKE3 hash string; raises an error if the string is invalid.
-fn:string_to_lower	Convert `input` using the Unicode lowercase mapping.
-fn:string_to_upper	Convert `input` using the Unicode uppercase mapping.
-fn:string_to_utf8	Encode `input` as its UTF-8 byte sequence.
-fn:string_trim	Remove Unicode whitespace from both ends of `input`.
-fn:string_trim_end	Remove Unicode whitespace from the end of `input`.
-fn:string_trim_start	Remove Unicode whitespace from the start of `input`.
-fn:utf8_to_string	Decode `bytes` as UTF-8, returning `None` when the byte sequence is invalid.
-fn:pure	Lift a plain value into an applicative context.
-fn:skip	Drop the first `n` elements.
-fn:sum	Sum all elements in a foldable container.
-fn:take	Keep only the first `n` elements.
-fn:unwrap	Extract the inner value from `Some`/`Ok`, or raise an error for `None`/`Err`.
-fn:unzip	Split a container of pairs into a pair of containers.
-fn:zero	Additive identity.
-fn:zip	Pair elements from two containers by position.
-fn:||	Boolean disjunction.
+fn:!=	left != right	Returns `true` when `left` and `right` are not equal. Lists, options, and results require their contained types to support equality.
+fn:%	left % right	Returns the remainder after dividing `left` by `right`.
+fn:&&	left && right	Returns `true` only when both `left` and `right` are `true`.
+fn:*	left * right	Multiplies `left` by `right`.
+fn:+	left + right	Adds `left` and `right`; for lists and strings, concatenates `left` with `right`.
+fn:-	left - right	Subtracts `right` from `left`.
+fn:/	left / right	Divides `left` by `right`.
+fn:<	left < right	Returns `true` when `left` is less than `right`.
+fn:<=	left <= right	Returns `true` when `left` is less than or equal to `right`.
+fn:==	left == right	Returns `true` when `left` and `right` are equal. Lists, options, and results require their contained types to support equality.
+fn:>	left > right	Returns `true` when `left` is greater than `right`.
+fn:>=	left >= right	Returns `true` when `left` is greater than or equal to `right`.
+fn:Cons	Cons head tail	Constructs a non-empty list whose first element is `head` and whose remaining elements are `tail`.
+fn:Empty	Empty	The empty list constructor.
+fn:Err	Err error	Constructs a failed `Result` containing `error`.
+fn:Equal	Equal	The `Ordering` value returned when two values are equal.
+fn:Greater	Greater	The `Ordering` value returned when the left value is greater than the right value.
+fn:Less	Less	The `Ordering` value returned when the left value is less than the right value.
+fn:None	None	The empty `Option` constructor.
+fn:Ok	Ok value	Constructs a successful `Result` containing `value`.
+fn:Some	Some value	Constructs a present `Option` containing `value`.
+fn:ap	ap functions values	Applies the wrapped functions in `functions` to the wrapped values in `values`.
+fn:bind	bind transform container	Applies `transform` to each successful value in `container` and flattens the resulting container layer.
+fn:chars_to_string	chars_to_string chars	Concatenates the Unicode scalar values in `chars` into a string.
+fn:cmp	cmp left right	Returns `Less`, `Equal`, or `Greater` according to the ordering of `left` relative to `right`.
+fn:length	length value	Returns the number of list elements, dictionary entries, or string Unicode scalar values in `value`.
+fn:default	default	Returns the canonical default value for the inferred result type. For `Result a e`, the success type `a` must also have a default.
+fn:dict_empty	dict_empty	Constructs an empty dictionary.
+fn:dict_entries	dict_entries dictionary	Returns the key/value tuples from `dictionary` in lexicographic key order.
+fn:dict_filter	dict_filter predicate dictionary	Keeps the entries from `dictionary` for which `predicate` returns `true`; `predicate` receives each `(key, value)` tuple.
+fn:dict_from_entries	dict_from_entries entries	Constructs a dictionary from `entries`; when a key occurs more than once, its later value wins.
+fn:dict_get	dict_get key dictionary	Looks up `key` in `dictionary`, returning `Some value` when present or `None` when absent.
+fn:dict_has	dict_has key dictionary	Returns whether `dictionary` contains `key`.
+fn:dict_insert	dict_insert key value dictionary	Returns `dictionary` with `key` associated with `value`, replacing the previous value when the key exists.
+fn:dict_is_empty	dict_is_empty dictionary	Returns whether `dictionary` has no entries.
+fn:dict_keys	dict_keys dictionary	Returns the keys from `dictionary` in lexicographic order.
+fn:dict_map	dict_map transform dictionary	Applies `transform` to each `(key, value)` tuple in `dictionary`; later collisions in input-key order win.
+fn:dict_remove	dict_remove key dictionary	Returns `dictionary` without `key`.
+fn:dict_singleton	dict_singleton key value	Constructs a dictionary containing the single association from `key` to `value`.
+fn:dict_update	dict_update key update dictionary	Calls `update` with the optional current value for `key`; returning `Some value` inserts or replaces the entry, while returning `None` removes it.
+fn:dict_values	dict_values dictionary	Returns the values from `dictionary` in lexicographic key order.
+fn:filter	filter predicate container	Keeps each value in `container` for which `predicate` returns `true`.
+fn:filter_map	filter_map transform container	Applies `transform` to each value in `container` and drops every result that is `None`.
+fn:first	first count list	Returns the first `count` elements of `list`; raises an error when `count` is out of range.
+fn:fold	fold step initial container	Reduces `container` from left to right by applying `step` to the accumulator and each value, beginning with `initial`.
+fn:foldl	foldl step initial container	Strictly reduces `container` from left to right by applying `step` to the accumulator and each value, beginning with `initial`.
+fn:foldr	foldr step initial container	Reduces `container` from right to left by applying `step` to each value and the accumulator, beginning with `initial`.
+fn:get	get index list	Returns the element at zero-based `index` in `list`; raises an error when `index` is out of range.
+fn:is_err	is_err result	Returns whether `result` is `Err`.
+fn:is_none	is_none option	Returns whether `option` is `None`.
+fn:is_ok	is_ok result	Returns whether `result` is `Ok`.
+fn:is_some	is_some option	Returns whether `option` is `Some`.
+fn:last	last count list	Returns the last `count` elements of `list`; raises an error when `count` is out of range.
+fn:map	map transform container	Applies `transform` to every value in `container` while preserving its structure.
+fn:max	max values	Returns the greatest element in `values` according to its ordering; raises an error when `values` is empty.
+fn:mean	mean values	Returns the arithmetic mean of `values`; raises an error when `values` is empty.
+fn:min	min values	Returns the least element in `values` according to its ordering; raises an error when `values` is empty.
+fn:negate	negate value	Returns the additive inverse of `value`.
+fn:one	one	Returns the multiplicative identity for the inferred result type.
+fn:or_else	or_else fallback value	Returns `value` when it is non-empty, present, or successful; otherwise applies `fallback` to `value`.
+fn:show	show value	Renders `value` as a human-readable string. Lists, options, and results require their contained types to be renderable.
+fn:slice	slice start end list	Returns elements in the half-open range `start..end` from `list`; raises an error for out-of-range bounds or when `end < start`.
+fn:string_contains	string_contains needle haystack	Returns whether `haystack` contains `needle` as a substring.
+fn:string_ends_with	string_ends_with suffix input	Returns whether `input` ends with `suffix`.
+fn:string_find	string_find needle haystack	Finds `needle` in `haystack`, returning its first Unicode scalar index or `None`.
+fn:string_get	string_get index input	Returns the character at zero-based Unicode scalar `index` in `input`, or `None` when `index` is out of bounds.
+fn:string_join	string_join separator parts	Joins `parts`, inserting `separator` between adjacent strings.
+fn:string_replace	string_replace needle replacement input	Returns `input` with every non-overlapping occurrence of `needle` replaced by `replacement`.
+fn:string_slice	string_slice start end input	Returns the half-open Unicode scalar range `start..end` from `input`, or `None` for invalid bounds.
+fn:string_split	string_split separator input	Splits `input` at each non-overlapping occurrence of `separator`.
+fn:string_starts_with	string_starts_with prefix input	Returns whether `input` starts with `prefix`.
+fn:string_to_chars	string_to_chars input	Returns the Unicode scalar values in `input` as a character list.
+fn:string_to_hash	string_to_hash input	Parses `input` as a hexadecimal BLAKE3 hash; raises an error when `input` is invalid.
+fn:string_to_lower	string_to_lower input	Converts `input` using the Unicode lowercase mapping.
+fn:string_to_upper	string_to_upper input	Converts `input` using the Unicode uppercase mapping.
+fn:string_to_utf8	string_to_utf8 input	Encodes `input` as its UTF-8 byte sequence.
+fn:string_trim	string_trim input	Removes Unicode whitespace from both ends of `input`.
+fn:string_trim_end	string_trim_end input	Removes Unicode whitespace from the end of `input`.
+fn:string_trim_start	string_trim_start input	Removes Unicode whitespace from the start of `input`.
+fn:utf8_to_string	utf8_to_string bytes	Decodes `bytes` as UTF-8, returning `None` when the byte sequence is invalid.
+fn:pure	pure value	Wraps `value` in the inferred container type.
+fn:skip	skip count list	Drops the first `count` elements from `list`; when `count` exceeds its length, returns an empty list.
+fn:sum	sum values	Combines all elements in `values` using addition, beginning with that element type's additive identity.
+fn:take	take count list	Returns at most the first `count` elements from `list`.
+fn:unwrap	unwrap value	Extracts the value from `Some` or `Ok`; raises an error when `value` is `None` or `Err`.
+fn:unzip	unzip pairs	Splits the list of `pairs` into a pair of lists containing their first and second components.
+fn:zero	zero	Returns the additive identity for the inferred result type.
+fn:zip	zip left right	Pairs elements from `left` and `right` by position, stopping when either list ends.
+fn:||	left || right	Returns `true` when either `left` or `right` is `true`.

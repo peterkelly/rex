@@ -12,9 +12,120 @@ use rex::{
     typesystem::{Instance, Predicate, Scheme, Type, TypeKind, TypeSystem},
 };
 
-const OUTPUT_PATH: &str = "docs/src/PRELUDE.md";
+const OUTPUT_PATH: &str = "docs/src/BUILTINS.md";
 const DESCRIPTIONS_PATH: &str = "docs/src/prelude_descriptions.txt";
-const TYPE_SIGNATURE_MAX: usize = 30;
+
+struct FunctionSection {
+    title: &'static str,
+    introduction: &'static str,
+    functions: &'static [&'static str],
+}
+
+const FUNCTION_SECTIONS: &[FunctionSection] = &[
+    FunctionSection {
+        title: "Boolean Operations",
+        introduction: "Boolean operators combine two `Bool` values.",
+        functions: &["&&", "||"],
+    },
+    FunctionSection {
+        title: "Comparison Operations",
+        introduction: "Equality is available for all listed equality-comparable types. Ordering operations are available for numbers, characters, and strings.",
+        functions: &["==", "!=", "<", "<=", ">", ">=", "cmp"],
+    },
+    FunctionSection {
+        title: "Ordering Values",
+        introduction: "`cmp` returns one of these `Ordering` values.",
+        functions: &["Less", "Equal", "Greater"],
+    },
+    FunctionSection {
+        title: "Arithmetic and Aggregation",
+        introduction: "Arithmetic operators work on the numeric types listed for each operation. Some operations are also overloaded for lists or strings where noted.",
+        functions: &[
+            "zero", "one", "+", "-", "*", "/", "%", "negate", "sum", "mean", "min", "max",
+        ],
+    },
+    FunctionSection {
+        title: "General Value Functions",
+        introduction: "Functions for constructing defaults and rendering values.",
+        functions: &["default", "show"],
+    },
+    FunctionSection {
+        title: "Collection and Container Functions",
+        introduction: "Generic operations shared by lists, options, results, dictionaries, or strings. Check the availability list on each function.",
+        functions: &[
+            "length",
+            "map",
+            "filter",
+            "filter_map",
+            "foldl",
+            "foldr",
+            "fold",
+            "pure",
+            "ap",
+            "bind",
+            "or_else",
+        ],
+    },
+    FunctionSection {
+        title: "List Functions",
+        introduction: "Construct, index, slice, and combine `List` values.",
+        functions: &[
+            "Empty", "Cons", "get", "take", "skip", "first", "last", "slice", "zip", "unzip",
+        ],
+    },
+    FunctionSection {
+        title: "Dict Functions",
+        introduction: "Dictionary-specific operations. Keys are strings, dictionaries are immutable, and operations that modify a dictionary return a new value.",
+        functions: &[
+            "dict_empty",
+            "dict_singleton",
+            "dict_get",
+            "dict_has",
+            "dict_insert",
+            "dict_remove",
+            "dict_update",
+            "dict_is_empty",
+            "dict_keys",
+            "dict_values",
+            "dict_entries",
+            "dict_from_entries",
+            "dict_map",
+            "dict_filter",
+        ],
+    },
+    FunctionSection {
+        title: "String Functions",
+        introduction: "String indexing and positions count Unicode scalar values, not UTF-8 bytes. Functions with selector or modifier arguments place those arguments before the input string.",
+        functions: &[
+            "string_get",
+            "string_slice",
+            "string_contains",
+            "string_starts_with",
+            "string_ends_with",
+            "string_find",
+            "string_split",
+            "string_join",
+            "string_replace",
+            "string_trim",
+            "string_trim_start",
+            "string_trim_end",
+            "string_to_lower",
+            "string_to_upper",
+            "string_to_chars",
+            "chars_to_string",
+            "string_to_utf8",
+            "utf8_to_string",
+            "string_to_hash",
+        ],
+    },
+    FunctionSection {
+        title: "Option and Result Functions",
+        introduction: "Construct, inspect, and extract optional values and success-or-error results.",
+        functions: &[
+            "None", "Some", "is_none", "is_some", "Err", "Ok", "is_err", "is_ok", "unwrap",
+        ],
+    },
+];
 
 #[derive(Clone, Debug)]
 struct TypeDoc {
@@ -24,18 +135,17 @@ struct TypeDoc {
 }
 
 #[derive(Clone, Debug)]
-struct ClassDoc {
-    name: String,
-    supers: Vec<String>,
-    methods: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
 struct FunctionDoc {
     name: String,
     signatures: Vec<String>,
     class: Option<String>,
     implemented_on: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct DocEntry {
+    call: Option<String>,
+    description: String,
 }
 
 fn main() {
@@ -55,11 +165,12 @@ fn run() -> Result<(), String> {
 
     let primitive_type_names = collect_primitive_type_names(&ts);
     let methods_by_class = collect_methods_by_class(program)?;
-    let classes = build_classes(&ts, &methods_by_class)?;
     let types = build_types(&ts, &type_arity);
     let functions = build_functions(&ts, &methods_by_class, &primitive_type_names);
 
-    let required_keys = required_description_keys(&types, &classes, &functions);
+    validate_function_sections(&functions)?;
+
+    let required_keys = required_description_keys(&types, &functions);
     let missing_keys: Vec<String> = required_keys
         .iter()
         .filter(|key| !descriptions.contains_key(*key))
@@ -77,13 +188,13 @@ fn run() -> Result<(), String> {
         ));
     }
 
-    let markdown = render_markdown(&types, &classes, &functions, &descriptions)?;
+    let markdown = render_markdown(&types, &functions, &descriptions)?;
     fs::write(OUTPUT_PATH, markdown).map_err(|e| format!("failed to write {OUTPUT_PATH}: {e}"))?;
     println!("wrote {OUTPUT_PATH}");
     Ok(())
 }
 
-fn load_descriptions(path: &Path) -> Result<HashMap<String, String>, String> {
+fn load_descriptions(path: &Path) -> Result<HashMap<String, DocEntry>, String> {
     let content =
         fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     let mut descriptions = HashMap::new();
@@ -92,15 +203,22 @@ fn load_descriptions(path: &Path) -> Result<HashMap<String, String>, String> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let (key, description) = line.split_once('\t').ok_or_else(|| {
-            format!(
-                "{}:{}: expected `key<TAB>description`",
-                path.display(),
-                line_no + 1
-            )
-        })?;
-        let key = key.trim().to_string();
-        let description = description.trim().to_string();
+        let fields = line.split('\t').map(str::trim).collect::<Vec<_>>();
+        let (key, call, description) = match fields.as_slice() {
+            [key, description] if !key.starts_with("fn:") => (*key, None, *description),
+            [key, call, description] if key.starts_with("fn:") => {
+                (*key, Some((*call).to_string()), *description)
+            }
+            _ => {
+                return Err(format!(
+                    "{}:{}: expected `key<TAB>description` for types or `fn:name<TAB>call<TAB>description` for functions",
+                    path.display(),
+                    line_no + 1
+                ));
+            }
+        };
+        let key = key.to_string();
+        let description = description.to_string();
         if key.is_empty() || description.is_empty() {
             return Err(format!(
                 "{}:{}: key and description must be non-empty",
@@ -108,7 +226,15 @@ fn load_descriptions(path: &Path) -> Result<HashMap<String, String>, String> {
                 line_no + 1
             ));
         }
-        if descriptions.insert(key.clone(), description).is_some() {
+        if call.as_ref().is_some_and(String::is_empty) {
+            return Err(format!(
+                "{}:{}: function call form must be non-empty",
+                path.display(),
+                line_no + 1
+            ));
+        }
+        let entry = DocEntry { call, description };
+        if descriptions.insert(key.clone(), entry).is_some() {
             return Err(format!(
                 "{}:{}: duplicate key `{}`",
                 path.display(),
@@ -257,26 +383,6 @@ fn build_types(ts: &TypeSystem, type_arity: &BTreeMap<String, usize>) -> Vec<Typ
     out
 }
 
-fn build_classes(
-    ts: &TypeSystem,
-    methods_by_class: &BTreeMap<String, Vec<String>>,
-) -> Result<Vec<ClassDoc>, String> {
-    let mut out = Vec::new();
-    for (class_name, methods) in methods_by_class {
-        let info = ts
-            .class_info
-            .get(&Symbol::intern(class_name.as_str()))
-            .ok_or_else(|| format!("missing class info for `{class_name}`"))?;
-        let supers = info.supers.iter().map(ToString::to_string).collect();
-        out.push(ClassDoc {
-            name: class_name.clone(),
-            supers,
-            methods: methods.clone(),
-        });
-    }
-    Ok(out)
-}
-
 fn format_predicate(pred: &Predicate) -> String {
     format!("{} {}", pred.class, pred.typ)
 }
@@ -295,7 +401,13 @@ fn format_scheme(scheme: &Scheme) -> String {
     }
 }
 
-fn format_instance_head(inst: &Instance) -> String {
+fn format_instance_target(class_name: &str, inst: &Instance) -> String {
+    if class_name == "Indexable"
+        && let TypeKind::Tuple(types) = inst.head.typ.as_ref()
+        && let Some(container) = types.first()
+    {
+        return container.to_string();
+    }
     inst.head.typ.to_string()
 }
 
@@ -340,7 +452,7 @@ fn build_functions(
             .cloned()
             .unwrap_or_default()
             .iter()
-            .map(format_instance_head)
+            .map(|instance| format_instance_target(&class_name, instance))
             .collect::<Vec<_>>();
         out.push(FunctionDoc {
             name: method_name,
@@ -386,17 +498,54 @@ fn build_functions(
     out
 }
 
-fn required_description_keys(
-    types: &[TypeDoc],
-    classes: &[ClassDoc],
-    functions: &[FunctionDoc],
-) -> BTreeSet<String> {
+fn validate_function_sections(functions: &[FunctionDoc]) -> Result<(), String> {
+    let actual = functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut categorized = BTreeSet::new();
+    let mut duplicates = BTreeSet::new();
+
+    for section in FUNCTION_SECTIONS {
+        for name in section.functions {
+            if !categorized.insert(*name) {
+                duplicates.insert(*name);
+            }
+        }
+    }
+
+    let missing = actual.difference(&categorized).copied().collect::<Vec<_>>();
+    let unknown = categorized.difference(&actual).copied().collect::<Vec<_>>();
+    if duplicates.is_empty() && missing.is_empty() && unknown.is_empty() {
+        return Ok(());
+    }
+
+    let mut problems = Vec::new();
+    if !duplicates.is_empty() {
+        problems.push(format!(
+            "functions assigned to multiple sections: {}",
+            duplicates.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if !missing.is_empty() {
+        problems.push(format!(
+            "functions missing from sections: {}",
+            missing.join(", ")
+        ));
+    }
+    if !unknown.is_empty() {
+        problems.push(format!(
+            "section entries that are not built-ins: {}",
+            unknown.join(", ")
+        ));
+    }
+    Err(problems.join("\n"))
+}
+
+fn required_description_keys(types: &[TypeDoc], functions: &[FunctionDoc]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for t in types {
         out.insert(format!("type:{}", t.name));
-    }
-    for c in classes {
-        out.insert(format!("class:{}", c.name));
     }
     for f in functions {
         out.insert(format!("fn:{}", f.name));
@@ -404,82 +553,163 @@ fn required_description_keys(
     out
 }
 
-fn desc<'a>(descriptions: &'a HashMap<String, String>, key: &str) -> Result<&'a str, String> {
+fn doc_entry<'a>(
+    descriptions: &'a HashMap<String, DocEntry>,
+    key: &str,
+) -> Result<&'a DocEntry, String> {
     descriptions
         .get(key)
-        .map(String::as_str)
         .ok_or_else(|| format!("missing description for `{key}`"))
 }
 
-fn wrap_text(text: &str, max: usize) -> Vec<String> {
-    if text.len() <= max {
-        return vec![text.to_string()];
-    }
-
-    let mut lines = Vec::new();
-    let mut current = String::new();
-
-    for word in text.split_whitespace() {
-        if word.len() > max {
-            if !current.is_empty() {
-                lines.push(current.clone());
-                current.clear();
-            }
-            let mut start = 0;
-            while start < word.len() {
-                let end = (start + max).min(word.len());
-                lines.push(word[start..end].to_string());
-                start = end;
-            }
-            continue;
-        }
-
-        let candidate_len = if current.is_empty() {
-            word.len()
-        } else {
-            current.len() + 1 + word.len()
-        };
-        if candidate_len > max && !current.is_empty() {
-            lines.push(current.clone());
-            current.clear();
-        }
-        if current.is_empty() {
-            current.push_str(word);
-        } else {
-            current.push(' ');
-            current.push_str(word);
-        }
-    }
-
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    if lines.is_empty() {
-        lines.push(text.to_string());
-    }
-    lines
-}
-
-fn format_signature_cell(signature: &str) -> String {
-    wrap_text(signature, TYPE_SIGNATURE_MAX)
-        .into_iter()
-        .map(|line| format!("`{line}`"))
-        .collect::<Vec<_>>()
-        .join("<br>")
-}
-
-fn elide_constraints(signature: &str) -> String {
+fn elide_constraints(signature: &str) -> &str {
     match signature.split_once("=>") {
-        Some((_, main)) => main.trim().to_string(),
-        None => signature.to_string(),
+        Some((_, main)) => main.trim(),
+        None => signature,
+    }
+}
+
+fn enclosing_parentheses_cover(text: &str) -> bool {
+    if !text.starts_with('(') || !text.ends_with(')') {
+        return false;
+    }
+    let mut depth = 0usize;
+    for (index, ch) in text.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+                if depth == 0 && index + ch.len_utf8() != text.len() {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+fn contains_top_level_comma(text: &str) -> bool {
+    let mut depth = 0usize;
+    for ch in text.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+fn strip_redundant_parentheses(mut text: &str) -> &str {
+    text = text.trim();
+    while enclosing_parentheses_cover(text) {
+        let inner = text[1..text.len() - 1].trim();
+        if contains_top_level_comma(inner) {
+            break;
+        }
+        text = inner;
+    }
+    text
+}
+
+fn top_level_arrow(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut index = 0usize;
+    while index + 1 < bytes.len() {
+        match bytes[index] {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b'-' if bytes[index + 1] == b'>' && depth == 0 => return Some(index),
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+fn split_top_level_commas(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, ch) in text.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(text[start..index].trim());
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(text[start..].trim());
+    parts
+}
+
+fn simplify_type(text: &str) -> String {
+    let text = strip_redundant_parentheses(text);
+    if enclosing_parentheses_cover(text) {
+        let inner = text[1..text.len() - 1].trim();
+        if contains_top_level_comma(inner) {
+            let elements = split_top_level_commas(inner)
+                .into_iter()
+                .map(simplify_type)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return format!("({elements})");
+        }
+    }
+    let Some(arrow) = top_level_arrow(text) else {
+        return text.to_string();
+    };
+
+    let left = simplify_type(&text[..arrow]);
+    let right = simplify_type(&text[arrow + 2..]);
+    let left = if top_level_arrow(strip_redundant_parentheses(&left)).is_some() {
+        format!("({left})")
+    } else {
+        left
+    };
+    format!("{left} -> {right}")
+}
+
+fn simplify_signature(signature: &str, omit_constraints: bool) -> String {
+    let signature = if omit_constraints {
+        elide_constraints(signature)
+    } else {
+        signature
+    };
+    match signature.split_once("=>") {
+        Some((constraints, typ)) => {
+            format!("{} => {}", constraints.trim(), simplify_type(typ))
+        }
+        None => simplify_type(signature),
+    }
+}
+
+fn manual_availability(name: &str) -> Option<&'static str> {
+    match name {
+        "sum" => Some(
+            "`List 'a` and `Option 'a`, where `'a` is a numeric type, `String`, or another `List` type",
+        ),
+        "mean" => Some("`List f32`, `List f64`, `Option f32`, and `Option f64`"),
+        "min" | "max" => {
+            Some("`List 'a` and `Option 'a`, where `'a` is a numeric type, `Char`, or `String`")
+        }
+        _ => None,
     }
 }
 
 fn render_markdown(
     types: &[TypeDoc],
-    classes: &[ClassDoc],
     functions: &[FunctionDoc],
-    descriptions: &HashMap<String, String>,
+    descriptions: &HashMap<String, DocEntry>,
 ) -> Result<String, String> {
     let mut out = String::new();
     out.push_str("# Built-in types & functions\n\n");
@@ -492,7 +722,7 @@ fn render_markdown(
     out.push_str("|---|---|\n");
     for typ in types {
         let key = format!("type:{}", typ.name);
-        let mut detail = desc(descriptions, &key)?.to_string();
+        let mut detail = doc_entry(descriptions, &key)?.description.clone();
         if !typ.constructors.is_empty() {
             let constructors = typ
                 .constructors
@@ -506,91 +736,94 @@ fn render_markdown(
         let _ = writeln!(&mut out, "| {head} | {detail} |");
     }
 
-    out.push_str("\n## Built-in Type Classes\n\n");
-    for class_doc in classes {
-        let class_name = &class_doc.name;
-        let class_desc = desc(descriptions, &format!("class:{class_name}"))?;
-        let _ = writeln!(&mut out, "### `{class_name}`");
-        let _ = writeln!(&mut out, "{class_desc}");
-        if class_doc.supers.is_empty() {
-            out.push_str("\nSuperclasses: _none_\n\n");
-        } else {
-            let supers = class_doc
-                .supers
-                .iter()
-                .map(|s| format!("`{s}`"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let _ = writeln!(&mut out, "\nSuperclasses: {supers}\n");
-        }
-        out.push_str("Methods:\n");
-        for method in &class_doc.methods {
-            let fn_desc = desc(descriptions, &format!("fn:{method}"))?;
-            let signature = functions
-                .iter()
-                .find(|f| &f.name == method)
-                .and_then(|f| f.signatures.first())
-                .cloned()
-                .unwrap_or_else(|| "<missing signature>".to_string());
-            let _ = writeln!(&mut out, "- `{method}`: `{signature}`. {fn_desc}",);
-        }
-        out.push('\n');
-    }
+    out.push_str("\n## Reading Function Entries\n\n");
+    out.push_str("Rex functions are curried, so `f first second` can be partially applied as `f first`. The **Call** paragraph gives every parameter a stable, descriptive name. The **Type** paragraph gives the inferred Rex type; type variables begin with an apostrophe. For overloaded functions, **Available for** lists the built-in types and type constructors that provide the operation.\n\n");
 
-    out.push_str("## Built-in Functions\n\n");
-    out.push_str("### Overloaded (Type Class Methods)\n\n");
-    out.push_str("| Function | Signature | Implemented On | Description |\n");
-    out.push_str("|---|---|---|---|\n");
-    for function in functions.iter().filter(|f| f.class.is_some()) {
-        let implementations = if function.implemented_on.is_empty() {
-            "_none_".to_string()
-        } else {
-            function
-                .implemented_on
+    for section in FUNCTION_SECTIONS {
+        let _ = writeln!(&mut out, "## {}\n", section.title);
+        let _ = writeln!(&mut out, "{}\n", section.introduction);
+
+        for name in section.functions {
+            let function = functions
                 .iter()
-                .map(|h| format!("`{h}`"))
-                .collect::<Vec<_>>()
-                .join("<br>")
-        };
-        let signatures = if function.signatures.is_empty() {
-            "_none_".to_string()
-        } else {
-            function
+                .find(|function| function.name == *name)
+                .ok_or_else(|| format!("missing function metadata for `{name}`"))?;
+            let entry = doc_entry(descriptions, &format!("fn:{name}"))?;
+            let call = entry
+                .call
+                .as_deref()
+                .ok_or_else(|| format!("missing call form for `fn:{name}`"))?;
+
+            let _ = writeln!(&mut out, "### `{name}`\n");
+            let _ = writeln!(&mut out, "**Call:** `{call}`\n");
+
+            let label = if function.signatures.len() == 1 {
+                "Type"
+            } else {
+                "Types"
+            };
+            let signatures = function
                 .signatures
                 .iter()
-                .map(|s| format_signature_cell(&elide_constraints(s)))
+                .map(|signature| {
+                    format!(
+                        "`{}`",
+                        simplify_signature(
+                            signature,
+                            function.class.is_some() || manual_availability(name).is_some(),
+                        )
+                    )
+                })
                 .collect::<Vec<_>>()
-                .join("<br><br>")
-        };
-        let fn_desc = desc(descriptions, &format!("fn:{}", function.name))?;
-        let _ = writeln!(
-            &mut out,
-            "| `{}` | {} | {} | {} |",
-            function.name, signatures, implementations, fn_desc
-        );
+                .join("; ");
+            let _ = writeln!(&mut out, "**{label}:** {signatures}\n");
+
+            if function.class.is_some() {
+                let implementations = function
+                    .implemented_on
+                    .iter()
+                    .map(|typ| format!("`{}`", simplify_type(typ)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(&mut out, "**Available for:** {implementations}\n");
+            } else if let Some(availability) = manual_availability(name) {
+                let _ = writeln!(&mut out, "**Available for:** {availability}\n");
+            }
+
+            let _ = writeln!(&mut out, "{}\n", entry.description);
+        }
     }
 
-    out.push_str("\n### Other Built-ins\n\n");
-    out.push_str("| Function | Signature | Description |\n");
-    out.push_str("|---|---|---|\n");
-    for function in functions.iter().filter(|f| f.class.is_none()) {
-        let signatures = if function.signatures.is_empty() {
-            "_none_".to_string()
-        } else {
-            function
-                .signatures
-                .iter()
-                .map(|s| format_signature_cell(s))
-                .collect::<Vec<_>>()
-                .join("<br><br>")
-        };
-        let fn_desc = desc(descriptions, &format!("fn:{}", function.name))?;
-        let _ = writeln!(
-            &mut out,
-            "| `{}` | {} | {} |",
-            function.name, signatures, fn_desc
-        );
-    }
-
+    out.truncate(out.trim_end().len());
+    out.push('\n');
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{simplify_signature, simplify_type};
+
+    #[test]
+    fn simplifies_right_associative_function_types() {
+        assert_eq!(
+            simplify_type("(String -> (String -> (Option u64)))"),
+            "String -> String -> Option u64"
+        );
+        assert_eq!(
+            simplify_type("(('a -> Bool) -> ((List 'a) -> (List 'a)))"),
+            "('a -> Bool) -> List 'a -> List 'a"
+        );
+        assert_eq!(simplify_type("(String, 'a)"), "(String, 'a)");
+        assert_eq!(simplify_type("(('f 'a), ('f 'b))"), "('f 'a, 'f 'b)");
+    }
+
+    #[test]
+    fn preserves_or_elides_constraints_as_requested() {
+        let signature = "Foldable 'f, Ord 'a => (('f 'a) -> 'a)";
+        assert_eq!(
+            simplify_signature(signature, false),
+            "Foldable 'f, Ord 'a => 'f 'a -> 'a"
+        );
+        assert_eq!(simplify_signature(signature, true), "'f 'a -> 'a");
+    }
 }

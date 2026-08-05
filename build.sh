@@ -28,8 +28,8 @@ cargo test
 echo build.sh Step 6 of $STEPS: cargo run -p rex-cli --bin gen_prelude_docs
 cargo run -p rex-cli --bin gen_prelude_docs
 
-echo build.sh Step 7 of $STEPS: git diff --exit-code docs/src/PRELUDE.md
-git diff --exit-code docs/src/PRELUDE.md
+echo build.sh Step 7 of $STEPS: git diff --exit-code docs/src/BUILTINS.md
+git diff --exit-code docs/src/BUILTINS.md
 
 echo build.sh Step 8 of $STEPS: mdbook build docs
 mdbook build docs
