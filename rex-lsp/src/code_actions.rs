@@ -710,7 +710,8 @@ pub(crate) fn hole_fill_candidates_at_position(
         in_scope = in_scope.split_off(in_scope.len().saturating_sub(MAX_SEMANTIC_IN_SCOPE_VALUES));
     }
 
-    let values = semantic_candidate_values(&ts);
+    let preferred_names = decl_value_names(&program.decls);
+    let values = semantic_candidate_values(&ts, &preferred_names);
 
     let mut adapters: Vec<(String, Type, Type)> = Vec::new();
     for (name, schemes) in &values {

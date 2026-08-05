@@ -7,8 +7,10 @@ pub(crate) use std::sync::{Arc, Mutex, OnceLock};
 pub(crate) use futures::future::BoxFuture;
 pub(crate) use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CompletionItem, CompletionItemKind,
-    Diagnostic, DiagnosticSeverity, DocumentSymbol, GotoDefinitionResponse, Hover, HoverContents,
-    Location, MarkupContent, MarkupKind, Position, Range, SymbolKind, TextEdit, Url, WorkspaceEdit,
+    Diagnostic, DiagnosticSeverity, DocumentChanges, DocumentSymbol, GotoDefinitionResponse, Hover,
+    HoverContents, Location, MarkupContent, MarkupKind, OneOf,
+    OptionalVersionedTextDocumentIdentifier, Position, Range, SymbolKind, TextDocumentEdit,
+    TextEdit, Url, WorkspaceEdit,
 };
 pub(crate) use rex_ast::{
     CompilationUnit, Decl, Expr, ImportDecl, ImportPath, Pattern, Symbol, TypeDecl, TypeExpr,

@@ -183,17 +183,9 @@ fn execute_semantic_loop_step(uri: &Url, text: &str, position: Position) -> Opti
 fn execute_semantic_loop_apply_quick_fix(
     uri: &Url,
     text: &str,
-    position: Position,
-    quick_fix_id: &str,
+    quick_fix: &Value,
 ) -> Option<Value> {
-    let session = AnalysisSession::isolated();
-    rex_lsp::queries::execute_semantic_loop_apply_quick_fix(
-        &session,
-        uri,
-        text,
-        position,
-        quick_fix_id,
-    )
+    rex_lsp::queries::execute_semantic_loop_apply_quick_fix(uri, text, None, quick_fix)
 }
 
 fn execute_semantic_loop_apply_best_quick_fixes(
@@ -1721,18 +1713,33 @@ fn command_parses_uri_position_tuple_args() {
 }
 
 #[test]
-fn command_parses_uri_position_and_id_tuple_args() {
+fn command_parses_uri_and_quick_fix_tuple_args() {
+    let quick_fix = json!({
+        "protocolVersion": 2,
+        "id": "qf2-abc",
+    });
     let args = vec![
         Value::String("inmemory:///docs.rex".to_string()),
-        Value::from(2u64),
-        Value::from(3u64),
-        Value::String("qf-abc".to_string()),
+        quick_fix.clone(),
     ];
-    let (uri, pos, id) = command_uri_position_and_id(&args).expect("parsed command args");
+    let (uri, parsed_quick_fix) = command_uri_and_quick_fix(&args).expect("parsed command args");
     assert_eq!(uri.as_str(), "inmemory:///docs.rex");
-    assert_eq!(pos.line, 2);
-    assert_eq!(pos.character, 3);
-    assert_eq!(id, "qf-abc");
+    assert_eq!(parsed_quick_fix, quick_fix);
+}
+
+#[test]
+fn command_parses_uri_and_quick_fix_object_args() {
+    let quick_fix = json!({
+        "protocolVersion": 2,
+        "id": "qf2-abc",
+    });
+    let args = vec![json!({
+        "uri": "inmemory:///docs.rex",
+        "quickFix": quick_fix,
+    })];
+    let (uri, parsed_quick_fix) = command_uri_and_quick_fix(&args).expect("parsed command args");
+    assert_eq!(uri.as_str(), "inmemory:///docs.rex");
+    assert_eq!(parsed_quick_fix, quick_fix);
 }
 
 #[test]
@@ -2236,6 +2243,12 @@ let y : i32 = ? in y
         "quickFixes should not be empty: {obj:#?}"
     );
     let first_quick_fix = expect_object(quick_fixes.first().expect("first quick fix"));
+    assert_eq!(
+        first_quick_fix
+            .get("protocolVersion")
+            .and_then(Value::as_u64),
+        Some(SEMANTIC_QUICK_FIX_PROTOCOL_VERSION)
+    );
     expect_string_field(first_quick_fix, "id");
     expect_string_field(first_quick_fix, "title");
     // `kind` may be null for some future quick-fix types, but key should exist.
@@ -2247,10 +2260,18 @@ let y : i32 = ? in y
         first_quick_fix.contains_key("edit"),
         "quickFix should include `edit`: {first_quick_fix:#?}"
     );
+    let precondition = expect_object(
+        first_quick_fix
+            .get("precondition")
+            .expect("quickFix.precondition"),
+    );
+    assert_eq!(expect_string_field(precondition, "uri"), uri.as_str());
+    expect_string_field(precondition, "contentHash");
+    assert!(precondition.contains_key("documentVersion"));
 }
 
 #[test]
-fn semantic_loop_apply_quick_fix_resolves_by_id() {
+fn semantic_loop_apply_quick_fix_returns_exact_proposal() {
     let uri = in_memory_doc_uri();
     let text = "let y = z in y";
     let step = execute_semantic_loop_step(
@@ -2262,37 +2283,17 @@ fn semantic_loop_apply_quick_fix_resolves_by_id() {
         },
     )
     .expect("step output");
-    let quick_fix_id = step
+    let quick_fix = step
         .get("quickFixes")
         .and_then(Value::as_array)
         .and_then(|arr| arr.first())
-        .and_then(|item| item.get("id"))
-        .and_then(Value::as_str)
-        .expect("quick fix id")
-        .to_string();
+        .cloned()
+        .expect("quick fix");
 
-    let out = execute_semantic_loop_apply_quick_fix(
-        &uri,
-        text,
-        Position {
-            line: 0,
-            character: 8,
-        },
-        &quick_fix_id,
-    )
-    .expect("apply output");
-    let quick_fix = out
-        .get("quickFix")
-        .and_then(Value::as_object)
-        .expect("quickFix object");
-    assert_eq!(
-        quick_fix
-            .get("id")
-            .and_then(Value::as_str)
-            .expect("quickFix.id"),
-        quick_fix_id
-    );
-    assert!(quick_fix.get("edit").is_some(), "quickFix: {quick_fix:#?}");
+    let out = execute_semantic_loop_apply_quick_fix(&uri, text, &quick_fix).expect("apply output");
+    assert_eq!(out.get("status").and_then(Value::as_str), Some("ready"));
+    let returned_quick_fix = out.get("quickFix").expect("quickFix object");
+    assert_eq!(returned_quick_fix, &quick_fix);
 }
 
 #[test]
@@ -2308,27 +2309,21 @@ fn semantic_loop_apply_quick_fix_json_contract_is_stable() {
         },
     )
     .expect("step output");
-    let quick_fix_id = step
+    let quick_fix = step
         .get("quickFixes")
         .and_then(Value::as_array)
         .and_then(|arr| arr.first())
-        .and_then(|item| item.get("id"))
-        .and_then(Value::as_str)
-        .expect("quick fix id")
-        .to_string();
+        .cloned()
+        .expect("quick fix");
 
-    let out = execute_semantic_loop_apply_quick_fix(
-        &uri,
-        text,
-        Position {
-            line: 0,
-            character: 8,
-        },
-        &quick_fix_id,
-    )
-    .expect("apply output");
+    let out = execute_semantic_loop_apply_quick_fix(&uri, text, &quick_fix).expect("apply output");
     let obj = expect_object(&out);
+    assert_eq!(expect_string_field(obj, "status"), "ready");
     let quick_fix = expect_object(obj.get("quickFix").expect("quickFix"));
+    assert_eq!(
+        quick_fix.get("protocolVersion").and_then(Value::as_u64),
+        Some(SEMANTIC_QUICK_FIX_PROTOCOL_VERSION)
+    );
     expect_string_field(quick_fix, "id");
     expect_string_field(quick_fix, "title");
     assert!(quick_fix.contains_key("kind"));
@@ -2336,20 +2331,135 @@ fn semantic_loop_apply_quick_fix_json_contract_is_stable() {
 }
 
 #[test]
-fn semantic_loop_apply_quick_fix_unknown_id_returns_null() {
+fn semantic_loop_apply_quick_fix_rejects_tampered_proposal() {
     let uri = in_memory_doc_uri();
     let text = "let y = z in y";
-    let out = execute_semantic_loop_apply_quick_fix(
+    let step = execute_semantic_loop_step(
         &uri,
         text,
         Position {
             line: 0,
             character: 8,
         },
-        "qf-does-not-exist",
     )
-    .expect("apply output");
-    assert_eq!(out, Value::Null);
+    .expect("step output");
+    let mut quick_fix = step
+        .get("quickFixes")
+        .and_then(Value::as_array)
+        .and_then(|arr| arr.first())
+        .cloned()
+        .expect("quick fix");
+    quick_fix["title"] = Value::String("tampered title".to_string());
+
+    let out = execute_semantic_loop_apply_quick_fix(&uri, text, &quick_fix).expect("apply output");
+    assert_eq!(out.get("status").and_then(Value::as_str), Some("rejected"));
+    assert_eq!(
+        out.get("reason").and_then(Value::as_str),
+        Some("proposalIdMismatch")
+    );
+}
+
+#[test]
+fn semantic_loop_apply_quick_fix_rejects_stale_document() {
+    let uri = in_memory_doc_uri();
+    let text = "let y = z in y";
+    let step = execute_semantic_loop_step(
+        &uri,
+        text,
+        Position {
+            line: 0,
+            character: 8,
+        },
+    )
+    .expect("step output");
+    let quick_fix = step
+        .get("quickFixes")
+        .and_then(Value::as_array)
+        .and_then(|arr| arr.first())
+        .cloned()
+        .expect("quick fix");
+
+    let out = execute_semantic_loop_apply_quick_fix(&uri, "let y = z in y ", &quick_fix)
+        .expect("apply output");
+    assert_eq!(out.get("status").and_then(Value::as_str), Some("stale"));
+    assert_eq!(
+        out.get("reason").and_then(Value::as_str),
+        Some("documentContentChanged")
+    );
+}
+
+#[test]
+fn semantic_loop_apply_quick_fix_rejects_stale_document_version() {
+    let uri = in_memory_doc_uri();
+    let text = "let y = z in y";
+    let session = AnalysisSession::isolated();
+    let step = rex_lsp::queries::execute_semantic_loop_step_with_version(
+        &session,
+        &uri,
+        text,
+        Position {
+            line: 0,
+            character: 8,
+        },
+        Some(7),
+    )
+    .expect("step output");
+    let quick_fix = step
+        .get("quickFixes")
+        .and_then(Value::as_array)
+        .and_then(|arr| arr.first())
+        .cloned()
+        .expect("quick fix");
+
+    let edit: WorkspaceEdit = serde_json::from_value(
+        quick_fix
+            .get("edit")
+            .cloned()
+            .expect("versioned quick-fix edit"),
+    )
+    .expect("workspace edit");
+    let Some(lsp_types::DocumentChanges::Edits(document_edits)) = &edit.document_changes else {
+        panic!("expected versioned document edits: {edit:#?}");
+    };
+    assert!(document_edits.iter().any(|document_edit| {
+        document_edit.text_document.uri == uri && document_edit.text_document.version == Some(7)
+    }));
+    let ready =
+        rex_lsp::queries::execute_semantic_loop_apply_quick_fix(&uri, text, Some(7), &quick_fix)
+            .expect("ready apply output");
+    assert_eq!(ready.get("status").and_then(Value::as_str), Some("ready"));
+
+    let out =
+        rex_lsp::queries::execute_semantic_loop_apply_quick_fix(&uri, text, Some(8), &quick_fix)
+            .expect("apply output");
+    assert_eq!(out.get("status").and_then(Value::as_str), Some("stale"));
+    assert_eq!(
+        out.get("reason").and_then(Value::as_str),
+        Some("documentVersionChanged")
+    );
+}
+
+#[test]
+fn semantic_loop_quick_fix_discovery_is_deterministic_across_sessions() {
+    let uri = in_memory_doc_uri();
+    let text = r#"
+fn mk : i32 -> i32 = \x -> x;
+let y : i32 = ? in y
+"#;
+    let position = Position {
+        line: 2,
+        character: 14,
+    };
+    let expected = execute_semantic_loop_step(&uri, text, position)
+        .and_then(|step| step.get("quickFixes").cloned())
+        .expect("initial quick fixes");
+
+    for _ in 0..8 {
+        let actual = execute_semantic_loop_step(&uri, text, position)
+            .and_then(|step| step.get("quickFixes").cloned())
+            .expect("repeated quick fixes");
+        assert_eq!(actual, expected);
+    }
 }
 
 #[test]
@@ -2540,7 +2650,7 @@ fn semantic_loop_step_parse_error_still_returns_contract_shape() {
 }
 
 #[test]
-fn golden_flow_hole_to_apply_by_id_reduces_hole_count() {
+fn golden_flow_hole_to_apply_proposal_reduces_hole_count() {
     let uri = in_memory_doc_uri();
     let text = r#"
 fn mk : i32 -> i32 = \x -> x;
@@ -2555,7 +2665,7 @@ let y : i32 = ? in y
         },
     )
     .expect("step output");
-    let quick_fix_id = step
+    let quick_fix = step
         .get("quickFixes")
         .and_then(Value::as_array)
         .and_then(|arr| {
@@ -2565,20 +2675,11 @@ let y : i32 = ? in y
                     .is_some_and(|title| title == "Fill hole with `mk`")
             })
         })
-        .and_then(|item| item.get("id"))
-        .and_then(Value::as_str)
-        .expect("hole fill quick-fix id")
-        .to_string();
-    let apply = execute_semantic_loop_apply_quick_fix(
-        &uri,
-        text,
-        Position {
-            line: 2,
-            character: 14,
-        },
-        &quick_fix_id,
-    )
-    .expect("apply output");
+        .cloned()
+        .expect("hole fill quick-fix");
+    let apply =
+        execute_semantic_loop_apply_quick_fix(&uri, text, &quick_fix).expect("apply output");
+    assert_eq!(apply.get("status").and_then(Value::as_str), Some("ready"));
     let quick_fix = apply.get("quickFix").expect("quickFix returned").clone();
     let edit: WorkspaceEdit =
         serde_json::from_value(quick_fix.get("edit").cloned().expect("quickFix.edit"))

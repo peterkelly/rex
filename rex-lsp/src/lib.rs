@@ -12,6 +12,7 @@ pub const CMD_SEMANTIC_LOOP_STEP: &str = "rex.semanticLoopStep";
 pub const CMD_SEMANTIC_LOOP_APPLY_QUICK_FIX_AT: &str = "rex.semanticLoopApplyQuickFixAt";
 pub const CMD_SEMANTIC_LOOP_APPLY_BEST_QUICK_FIXES_AT: &str =
     "rex.semanticLoopApplyBestQuickFixesAt";
+pub const SEMANTIC_QUICK_FIX_PROTOCOL_VERSION: u64 = 2;
 pub(crate) const MAX_DIAGNOSTICS: usize = 50;
 pub(crate) const NO_IMPROVEMENT_STREAK_LIMIT: usize = 2;
 pub const MAX_SEMANTIC_ENV_SCHEMES_SCAN: usize = 1024;

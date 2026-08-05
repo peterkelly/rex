@@ -4,7 +4,7 @@ use lsp_types::{
     CodeActionKind, CompletionResponse, DocumentSymbolResponse, GotoDefinitionResponse, Hover,
     Location, TextEdit, Url, WorkspaceEdit,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
@@ -30,18 +30,24 @@ use crate::{
     document::{document_symbols_for_source, format_edits_for_source},
     navigation::{goto_definition_response, references_for_source, rename_for_source},
     queries::{
-        command_uri, command_uri_and_position, command_uri_position_and_id,
+        command_uri, command_uri_and_position, command_uri_and_quick_fix,
         command_uri_position_max_steps_strategy_and_dry_run, execute_query_command_for_document,
         execute_query_command_for_document_without_position,
         execute_semantic_loop_apply_best_quick_fixes, execute_semantic_loop_apply_quick_fix,
-        execute_semantic_loop_step, hover_type_contents,
+        execute_semantic_loop_step_with_version, hover_type_contents,
     },
     shared::{AnalysisSession, AnalysisState},
 };
 
+#[derive(Clone)]
+struct DocumentState {
+    text: String,
+    version: i32,
+}
+
 struct RexServer {
     client: Client,
-    documents: RwLock<HashMap<Url, String>>,
+    documents: RwLock<HashMap<Url, DocumentState>>,
     analysis: AnalysisState,
 }
 
@@ -54,10 +60,18 @@ impl RexServer {
         }
     }
 
-    async fn document_with_session(&self, uri: &Url) -> Option<(String, AnalysisSession)> {
+    async fn document_with_session(&self, uri: &Url) -> Option<(String, i32, AnalysisSession)> {
         let documents = self.documents.read().await;
-        let text = documents.get(uri)?.clone();
-        Some((text, self.analysis.session(documents.clone())))
+        let document = documents.get(uri)?.clone();
+        let open_documents = documents
+            .iter()
+            .map(|(uri, document)| (uri.clone(), document.text.clone()))
+            .collect();
+        Some((
+            document.text,
+            document.version,
+            self.analysis.session(open_documents),
+        ))
     }
 
     async fn publish_diagnostics(&self, uri: Url, text: &str) {
@@ -65,7 +79,11 @@ impl RexServer {
         let text_for_job = text.to_string();
         let session = {
             let documents = self.documents.read().await;
-            self.analysis.session(documents.clone())
+            let open_documents = documents
+                .iter()
+                .map(|(uri, document)| (uri.clone(), document.text.clone()))
+                .collect();
+            self.analysis.session(open_documents)
         };
         let diagnostics = match tokio::task::spawn_blocking(move || {
             diagnostics_from_text(&session, &uri_for_job, &text_for_job)
@@ -149,17 +167,22 @@ impl LanguageServer for RexServer {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
         let text = params.text_document.text;
+        let version = params.text_document.version;
 
-        self.documents
-            .write()
-            .await
-            .insert(uri.clone(), text.clone());
+        self.documents.write().await.insert(
+            uri.clone(),
+            DocumentState {
+                text: text.clone(),
+                version,
+            },
+        );
         self.analysis.clear_parse_cache(&uri);
         self.publish_diagnostics(uri, &text).await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri;
+        let version = params.text_document.version;
         let text = params
             .content_changes
             .into_iter()
@@ -167,10 +190,13 @@ impl LanguageServer for RexServer {
             .map(|change| change.text);
 
         if let Some(text) = text {
-            self.documents
-                .write()
-                .await
-                .insert(uri.clone(), text.clone());
+            self.documents.write().await.insert(
+                uri.clone(),
+                DocumentState {
+                    text: text.clone(),
+                    version,
+                },
+            );
             self.analysis.clear_parse_cache(&uri);
             self.publish_diagnostics(uri, &text).await;
         }
@@ -186,7 +212,7 @@ impl LanguageServer for RexServer {
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        let Some((text, session)) = self.document_with_session(&uri).await else {
+        let Some((text, _version, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
 
@@ -220,7 +246,7 @@ impl LanguageServer for RexServer {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
-        let Some((text, session)) = self.document_with_session(&uri).await else {
+        let Some((text, _version, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
 
@@ -244,7 +270,7 @@ impl LanguageServer for RexServer {
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri;
-        let Some((text, session)) = self.document_with_session(&uri).await else {
+        let Some((text, _version, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
 
@@ -276,7 +302,7 @@ impl LanguageServer for RexServer {
             let Some(uri) = command_uri(&arguments) else {
                 return Ok(None);
             };
-            let Some((text, session)) = self.document_with_session(&uri).await else {
+            let Some((text, _version, session)) = self.document_with_session(&uri).await else {
                 return Ok(None);
             };
             return Ok(execute_query_command_for_document_without_position(
@@ -287,26 +313,75 @@ impl LanguageServer for RexServer {
             let Some((uri, position)) = command_uri_and_position(&arguments) else {
                 return Ok(None);
             };
-            let Some((text, session)) = self.document_with_session(&uri).await else {
+            let Some((text, version, session)) = self.document_with_session(&uri).await else {
                 return Ok(None);
             };
-            return Ok(execute_semantic_loop_step(&session, &uri, &text, position));
-        }
-        if command == CMD_SEMANTIC_LOOP_APPLY_QUICK_FIX_AT {
-            let Some((uri, position, quick_fix_id)) = command_uri_position_and_id(&arguments)
-            else {
-                return Ok(None);
-            };
-            let Some((text, session)) = self.document_with_session(&uri).await else {
-                return Ok(None);
-            };
-            return Ok(execute_semantic_loop_apply_quick_fix(
+            return Ok(execute_semantic_loop_step_with_version(
                 &session,
                 &uri,
                 &text,
                 position,
-                &quick_fix_id,
+                Some(version),
             ));
+        }
+        if command == CMD_SEMANTIC_LOOP_APPLY_QUICK_FIX_AT {
+            let Some((uri, quick_fix)) = command_uri_and_quick_fix(&arguments) else {
+                return Ok(Some(json!({
+                    "status": "rejected",
+                    "reason": "invalidArguments",
+                    "detail": "expected a document URI and complete quick-fix proposal",
+                })));
+            };
+            let Some((text, version, _session)) = self.document_with_session(&uri).await else {
+                return Ok(Some(json!({
+                    "status": "rejected",
+                    "reason": "documentUnavailable",
+                    "detail": "quick-fix target is not an open document",
+                })));
+            };
+            let Some(validation) =
+                execute_semantic_loop_apply_quick_fix(&uri, &text, Some(version), &quick_fix)
+            else {
+                return Ok(Some(json!({
+                    "status": "rejected",
+                    "reason": "invalidProposal",
+                    "detail": "quick-fix proposal validation produced no result",
+                })));
+            };
+            if validation.get("status").and_then(Value::as_str) != Some("ready") {
+                return Ok(Some(validation));
+            }
+            let Some(edit_value) = quick_fix.get("edit").cloned() else {
+                return Ok(Some(json!({
+                    "status": "rejected",
+                    "reason": "invalidEdit",
+                    "detail": "validated quick-fix proposal is missing its edit",
+                })));
+            };
+            let Ok(edit) = serde_json::from_value::<WorkspaceEdit>(edit_value) else {
+                return Ok(Some(json!({
+                    "status": "rejected",
+                    "reason": "invalidEdit",
+                    "detail": "validated quick-fix proposal contains an invalid edit",
+                })));
+            };
+            return match self.client.apply_edit(edit).await {
+                Ok(response) if response.applied => Ok(Some(json!({
+                    "status": "applied",
+                    "quickFix": quick_fix,
+                }))),
+                Ok(response) => Ok(Some(json!({
+                    "status": "rejected",
+                    "reason": "clientRejectedEdit",
+                    "detail": response.failure_reason,
+                    "failedChange": response.failed_change,
+                }))),
+                Err(err) => Ok(Some(json!({
+                    "status": "rejected",
+                    "reason": "clientApplyEditFailed",
+                    "detail": err.to_string(),
+                }))),
+            };
         }
         if command == CMD_SEMANTIC_LOOP_APPLY_BEST_QUICK_FIXES_AT {
             let Some((uri, position, max_steps, strategy, dry_run)) =
@@ -314,7 +389,7 @@ impl LanguageServer for RexServer {
             else {
                 return Ok(None);
             };
-            let Some((text, session)) = self.document_with_session(&uri).await else {
+            let Some((text, _version, session)) = self.document_with_session(&uri).await else {
                 return Ok(None);
             };
             return Ok(execute_semantic_loop_apply_best_quick_fixes(
@@ -325,7 +400,7 @@ impl LanguageServer for RexServer {
         let Some((uri, position)) = command_uri_and_position(&arguments) else {
             return Ok(None);
         };
-        let Some((text, session)) = self.document_with_session(&uri).await else {
+        let Some((text, _version, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
         Ok(execute_query_command_for_document(
@@ -339,7 +414,7 @@ impl LanguageServer for RexServer {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        let Some((text, session)) = self.document_with_session(&uri).await else {
+        let Some((text, _version, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
 
@@ -365,7 +440,7 @@ impl LanguageServer for RexServer {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let include_declaration = params.context.include_declaration;
-        let Some((text, session)) = self.document_with_session(&uri).await else {
+        let Some((text, _version, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
 
@@ -397,7 +472,7 @@ impl LanguageServer for RexServer {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let new_name = params.new_name;
-        let Some((text, session)) = self.document_with_session(&uri).await else {
+        let Some((text, _version, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
 
@@ -429,7 +504,7 @@ impl LanguageServer for RexServer {
             return Ok(None);
         };
         let session = self.analysis.empty_session();
-        let symbols = document_symbols_for_source(&session, &uri, &text);
+        let symbols = document_symbols_for_source(&session, &uri, &text.text);
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
@@ -439,7 +514,7 @@ impl LanguageServer for RexServer {
         let Some(text) = text else {
             return Ok(None);
         };
-        Ok(format_edits_for_source(&text))
+        Ok(format_edits_for_source(&text.text))
     }
 }
 

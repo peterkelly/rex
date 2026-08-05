@@ -589,7 +589,8 @@ pub(crate) fn functions_producing_expected_type_at_position(
         return Vec::new();
     }
 
-    let values = semantic_candidate_values(&ts);
+    let preferred_names = decl_value_names(&program.decls);
+    let values = semantic_candidate_values(&ts, &preferred_names);
 
     let mut out = Vec::new();
     for (name, schemes) in values {
@@ -640,7 +641,8 @@ pub(crate) fn functions_accepting_inferred_type_at_position(
         return Vec::new();
     }
 
-    let values = semantic_candidate_values(&ts);
+    let preferred_names = decl_value_names(&program.decls);
+    let values = semantic_candidate_values(&ts, &preferred_names);
 
     let mut out = Vec::new();
     for (name, schemes) in values {
@@ -692,7 +694,8 @@ pub(crate) fn adapters_from_inferred_to_expected_at_position(
         return Vec::new();
     }
 
-    let values = semantic_candidate_values(&ts);
+    let preferred_names = decl_value_names(&program.decls);
+    let values = semantic_candidate_values(&ts, &preferred_names);
 
     let mut out = Vec::new();
     for (name, schemes) in values {
@@ -846,13 +849,119 @@ pub(crate) fn workspace_edit_fingerprint(edit: &WorkspaceEdit) -> String {
     blake3::hash(payload.as_bytes()).to_hex().to_string()
 }
 
+fn version_workspace_edit(
+    mut edit: WorkspaceEdit,
+    current_uri: &Url,
+    document_version: Option<i32>,
+) -> WorkspaceEdit {
+    let Some(document_version) = document_version else {
+        return edit;
+    };
+    if edit.document_changes.is_some() {
+        return edit;
+    }
+    let Some(changes) = edit.changes.take() else {
+        return edit;
+    };
+
+    let mut changes = changes.into_iter().collect::<Vec<_>>();
+    changes.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
+    let edits = changes
+        .into_iter()
+        .map(|(uri, edits)| TextDocumentEdit {
+            text_document: OptionalVersionedTextDocumentIdentifier {
+                version: (&uri == current_uri).then_some(document_version),
+                uri,
+            },
+            edits: edits.into_iter().map(OneOf::Left).collect(),
+        })
+        .collect();
+    edit.document_changes = Some(DocumentChanges::Edits(edits));
+    edit
+}
+
+fn quick_fix_proposal_id(
+    uri: &Url,
+    content_hash: &str,
+    document_version: Option<i32>,
+    title: &str,
+    kind: Option<&str>,
+    edit: &WorkspaceEdit,
+) -> String {
+    let payload = serde_json::to_vec(&(
+        crate::SEMANTIC_QUICK_FIX_PROTOCOL_VERSION,
+        uri.as_str(),
+        content_hash,
+        document_version,
+        title,
+        kind.unwrap_or(""),
+        workspace_edit_fingerprint(edit),
+    ))
+    .unwrap_or_default();
+    format!("qf2-{}", blake3::hash(&payload).to_hex())
+}
+
+fn quick_fix_rejected(reason: &str, detail: &str) -> Value {
+    json!({
+        "status": "rejected",
+        "reason": reason,
+        "detail": detail,
+    })
+}
+
+fn quick_fix_stale(
+    reason: &str,
+    expected_content_hash: &str,
+    actual_content_hash: &str,
+    expected_document_version: Option<i32>,
+    actual_document_version: Option<i32>,
+) -> Value {
+    json!({
+        "status": "stale",
+        "reason": reason,
+        "expectedContentHash": expected_content_hash,
+        "actualContentHash": actual_content_hash,
+        "expectedDocumentVersion": expected_document_version,
+        "actualDocumentVersion": actual_document_version,
+    })
+}
+
+fn workspace_edit_has_document_version(
+    edit: &WorkspaceEdit,
+    uri: &Url,
+    expected_version: i32,
+) -> bool {
+    let Some(DocumentChanges::Edits(document_edits)) = &edit.document_changes else {
+        return false;
+    };
+    document_edits.iter().any(|document_edit| {
+        document_edit.text_document.uri == *uri
+            && document_edit.text_document.version == Some(expected_version)
+    })
+}
+
+fn workspace_edit_only_targets_uri(edit: &WorkspaceEdit, uri: &Url) -> bool {
+    if let Some(changes) = &edit.changes {
+        return !changes.is_empty() && changes.keys().all(|target| target == uri);
+    }
+    let Some(DocumentChanges::Edits(document_edits)) = &edit.document_changes else {
+        return false;
+    };
+    !document_edits.is_empty()
+        && document_edits
+            .iter()
+            .all(|document_edit| document_edit.text_document.uri == *uri)
+}
+
 pub(crate) fn semantic_quick_fixes_for_range(
     session: &AnalysisSession,
     uri: &Url,
     text: &str,
     cursor_range: Range,
     diagnostics: &[Diagnostic],
+    document_version: Option<i32>,
 ) -> Vec<Value> {
+    let content_hash = text_state_hash(text);
     let mut out = code_actions_for_source(session, uri, text, cursor_range, diagnostics)
         .into_iter()
         .filter_map(|action| match action {
@@ -860,21 +969,39 @@ pub(crate) fn semantic_quick_fixes_for_range(
             CodeActionOrCommand::Command(_) => None,
         })
         .map(|action| {
+            let title = action.title;
             let kind = action
                 .kind
                 .and_then(|k| to_value(k).ok())
                 .and_then(|v| v.as_str().map(str::to_string));
-            let edit = action.edit.unwrap_or(WorkspaceEdit {
-                changes: None,
-                document_changes: None,
-                change_annotations: None,
-            });
-            let fingerprint = workspace_edit_fingerprint(&edit);
+            let edit = version_workspace_edit(
+                action.edit.unwrap_or(WorkspaceEdit {
+                    changes: None,
+                    document_changes: None,
+                    change_annotations: None,
+                }),
+                uri,
+                document_version,
+            );
+            let id = quick_fix_proposal_id(
+                uri,
+                &content_hash,
+                document_version,
+                &title,
+                kind.as_deref(),
+                &edit,
+            );
             json!({
-                "id": format!("qf-{}", &fingerprint[..16]),
-                "title": action.title,
+                "protocolVersion": crate::SEMANTIC_QUICK_FIX_PROTOCOL_VERSION,
+                "id": id,
+                "title": title,
                 "kind": kind,
                 "edit": to_value(edit).unwrap_or(Value::Null),
+                "precondition": {
+                    "uri": uri.as_str(),
+                    "contentHash": content_hash,
+                    "documentVersion": document_version,
+                },
             })
         })
         .collect::<Vec<_>>();
@@ -900,6 +1027,16 @@ pub fn execute_semantic_loop_step(
     uri: &Url,
     text: &str,
     position: Position,
+) -> Option<Value> {
+    execute_semantic_loop_step_with_version(session, uri, text, position, None)
+}
+
+pub fn execute_semantic_loop_step_with_version(
+    session: &AnalysisSession,
+    uri: &Url,
+    text: &str,
+    position: Position,
+    document_version: Option<i32>,
 ) -> Option<Value> {
     let expected_type = expected_type_at_position(session, uri, text, position)
         .or_else(|| expected_type_from_syntax_context(session, uri, text, position));
@@ -957,8 +1094,14 @@ pub fn execute_semantic_loop_step(
         )
     });
 
-    let quick_fixes =
-        semantic_quick_fixes_for_range(session, uri, text, cursor_range, &local_diagnostics);
+    let quick_fixes = semantic_quick_fixes_for_range(
+        session,
+        uri,
+        text,
+        cursor_range,
+        &local_diagnostics,
+        document_version,
+    );
     let mut quick_fix_titles = quick_fixes
         .iter()
         .filter_map(|item| item.get("title").and_then(Value::as_str))
@@ -990,32 +1133,156 @@ pub fn execute_semantic_loop_step(
 }
 
 pub fn execute_semantic_loop_apply_quick_fix(
-    session: &AnalysisSession,
     uri: &Url,
     text: &str,
-    position: Position,
-    quick_fix_id: &str,
+    current_document_version: Option<i32>,
+    quick_fix: &Value,
 ) -> Option<Value> {
-    let cursor_range = Range {
-        start: position,
-        end: position,
+    let Some(obj) = quick_fix.as_object() else {
+        return Some(quick_fix_rejected(
+            "invalidProposal",
+            "quick-fix proposal must be an object",
+        ));
     };
-    let local_diagnostics: Vec<Diagnostic> = diagnostics_from_text(session, uri, text)
-        .into_iter()
-        .filter(|diag| ranges_overlap(diag.range, cursor_range))
-        .collect();
-    let quick_fixes =
-        semantic_quick_fixes_for_range(session, uri, text, cursor_range, &local_diagnostics);
-    let quick_fix = quick_fixes.into_iter().find(|item| {
-        item.get("id")
-            .and_then(Value::as_str)
-            .is_some_and(|id| id == quick_fix_id)
-    });
+    if obj.get("protocolVersion").and_then(Value::as_u64)
+        != Some(crate::SEMANTIC_QUICK_FIX_PROTOCOL_VERSION)
+    {
+        return Some(quick_fix_rejected(
+            "unsupportedProtocolVersion",
+            "quick-fix proposal does not use the current protocol version",
+        ));
+    }
+    let Some(id) = obj.get("id").and_then(Value::as_str) else {
+        return Some(quick_fix_rejected(
+            "invalidProposal",
+            "quick-fix proposal is missing `id`",
+        ));
+    };
+    let Some(title) = obj.get("title").and_then(Value::as_str) else {
+        return Some(quick_fix_rejected(
+            "invalidProposal",
+            "quick-fix proposal is missing `title`",
+        ));
+    };
+    let kind = obj.get("kind").and_then(Value::as_str);
+    let Some(edit_value) = obj.get("edit").cloned() else {
+        return Some(quick_fix_rejected(
+            "invalidProposal",
+            "quick-fix proposal is missing `edit`",
+        ));
+    };
+    let Ok(edit) = serde_json::from_value::<WorkspaceEdit>(edit_value) else {
+        return Some(quick_fix_rejected(
+            "invalidEdit",
+            "quick-fix proposal contains an invalid workspace edit",
+        ));
+    };
+    let Some(precondition) = obj.get("precondition").and_then(Value::as_object) else {
+        return Some(quick_fix_rejected(
+            "invalidProposal",
+            "quick-fix proposal is missing `precondition`",
+        ));
+    };
+    let Some(expected_uri) = precondition.get("uri").and_then(Value::as_str) else {
+        return Some(quick_fix_rejected(
+            "invalidProposal",
+            "quick-fix precondition is missing `uri`",
+        ));
+    };
+    if expected_uri != uri.as_str() {
+        return Some(quick_fix_rejected(
+            "uriMismatch",
+            "quick-fix proposal targets a different document",
+        ));
+    }
+    let Some(expected_content_hash) = precondition.get("contentHash").and_then(Value::as_str)
+    else {
+        return Some(quick_fix_rejected(
+            "invalidProposal",
+            "quick-fix precondition is missing `contentHash`",
+        ));
+    };
+    let expected_document_version = match precondition.get("documentVersion") {
+        Some(Value::Null) => None,
+        Some(value) => {
+            let Some(version) = value
+                .as_i64()
+                .and_then(|version| i32::try_from(version).ok())
+            else {
+                return Some(quick_fix_rejected(
+                    "invalidProposal",
+                    "quick-fix precondition has an invalid `documentVersion`",
+                ));
+            };
+            Some(version)
+        }
+        None => {
+            return Some(quick_fix_rejected(
+                "invalidProposal",
+                "quick-fix precondition is missing `documentVersion`",
+            ));
+        }
+    };
 
-    Some(match quick_fix {
-        Some(quick_fix) => json!({ "quickFix": quick_fix }),
-        None => Value::Null,
-    })
+    let expected_id = quick_fix_proposal_id(
+        uri,
+        expected_content_hash,
+        expected_document_version,
+        title,
+        kind,
+        &edit,
+    );
+    if id != expected_id {
+        return Some(quick_fix_rejected(
+            "proposalIdMismatch",
+            "quick-fix proposal contents do not match its id",
+        ));
+    }
+
+    let actual_content_hash = text_state_hash(text);
+    if expected_content_hash != actual_content_hash {
+        return Some(quick_fix_stale(
+            "documentContentChanged",
+            expected_content_hash,
+            &actual_content_hash,
+            expected_document_version,
+            current_document_version,
+        ));
+    }
+    if expected_document_version != current_document_version {
+        return Some(quick_fix_stale(
+            "documentVersionChanged",
+            expected_content_hash,
+            &actual_content_hash,
+            expected_document_version,
+            current_document_version,
+        ));
+    }
+    if !workspace_edit_only_targets_uri(&edit, uri) {
+        return Some(quick_fix_rejected(
+            "unsupportedEditScope",
+            "quick-fix proposals must target exactly one document",
+        ));
+    }
+    if let Some(expected_version) = expected_document_version
+        && !workspace_edit_has_document_version(&edit, uri, expected_version)
+    {
+        return Some(quick_fix_rejected(
+            "unversionedEdit",
+            "quick-fix edit is not bound to the expected document version",
+        ));
+    }
+    if apply_workspace_edit_to_text(uri, text, &edit).is_none() {
+        return Some(quick_fix_rejected(
+            "invalidEdit",
+            "quick-fix edit cannot be applied to the proposed document snapshot",
+        ));
+    }
+
+    Some(json!({
+        "status": "ready",
+        "quickFix": quick_fix,
+    }))
 }
 
 pub(crate) fn quick_fix_priority(strategy: BulkQuickFixStrategy, title: &str) -> usize {
@@ -1061,8 +1328,22 @@ pub fn best_quick_fix_from_candidates(
 }
 
 pub fn apply_workspace_edit_to_text(uri: &Url, text: &str, edit: &WorkspaceEdit) -> Option<String> {
-    let changes = edit.changes.as_ref()?;
-    let edits = changes.get(uri)?.clone();
+    let edits = if let Some(changes) = edit.changes.as_ref() {
+        changes.get(uri)?.clone()
+    } else if let Some(DocumentChanges::Edits(document_edits)) = &edit.document_changes {
+        document_edits
+            .iter()
+            .find(|document_edit| document_edit.text_document.uri == *uri)?
+            .edits
+            .iter()
+            .map(|edit| match edit {
+                OneOf::Left(edit) => edit.clone(),
+                OneOf::Right(edit) => edit.text_edit.clone(),
+            })
+            .collect()
+    } else {
+        return None;
+    };
     if edits.is_empty() {
         return Some(text.to_string());
     }
@@ -1136,6 +1417,7 @@ pub fn execute_semantic_loop_apply_best_quick_fixes(
             &current_text,
             cursor_range,
             &local_diagnostics,
+            None,
         );
         let Some(best) = best_quick_fix_from_candidates(&quick_fixes, strategy) else {
             stopped_reason = "noQuickFix".to_string();
@@ -1494,23 +1776,21 @@ pub(crate) fn command_uri(arguments: &[Value]) -> Option<Url> {
     Url::parse(uri).ok()
 }
 
-pub fn command_uri_position_and_id(arguments: &[Value]) -> Option<(Url, Position, String)> {
-    if arguments.len() >= 4 {
+pub fn command_uri_and_quick_fix(arguments: &[Value]) -> Option<(Url, Value)> {
+    if arguments.len() >= 2 {
         let uri = arguments.first()?.as_str()?;
-        let line = arguments.get(1)?.as_u64()? as u32;
-        let character = arguments.get(2)?.as_u64()? as u32;
-        let id = arguments.get(3)?.as_str()?.to_string();
+        let quick_fix = arguments.get(1)?.clone();
+        quick_fix.as_object()?;
         let uri = Url::parse(uri).ok()?;
-        return Some((uri, Position { line, character }, id));
+        return Some((uri, quick_fix));
     }
 
     let obj = arguments.first()?.as_object()?;
     let uri = obj.get("uri")?.as_str()?;
-    let line = obj.get("line")?.as_u64()? as u32;
-    let character = obj.get("character")?.as_u64()? as u32;
-    let id = obj.get("id")?.as_str()?.to_string();
+    let quick_fix = obj.get("quickFix")?.clone();
+    quick_fix.as_object()?;
     let uri = Url::parse(uri).ok()?;
-    Some((uri, Position { line, character }, id))
+    Some((uri, quick_fix))
 }
 
 pub fn command_uri_position_max_steps_strategy_and_dry_run(

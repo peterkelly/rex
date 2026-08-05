@@ -145,20 +145,35 @@ pub(crate) fn text_hash(text: &str) -> u64 {
     hasher.finish()
 }
 
-pub(crate) fn semantic_candidate_values(ts: &TypeSystem) -> Vec<(Symbol, Vec<Scheme>)> {
+pub(crate) fn semantic_candidate_values(
+    ts: &TypeSystem,
+    preferred_names: &BTreeSet<Symbol>,
+) -> Vec<(Symbol, Vec<Scheme>)> {
+    let mut entries = ts
+        .env
+        .values
+        .iter()
+        .map(|(name, schemes)| (name.clone(), schemes.clone()))
+        .collect::<Vec<_>>();
+    entries.sort_by(|(left, _), (right, _)| {
+        let left_priority = !preferred_names.contains(left);
+        let right_priority = !preferred_names.contains(right);
+        left_priority.cmp(&right_priority).then(left.cmp(right))
+    });
+
     let mut out = Vec::new();
     let mut scanned = 0usize;
-    for (name, schemes) in &ts.env.values {
+    for (name, schemes) in entries {
         if scanned >= MAX_SEMANTIC_ENV_SCHEMES_SCAN {
             break;
         }
         let remaining = MAX_SEMANTIC_ENV_SCHEMES_SCAN - scanned;
-        let kept = schemes.iter().take(remaining).cloned().collect::<Vec<_>>();
+        let kept = schemes.into_iter().take(remaining).collect::<Vec<_>>();
         if kept.is_empty() {
             continue;
         }
         scanned += kept.len();
-        out.push((name.clone(), kept));
+        out.push((name, kept));
     }
     out
 }
@@ -176,6 +191,44 @@ pub(crate) fn uri_to_file_path(_uri: &Url) -> Option<PathBuf> {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn url_from_file_path(path: &std::path::Path) -> Option<Url> {
     Url::from_file_path(path).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semantic_candidates_prioritize_user_names_before_enforcing_limit() {
+        let mut ts = TypeSystem::new();
+        let scheme = Scheme::new(Vec::new(), Vec::new(), Type::builtin(BuiltinTypeId::I32));
+        for index in 0..(MAX_SEMANTIC_ENV_SCHEMES_SCAN + 32) {
+            ts.add_value(format!("prelude_{index:04}"), scheme.clone());
+        }
+        let local_name = Symbol::intern("zz_local");
+        ts.add_value(local_name.as_ref(), scheme);
+        let preferred_names = BTreeSet::from([local_name.clone()]);
+
+        let candidates = semantic_candidate_values(&ts, &preferred_names);
+
+        assert_eq!(candidates.first().map(|(name, _)| name), Some(&local_name));
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|(_, schemes)| schemes.len())
+                .sum::<usize>(),
+            MAX_SEMANTIC_ENV_SCHEMES_SCAN
+        );
+        let non_preferred_names = candidates
+            .iter()
+            .skip(1)
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+        assert!(
+            non_preferred_names
+                .windows(2)
+                .all(|names| names[0] <= names[1])
+        );
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

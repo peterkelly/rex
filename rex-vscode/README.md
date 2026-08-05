@@ -73,9 +73,9 @@ For agent-assisted workflow authoring, the extension supports a stable refinemen
 
 1. Place cursor at the expression/hole you want to fill.
 2. Run `Rex: Show Holes And Expected Types` to enumerate unresolved placeholders.
-3. Run `Rex: Show Semantic Loop Step At Cursor` for one-shot expected/inferred type, in-scope values, local diagnostics, structured quick-fixes (with stable IDs), and candidate fills.
+3. Run `Rex: Show Semantic Loop Step At Cursor` for one-shot expected/inferred type, in-scope values, local diagnostics, immutable snapshot-bound quick-fix proposals, and candidate fills.
 4. Optionally run `Rex: Show Expected Type At Cursor` and `Rex: Show Functions Producing Expected Type At Cursor` for focused views.
-5. Run `Rex: Apply Semantic Loop Quick-Fix At Cursor` for deterministic single-step edits when available.
+5. Run `Rex: Apply Semantic Loop Quick-Fix At Cursor` for deterministic single-step edits when available. The selected proposal is applied exactly as shown; if the document changed after discovery, Rex rejects it as stale and asks you to run the command again.
 6. Run `Rex: Apply Best Semantic Loop Quick-Fixes At Cursor` to apply a short server-guided sequence with re-analysis between steps.
 7. Optionally run `Rex: Preview Best Semantic Loop Quick-Fixes At Cursor (Dry Run)` to inspect projected steps/stop conditions without changing the file.
 8. Run `Rex: Insert Function From Candidates At Cursor` (or the type-comment variant).

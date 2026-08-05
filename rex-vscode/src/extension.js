@@ -424,37 +424,6 @@ function formatBulkSemanticLoopResult(out) {
   return lines.join('\n');
 }
 
-function workspaceEditFromLspEdit(editObj) {
-  if (!editObj || typeof editObj !== 'object') {
-    return null;
-  }
-  const workspaceEdit = new vscode.WorkspaceEdit();
-  const changes = editObj.changes && typeof editObj.changes === 'object'
-    ? editObj.changes
-    : null;
-  if (!changes) {
-    return null;
-  }
-
-  for (const [uriText, edits] of Object.entries(changes)) {
-    if (!Array.isArray(edits)) {
-      continue;
-    }
-    const uri = vscode.Uri.parse(uriText);
-    for (const edit of edits) {
-      const range = edit && edit.range ? edit.range : null;
-      const newText = edit && typeof edit.newText === 'string' ? edit.newText : null;
-      if (!range || newText === null) {
-        continue;
-      }
-      const start = new vscode.Position(range.start.line, range.start.character);
-      const end = new vscode.Position(range.end.line, range.end.character);
-      workspaceEdit.replace(uri, new vscode.Range(start, end), newText);
-    }
-  }
-  return workspaceEdit;
-}
-
 async function applySemanticLoopQuickFixAtCursor() {
   if (!client) {
     vscode.window.showWarningMessage('Rex: language server is not running.');
@@ -483,8 +452,8 @@ async function applySemanticLoopQuickFixAtCursor() {
       label: typeof fix.title === 'string' ? fix.title : '<unknown>',
       description: typeof fix.id === 'string' ? fix.id : '',
       detail: typeof fix.kind === 'string' ? fix.kind : '',
-      id: typeof fix.id === 'string' ? fix.id : ''
-    })).filter((item) => item.id);
+      fix
+    })).filter((item) => item.fix && typeof item.fix.id === 'string' && item.fix.id);
     if (picks.length === 0) {
       vscode.window.showInformationMessage('Rex: no applicable semantic loop quick-fixes.');
       return;
@@ -499,17 +468,25 @@ async function applySemanticLoopQuickFixAtCursor() {
 
     const out = await client.sendRequest('workspace/executeCommand', {
       command: 'rex.semanticLoopApplyQuickFixAt',
-      arguments: [uri.toString(), position.line, position.character, chosen.id]
+      arguments: [uri.toString(), chosen.fix]
     });
-    const quickFix = out && out.quickFix ? out.quickFix : null;
-    const workspaceEdit = workspaceEditFromLspEdit(quickFix && quickFix.edit ? quickFix.edit : null);
-    if (!workspaceEdit) {
-      vscode.window.showInformationMessage('Rex: selected quick-fix has no applicable edit.');
+    const status = out && typeof out.status === 'string' ? out.status : 'invalid';
+    if (status === 'stale') {
+      vscode.window.showInformationMessage(
+        'Rex: the document changed after this quick-fix was computed; run the command again.'
+      );
       return;
     }
-    const applied = await vscode.workspace.applyEdit(workspaceEdit);
-    if (!applied) {
-      vscode.window.showErrorMessage('Rex: failed to apply semantic loop quick-fix edit.');
+    if (status === 'rejected') {
+      const reason = typeof out.reason === 'string' ? out.reason : 'unknown';
+      const detail = typeof out.detail === 'string' ? out.detail : '';
+      vscode.window.showErrorMessage(
+        `Rex: semantic loop quick-fix was rejected (${reason})${detail ? `: ${detail}` : ''}`
+      );
+      return;
+    }
+    if (status !== 'applied') {
+      vscode.window.showErrorMessage('Rex: language server returned an invalid quick-fix result.');
       return;
     }
     vscode.window.showInformationMessage(`Rex: applied quick-fix: ${chosen.label}`);

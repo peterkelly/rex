@@ -58,9 +58,9 @@ most important operation is a single semantic loop step, which reports expected 
 in-scope values, candidate functions and adapters, local diagnostics, quick-fixes, and hole metadata.
 
 From a control-systems viewpoint, this is an observation function over the current text. Separate
-commands apply a selected quick-fix by identifier, or repeatedly apply best-ranked quick-fixes in
-bulk mode. Bulk mode also supports a dry-run option so agents can preview predicted text without
-committing edits.
+commands apply an immutable quick-fix proposal bound to that text snapshot, or repeatedly apply
+best-ranked quick-fixes in bulk mode. Bulk mode also supports a dry-run option so agents can preview
+predicted text without committing edits.
 
 The intended loop is simple: observe, choose, apply, re-observe. This structure is robust because it
 avoids fragile prompt-only planning and continuously re-anchors decisions in the compiler's current
@@ -164,11 +164,19 @@ type DiagnosticLite = {
   character: u32;
 };
 
-type QuickFix = {
+type QuickFixPrecondition = {
+  uri: string;
+  contentHash: string;
+  documentVersion: i32 | null;
+};
+
+type QuickFixProposal = {
+  protocolVersion: 2;
   id: string;
   title: string;
   kind: string | null;
-  edit: WorkspaceEdit | null;
+  edit: WorkspaceEdit;
+  precondition: QuickFixPrecondition;
 };
 
 type HoleInfo = {
@@ -242,7 +250,7 @@ returns: {
   adaptersFromInferredToExpectedType: string[];
   functionsCompatibleWithInScopeValues: string[];
   localDiagnostics: DiagnosticLite[];
-  quickFixes: QuickFix[];
+  quickFixes: QuickFixProposal[];
   quickFixTitles: string[];
   holes: HoleInfo[];
 }
@@ -252,10 +260,32 @@ returns: {
 
 ```ts
 args:
-  | { uri: string; line: u32; character: u32; id: string }
-  | [uri: string, line: u32, character: u32, id: string]
-returns: null | { quickFix: QuickFix }
+  | { uri: string; quickFix: QuickFixProposal }
+  | [uri: string, quickFix: QuickFixProposal]
+
+returns:
+  | { status: "applied"; quickFix: QuickFixProposal }
+  | {
+      status: "stale";
+      reason: "documentContentChanged" | "documentVersionChanged";
+      expectedContentHash: string;
+      actualContentHash: string;
+      expectedDocumentVersion: i32 | null;
+      actualDocumentVersion: i32 | null;
+    }
+  | {
+      status: "rejected";
+      reason: string;
+      detail?: string | null;
+      failedChange?: u32 | null;
+    }
 ```
+
+Quick-fixes are immutable proposals bound to the document content and LSP version observed during
+`rex.semanticLoopStep`. Applying a proposal validates its ID and snapshot preconditions, then asks
+the editor to apply the exact versioned `WorkspaceEdit` returned by discovery. The server does not
+regenerate candidates during application. A changed document therefore produces an explicit
+`stale` result instead of applying a different edit or returning an ambiguous `null`.
 
 `rex.semanticLoopApplyBestQuickFixesAt`
 
@@ -282,11 +312,11 @@ args:
 returns: {
   strategy: "conservative" | "aggressive";
   dryRun: bool;
-  appliedQuickFixes: QuickFix[];
+  appliedQuickFixes: QuickFixProposal[];
   appliedCount: u64;
   steps: Array<{
     index: u64;
-    quickFix: QuickFix;
+    quickFix: QuickFixProposal;
     diagnosticsBefore: DiagnosticLite[];
     diagnosticsAfter: DiagnosticLite[];
     diagnosticsBeforeCount: u64;
