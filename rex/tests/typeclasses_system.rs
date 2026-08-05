@@ -418,6 +418,56 @@ async fn pattern_match_inside_method_body() {
 }
 
 #[tokio::test]
+async fn ord_cmp_returns_ordering_variants() {
+    let ordering_ty = Type::con("Ordering", 0);
+    assert_eval(
+        r#"
+        [ cmp (1 is u8) (2 is u8)
+        , cmp (2 is u16) (2 is u16)
+        , cmp (3 is u32) (2 is u32)
+        , cmp (1 is u64) (2 is u64)
+        , cmp (2 is i8) (2 is i8)
+        , cmp (3 is i16) (2 is i16)
+        , cmp (1 is i32) (2 is i32)
+        , cmp (2 is i64) (2 is i64)
+        , cmp (3.0 is f32) (2.0 is f32)
+        , cmp (1.0 is f64) (2.0 is f64)
+        , cmp "same" "same"
+        ]
+        "#,
+        "[Less, Equal, Greater, Less, Equal, Greater, Less, Equal, Greater, Less, Equal]",
+        Type::list(ordering_ty),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn ordering_variants_can_be_pattern_matched() {
+    assert_eval(
+        r#"
+        fn label : Ordering -> String = \ordering ->
+            match ordering with {
+                case Less -> "less";
+                case Equal -> "equal";
+                case Greater -> "greater";
+            };
+
+        ( label (cmp "a" "b")
+        , label (cmp (2.0 is f32) (2.0 is f32))
+        , label (cmp (3 is i32) (2 is i32))
+        )
+        "#,
+        r#"("less", "equal", "greater")"#,
+        Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String),
+        ]),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn superclass_and_instance_context() {
     assert_eval(
         r#"

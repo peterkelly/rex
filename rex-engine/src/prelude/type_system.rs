@@ -242,6 +242,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
     // Ordering intrinsics (monomorphic overloads).
     {
+        let ordering_ty = Type::con("Ordering", 0);
         let ord = [
             BuiltinTypeId::U8,
             BuiltinTypeId::U16,
@@ -262,7 +263,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                 Scheme::new(
                     vec![],
                     vec![],
-                    Type::fun(t.clone(), Type::fun(t.clone(), i32_ty.clone())),
+                    Type::fun(t.clone(), Type::fun(t.clone(), ordering_ty.clone())),
                 ),
             );
             for name in ["prim_lt", "prim_le", "prim_gt", "prim_ge"] {
@@ -750,6 +751,14 @@ pub(super) fn inject_standard_prelude(
         list_adt.add_variant(Symbol::intern("Empty"), vec![]);
         list_adt.add_variant(Symbol::intern("Cons"), vec![a.clone(), list_a.clone()]);
         ts.register_adt(&list_adt);
+    }
+    {
+        let ordering_name = Symbol::intern("Ordering");
+        let mut ordering_adt = AdtDecl::new(&ordering_name, &[], &mut ts.supply);
+        ordering_adt.add_variant(Symbol::intern("Less"), vec![]);
+        ordering_adt.add_variant(Symbol::intern("Equal"), vec![]);
+        ordering_adt.add_variant(Symbol::intern("Greater"), vec![]);
+        ts.register_adt(&ordering_adt);
     }
     {
         let option_name = Symbol::intern("Option");

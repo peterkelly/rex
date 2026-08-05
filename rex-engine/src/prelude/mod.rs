@@ -625,6 +625,12 @@ fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
         }
     }
 
+    let mut ordering_adt = engine.adt_decl("Ordering", &[]);
+    ordering_adt.add_variant(Symbol::intern("Less"), vec![]);
+    ordering_adt.add_variant(Symbol::intern("Equal"), vec![]);
+    ordering_adt.add_variant(Symbol::intern("Greater"), vec![]);
+    engine.inject_adt(ordering_adt)?;
+
     let mut option_adt = engine.adt_decl("Option", &["t"]);
     let t_name = Symbol::intern("t");
     let t = option_adt
@@ -761,95 +767,93 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
 fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
-    fn cmp_to_i32(ord: std::cmp::Ordering) -> i32 {
-        match ord {
-            std::cmp::Ordering::Less => -1,
-            std::cmp::Ordering::Equal => 0,
-            std::cmp::Ordering::Greater => 1,
-        }
+    fn alloc_ordering(
+        scope: &mut RootScope<'_>,
+        ordering: std::cmp::Ordering,
+    ) -> Result<RootedPtr, EngineError> {
+        let variant = match ordering {
+            std::cmp::Ordering::Less => "Less",
+            std::cmp::Ordering::Equal => "Equal",
+            std::cmp::Ordering::Greater => "Greater",
+        };
+        scope.alloc_root_adt(Symbol::intern(variant), vec![])
     }
 
-    // Integer and string comparisons can be injected as direct typed natives,
-    // with no runtime type switching.
+    let ordering_ty = Type::con("Ordering", 0);
+
+    macro_rules! inject_cmp {
+        ($builtin:ident, $root_as:ident) => {{
+            let operand_ty = Type::builtin(BuiltinTypeId::$builtin);
+            let scheme = scheme!(Type::fun(&operand_ty, Type::fun(&operand_ty, &ordering_ty),));
+            engine.export_native("prim_cmp", scheme, 2, |scope, _, args| {
+                let lhs = scope.$root_as(args[0])?;
+                let rhs = scope.$root_as(args[1])?;
+                alloc_ordering(scope, lhs.cmp(&rhs))
+            })?;
+        }};
+    }
+
+    // Integer and string comparisons are monomorphic natives, with no runtime
+    // type switching.
     engine.export("prim_lt", |_: &State, a: u8, b: u8| Ok(a < b))?;
     engine.export("prim_le", |_: &State, a: u8, b: u8| Ok(a <= b))?;
     engine.export("prim_gt", |_: &State, a: u8, b: u8| Ok(a > b))?;
     engine.export("prim_ge", |_: &State, a: u8, b: u8| Ok(a >= b))?;
-    engine.export("prim_cmp", |_: &State, a: u8, b: u8| {
-        Ok(cmp_to_i32(a.cmp(&b)))
-    })?;
+    inject_cmp!(U8, root_as_u8);
 
     engine.export("prim_lt", |_: &State, a: u16, b: u16| Ok(a < b))?;
     engine.export("prim_le", |_: &State, a: u16, b: u16| Ok(a <= b))?;
     engine.export("prim_gt", |_: &State, a: u16, b: u16| Ok(a > b))?;
     engine.export("prim_ge", |_: &State, a: u16, b: u16| Ok(a >= b))?;
-    engine.export("prim_cmp", |_: &State, a: u16, b: u16| {
-        Ok(cmp_to_i32(a.cmp(&b)))
-    })?;
+    inject_cmp!(U16, root_as_u16);
 
     engine.export("prim_lt", |_: &State, a: u32, b: u32| Ok(a < b))?;
     engine.export("prim_le", |_: &State, a: u32, b: u32| Ok(a <= b))?;
     engine.export("prim_gt", |_: &State, a: u32, b: u32| Ok(a > b))?;
     engine.export("prim_ge", |_: &State, a: u32, b: u32| Ok(a >= b))?;
-    engine.export("prim_cmp", |_: &State, a: u32, b: u32| {
-        Ok(cmp_to_i32(a.cmp(&b)))
-    })?;
+    inject_cmp!(U32, root_as_u32);
 
     engine.export("prim_lt", |_: &State, a: u64, b: u64| Ok(a < b))?;
     engine.export("prim_le", |_: &State, a: u64, b: u64| Ok(a <= b))?;
     engine.export("prim_gt", |_: &State, a: u64, b: u64| Ok(a > b))?;
     engine.export("prim_ge", |_: &State, a: u64, b: u64| Ok(a >= b))?;
-    engine.export("prim_cmp", |_: &State, a: u64, b: u64| {
-        Ok(cmp_to_i32(a.cmp(&b)))
-    })?;
+    inject_cmp!(U64, root_as_u64);
 
     engine.export("prim_lt", |_: &State, a: i8, b: i8| Ok(a < b))?;
     engine.export("prim_le", |_: &State, a: i8, b: i8| Ok(a <= b))?;
     engine.export("prim_gt", |_: &State, a: i8, b: i8| Ok(a > b))?;
     engine.export("prim_ge", |_: &State, a: i8, b: i8| Ok(a >= b))?;
-    engine.export("prim_cmp", |_: &State, a: i8, b: i8| {
-        Ok(cmp_to_i32(a.cmp(&b)))
-    })?;
+    inject_cmp!(I8, root_as_i8);
 
     engine.export("prim_lt", |_: &State, a: i16, b: i16| Ok(a < b))?;
     engine.export("prim_le", |_: &State, a: i16, b: i16| Ok(a <= b))?;
     engine.export("prim_gt", |_: &State, a: i16, b: i16| Ok(a > b))?;
     engine.export("prim_ge", |_: &State, a: i16, b: i16| Ok(a >= b))?;
-    engine.export("prim_cmp", |_: &State, a: i16, b: i16| {
-        Ok(cmp_to_i32(a.cmp(&b)))
-    })?;
+    inject_cmp!(I16, root_as_i16);
 
     engine.export("prim_lt", |_: &State, a: i32, b: i32| Ok(a < b))?;
     engine.export("prim_le", |_: &State, a: i32, b: i32| Ok(a <= b))?;
     engine.export("prim_gt", |_: &State, a: i32, b: i32| Ok(a > b))?;
     engine.export("prim_ge", |_: &State, a: i32, b: i32| Ok(a >= b))?;
-    engine.export("prim_cmp", |_: &State, a: i32, b: i32| {
-        Ok(cmp_to_i32(a.cmp(&b)))
-    })?;
+    inject_cmp!(I32, root_as_i32);
 
     engine.export("prim_lt", |_: &State, a: i64, b: i64| Ok(a < b))?;
     engine.export("prim_le", |_: &State, a: i64, b: i64| Ok(a <= b))?;
     engine.export("prim_gt", |_: &State, a: i64, b: i64| Ok(a > b))?;
     engine.export("prim_ge", |_: &State, a: i64, b: i64| Ok(a >= b))?;
-    engine.export("prim_cmp", |_: &State, a: i64, b: i64| {
-        Ok(cmp_to_i32(a.cmp(&b)))
-    })?;
+    inject_cmp!(I64, root_as_i64);
 
     engine.export("prim_lt", |_: &State, a: String, b: String| Ok(a < b))?;
     engine.export("prim_le", |_: &State, a: String, b: String| Ok(a <= b))?;
     engine.export("prim_gt", |_: &State, a: String, b: String| Ok(a > b))?;
     engine.export("prim_ge", |_: &State, a: String, b: String| Ok(a >= b))?;
-    engine.export("prim_cmp", |_: &State, a: String, b: String| {
-        Ok(cmp_to_i32(a.cmp(&b)))
-    })?;
+    inject_cmp!(String, root_as_string);
 
     // Floats: preserve the existing “NaN is a type error” semantics.
     let bool_ty = Type::builtin(BuiltinTypeId::Bool);
-    let i32_ty = Type::builtin(BuiltinTypeId::I32);
-
     let f32_ty = Type::builtin(BuiltinTypeId::F32);
     let f32_bool = scheme!(Type::fun(&f32_ty, Type::fun(&f32_ty, &bool_ty)));
-    let f32_cmp = scheme!(Type::fun(&f32_ty, Type::fun(&f32_ty, &i32_ty)));
+    let f32_cmp = scheme!(Type::fun(&f32_ty, Type::fun(&f32_ty, &ordering_ty)));
     for (name, pred) in [
         (
             "prim_lt",
@@ -890,12 +894,12 @@ fn inject_order_ops<State: Clone + Send + Sync + 'static>(
             expected: "f32".into(),
             got: "nan".into(),
         })?;
-        scope.alloc_root_i32(cmp_to_i32(ord))
+        alloc_ordering(scope, ord)
     })?;
 
     let f64_ty = Type::builtin(BuiltinTypeId::F64);
     let f64_bool = scheme!(Type::fun(&f64_ty, Type::fun(&f64_ty, &bool_ty)));
-    let f64_cmp = scheme!(Type::fun(&f64_ty, Type::fun(&f64_ty, &i32_ty)));
+    let f64_cmp = scheme!(Type::fun(&f64_ty, Type::fun(&f64_ty, &ordering_ty)));
     for (name, pred) in [
         (
             "prim_lt",
@@ -936,7 +940,7 @@ fn inject_order_ops<State: Clone + Send + Sync + 'static>(
             expected: "f64".into(),
             got: "nan".into(),
         })?;
-        scope.alloc_root_i32(cmp_to_i32(ord))
+        alloc_ordering(scope, ord)
     })?;
 
     Ok(())

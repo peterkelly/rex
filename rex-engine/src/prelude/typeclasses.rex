@@ -47,7 +47,7 @@ class Eq a where {
 }
 
 class Ord a <= Eq a where {
-    cmp : a -> a -> i32;
+    cmp : a -> a -> Ordering;
     < : a -> a -> Bool;
     <= : a -> a -> Bool;
     > : a -> a -> Bool;

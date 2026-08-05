@@ -447,6 +447,16 @@ The prelude defines `AdditiveMonoid (List a)` for every element type `a`, with n
 Regression: `additive_monoid_list_concatenates_in_order` and
 `additive_monoid_list_requires_no_element_constraint` (`rex/tests/typeclasses_system.rs`).
 
+### Prelude Ordering
+
+The prelude defines the algebraic data type `Ordering` with exactly three unit variants:
+`Less`, `Equal`, and `Greater`. The `Ord` method `cmp : a -> a -> Ordering` returns the variant that
+describes the left operand relative to the right operand. Floating-point comparisons involving
+NaN remain runtime type errors.
+
+Regression: `ord_cmp_returns_ordering_variants` and `ordering_variants_can_be_pattern_matched`
+(`rex/tests/typeclasses_system.rs`).
+
 ### Prelude List Ranges
 
 The prelude exposes strict list range helpers:

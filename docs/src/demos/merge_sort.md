@@ -1,17 +1,12 @@
 # Demo: Merge Sort
 
-This demo implements merge sort, a divide-and-conquer algorithm that splits a list into halves, recursively sorts each half, and then merges the two sorted results. The implementation highlights a full pipeline of helper functions (`split`, `merge`, `compare`) and demonstrates how recursive decomposition can produce deterministic, stable ordering over immutable lists.
+This demo implements merge sort, a divide-and-conquer algorithm that splits a list into halves, recursively sorts each half, and then merges the two sorted results. The implementation highlights recursive `split_alt` and `merge` helpers together with the prelude's `cmp` function, and demonstrates how recursive decomposition can produce deterministic, stable ordering over immutable lists.
 
 Related reading: [Merge sort](https://en.wikipedia.org/wiki/Merge_sort).
 
-`compare_i32` converts primitive comparisons into an `Order` ADT, and `split_alt` peels off pairs to partition input into two sublists without mutation. `mergesort` handles the empty and singleton base cases, then recursively sorts both halves and combines them with `merge`, which pattern-matches on two lists and always emits the smaller head first.
+`cmp` returns the prelude's `Ordering` ADT (`Less`, `Equal`, or `Greater`), and `split_alt` peels off pairs to partition input into two sublists without mutation. `mergesort` handles the empty and singleton base cases, then recursively sorts both halves and combines them with `merge`, which pattern-matches on two lists and emits the smaller head first. On equality, it takes from the left sublist first to keep the sort stable.
 
 ```rex,interactive
-type Order = Lt | Eq | Gt;
-
-fn compare_i32 : i32 -> i32 -> Order = \a b ->
-  if a < b then Lt else if a == b then Eq else Gt;
-
 fn split_alt : List i32 -> (List i32, List i32) = \xs ->
   match xs with {
     case [] -> ([], []);
@@ -25,10 +20,10 @@ fn merge : List i32 -> List i32 -> List i32 = \xs ys ->
     case ([], _) -> ys;
     case (_, []) -> xs;
     case (x::xt, y::yt) ->
-      match (compare_i32 x y) with {
-        case Lt -> Cons x (merge xt ys);
-        case Eq -> Cons x (Cons y (merge xt yt));
-        case Gt -> Cons y (merge xs yt);
+      match (cmp x y) with {
+        case Less -> Cons x (merge xt ys);
+        case Equal -> Cons x (merge xt ys);
+        case Greater -> Cons y (merge xs yt);
       };
   };
 

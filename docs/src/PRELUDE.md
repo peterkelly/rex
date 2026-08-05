@@ -12,6 +12,7 @@
 | `Hash` | BLAKE3 hash value. |
 | `List a` | Immutable ordered sequence. Constructors: `Empty`, `Cons`. |
 | `Option a` | Optional value (`Some` or `None`). Constructors: `Some`, `None`. |
+| `Ordering` | Three-way comparison result (`Less`, `Equal`, or `Greater`). Constructors: `Less`, `Equal`, `Greater`. |
 | `Result a b` | Result value (`Ok` or `Err`) for success/failure flows. Constructors: `Err`, `Ok`. |
 | `String` | UTF-8 string value. |
 | `UUID` | UUID value. |
@@ -168,7 +169,7 @@ Types with total ordering comparisons.
 Superclasses: `Eq`
 
 Methods:
-- `cmp`: `Ord 'a => ('a -> ('a -> i32))`. Three-way comparison returning negative/zero/positive `i32`.
+- `cmp`: `Ord 'a => ('a -> ('a -> Ordering))`. Three-way comparison returning `Less`, `Equal`, or `Greater`.
 - `<`: `Ord 'a => ('a -> ('a -> Bool))`. Less-than comparison.
 - `<=`: `Ord 'a => ('a -> ('a -> Bool))`. Less-than-or-equal comparison.
 - `>`: `Ord 'a => ('a -> ('a -> Bool))`. Greater-than comparison.
@@ -243,7 +244,7 @@ Methods:
 | `bind` | `(('a -> ('m 'b)) -> (('m 'a)`<br>`-> ('m 'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Monadic flat-map/sequencing operation. |
 | `one` | `'a` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Multiplicative identity. |
 | `*` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Multiplication. |
-| `cmp` | `('a -> ('a -> i32))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Three-way comparison returning negative/zero/positive `i32`. |
+| `cmp` | `('a -> ('a -> Ordering))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Three-way comparison returning `Less`, `Equal`, or `Greater`. |
 | `<` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Less-than comparison. |
 | `<=` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Less-than-or-equal comparison. |
 | `>` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Greater-than comparison. |
@@ -262,7 +263,10 @@ Methods:
 | `&&` | `(Bool -> (Bool -> Bool))` | Boolean conjunction. |
 | `Cons` | `('a -> ((List 'a) -> (List`<br>`'a)))` | Construct a non-empty list from head and tail. |
 | `Empty` | `(List 'a)` | The empty list constructor. |
+| `Equal` | `Ordering` | Construct an `Ordering` result for equal values. |
 | `Err` | `('e -> (Result 't 'e))` | Construct a failed `Result`. |
+| `Greater` | `Ordering` | Construct an `Ordering` result when the left value is greater. |
+| `Less` | `Ordering` | Construct an `Ordering` result when the left value is less. |
 | `None` | `(Option 't)` | The empty `Option` constructor. |
 | `Ok` | `('t -> (Result 't 'e))` | Construct a successful `Result`. |
 | `Some` | `('t -> (Option 't))` | Construct a present `Option` value. |
