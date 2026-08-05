@@ -715,7 +715,7 @@ async fn eval_simple_mod() {
 
 #[tokio::test]
 async fn eval_get_list_and_tuple() {
-    let expr = parse("get 1 [1, 2, 3]");
+    let expr = parse("get (1 is u64) (([1, 2, 3]) is List i32)");
     let value = eval_expr(builder_with_arith(), expr.as_ref())
         .await
         .unwrap();
@@ -1251,7 +1251,7 @@ async fn eval_result_filter_pipeline() {
         r#"
         let
             classify = \x -> if x < 2 then Err x else Ok x,
-            xs = [0, 2, 3],
+            xs: List i32 = [0, 2, 3],
             ys = map classify xs,
             zs = filter_map (\x -> match x with { case Ok v -> Some v; case Err _ -> None; }) ys,
             total = sum zs
@@ -1265,7 +1265,7 @@ async fn eval_result_filter_pipeline() {
         Value::Tuple(xs) => {
             let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 2);
-            assert!(matches!(xs[0], Value::I32(3)));
+            assert!(matches!(xs[0], Value::U64(3)));
             assert!(matches!(xs[1], Value::I32(5)));
         }
         _ => panic!("expected tuple result"),
@@ -1284,8 +1284,8 @@ async fn eval_list_combinators_for_host_vecs() {
         let
             mapped = map (\x -> x + 1) arr,
             total = sum arr,
-            taken = take 2 arr,
-            skipped = skip 1 arr,
+            taken = take (2 is u64) arr,
+            skipped = skip (1 is u64) arr,
             pairs = zip arr mapped,
             unzipped = unzip pairs
         in

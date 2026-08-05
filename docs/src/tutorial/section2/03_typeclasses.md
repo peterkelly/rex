@@ -52,7 +52,7 @@ In Rex source you write:
 
 ```rex
 class Indexable t a where {
-  get : i32 -> t -> a;
+  get : u64 -> t -> a;
 }
 ```
 

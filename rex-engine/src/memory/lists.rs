@@ -165,10 +165,6 @@ pub(super) enum ListItemsSeed {
     Elements(Vec<ListElement>),
 }
 
-fn usize_to_i32_saturating(index: usize) -> i32 {
-    i32::try_from(index).unwrap_or(i32::MAX)
-}
-
 pub(super) fn validate_list_slice_bounds(
     data_len: usize,
     start: usize,
@@ -182,7 +178,7 @@ pub(super) fn validate_list_slice_bounds(
     if end > data_len {
         return Err(EngineError::IndexOutOfBounds {
             name: Symbol::intern("ListSlice"),
-            index: usize_to_i32_saturating(end),
+            index: i128::try_from(end).unwrap_or(i128::MAX),
             len: data_len,
         });
     }

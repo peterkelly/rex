@@ -27,7 +27,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // These intentionally carry no typeclass predicates. An instance method
     // body should not need to assume the class it is defining.
     let bool_ty = Type::builtin(BuiltinTypeId::Bool);
-    let i32_ty = Type::builtin(BuiltinTypeId::I32);
+    let u64_ty = Type::builtin(BuiltinTypeId::U64);
     let string_ty = Type::builtin(BuiltinTypeId::String);
 
     // Equality intrinsics.
@@ -329,16 +329,16 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                 Scheme::new(
                     vec![a_tv.clone()],
                     vec![],
-                    Type::fun(list_of(a.clone()), i32_ty.clone()),
+                    Type::fun(list_of(a.clone()), u64_ty.clone()),
                 ),
             );
             ts.add_value(
                 "prim_dict_length",
-                Scheme::new(vec![a_tv], vec![], Type::fun(Type::dict(a), i32_ty.clone())),
+                Scheme::new(vec![a_tv], vec![], Type::fun(Type::dict(a), u64_ty.clone())),
             );
             ts.add_value(
                 "prim_string_length",
-                Scheme::new(vec![], vec![], Type::fun(string_ty.clone(), i32_ty.clone())),
+                Scheme::new(vec![], vec![], Type::fun(string_ty.clone(), u64_ty.clone())),
             );
         }
 
@@ -540,7 +540,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                 let scheme = Scheme::new(
                     vec![a_tv.clone()],
                     vec![],
-                    Type::fun(i32_ty.clone(), Type::fun(fa.clone(), fa)),
+                    Type::fun(u64_ty.clone(), Type::fun(fa.clone(), fa)),
                 );
                 ts.add_overload("prim_take", scheme.clone());
                 ts.add_overload("prim_skip", scheme);
@@ -585,7 +585,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
         {
             let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
             let a = Type::var(a_tv.clone());
-            let idx = i32_ty.clone();
+            let idx = u64_ty.clone();
             ts.add_overload(
                 "prim_get",
                 Scheme::new(

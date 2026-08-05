@@ -45,7 +45,7 @@ String literals are decoded during lexing.
 
 ## Length
 
-`length` returns an `i32` and is implemented for lists, dictionaries, and strings:
+`length` returns a `u64` and is implemented for lists, dictionaries, and strings:
 
 - Lists return their number of elements.
 - Dictionaries return their number of entries.
@@ -470,6 +470,11 @@ whether the runtime stores the list as cons cells, a vector-backed slice, or con
 a vector-backed slice. Bounds are checked at runtime. Negative bounds, bounds greater than the list
 length, and `slice n m xs` with `m < n` are runtime errors. `n == length`/`m == length` is valid for
 empty suffixes and half-open slice endpoints.
+
+The `Sequence` methods `take` and `skip` use a `u64` count. Counts greater than the list length are
+clamped to the list length, so `take` returns the whole list and `skip` returns an empty list. The
+`Indexable` method `get` likewise uses a `u64` index and reports a runtime error when the index is
+outside the list or tuple.
 
 ### Instance-Method Checking (Static)
 

@@ -445,24 +445,35 @@ fn extremum_root_by_type(
     Ok(best)
 }
 
-fn checked_index(name: Symbol, index: i32, len: usize) -> Result<usize, EngineError> {
-    if index < 0 {
-        return Err(EngineError::IndexOutOfBounds { name, index, len });
+fn checked_u64_index(name: Symbol, index: u64, len: usize) -> Result<usize, EngineError> {
+    let index_usize = usize::try_from(index).ok();
+    if let Some(index_usize) = index_usize
+        && index_usize < len
+    {
+        return Ok(index_usize);
     }
-    let index_usize = index as usize;
-    if index_usize >= len {
-        return Err(EngineError::IndexOutOfBounds { name, index, len });
-    }
-    Ok(index_usize)
+    Err(EngineError::IndexOutOfBounds {
+        name,
+        index: i128::from(index),
+        len,
+    })
 }
 
 fn checked_endpoint(name: Symbol, index: i32, len: usize) -> Result<usize, EngineError> {
     if index < 0 {
-        return Err(EngineError::IndexOutOfBounds { name, index, len });
+        return Err(EngineError::IndexOutOfBounds {
+            name,
+            index: i128::from(index),
+            len,
+        });
     }
     let index_usize = index as usize;
     if index_usize > len {
-        return Err(EngineError::IndexOutOfBounds { name, index, len });
+        return Err(EngineError::IndexOutOfBounds {
+            name,
+            index: i128::from(index),
+            len,
+        });
     }
     Ok(index_usize)
 }
@@ -515,8 +526,8 @@ fn unzip_tuple2_roots(
     Ok((left, right))
 }
 
-fn as_nonneg_usize(n: i32) -> usize {
-    if n <= 0 { 0 } else { n as usize }
+fn u64_to_usize_saturating(value: u64) -> usize {
+    usize::try_from(value).unwrap_or(usize::MAX)
 }
 
 fn cmp_rooted_by_type(
@@ -1206,13 +1217,13 @@ fn inject_dict_builtins<State: Clone + Send + Sync + 'static>(
 ) -> Result<(), EngineError> {
     {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(Type::dict(a), Type::builtin(BuiltinTypeId::I32))
+            Type::fun(Type::dict(a), Type::builtin(BuiltinTypeId::U64))
         );
         engine.export_native("prim_dict_length", scheme, 1, |scope, _, args| {
             let values = scope.root_as_dict(args[0])?;
-            let length = i32::try_from(values.len())
+            let length = u64::try_from(values.len())
                 .map_err(|_| EngineError::Internal("dictionary length overflow".into()))?;
-            scope.alloc_root_i32(length)
+            scope.alloc_root_u64(length)
         })?;
     }
 
@@ -2267,22 +2278,24 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
 
     {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(Type::list(a), Type::builtin(BuiltinTypeId::I32))
+            Type::fun(Type::list(a), Type::builtin(BuiltinTypeId::U64))
         );
         engine.export_native("prim_list_length", scheme, 1, |scope, _, args| {
             let values = scope.root_as_list(args[0])?;
-            scope.alloc_root_i32(values.len() as i32)
+            let length = u64::try_from(values.len())
+                .map_err(|_| EngineError::Internal("list length overflow".into()))?;
+            scope.alloc_root_u64(length)
         })?;
     }
 
     {
         let string_ty = Type::builtin(BuiltinTypeId::String);
-        let scheme = scheme!(Type::fun(&string_ty, Type::builtin(BuiltinTypeId::I32),));
+        let scheme = scheme!(Type::fun(&string_ty, Type::builtin(BuiltinTypeId::U64),));
         engine.export_native("prim_string_length", scheme, 1, |scope, _, args| {
             let value = scope.root_as_string(args[0])?;
-            let length = i32::try_from(value.chars().count())
+            let length = u64::try_from(value.chars().count())
                 .map_err(|_| EngineError::Internal("string length overflow".into()))?;
-            scope.alloc_root_i32(length)
+            scope.alloc_root_u64(length)
         })?;
     }
 
@@ -2346,13 +2359,12 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
-                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::U64),
                 Type::fun(Type::list(a), Type::list(a)),
             )
         );
         engine.export_native("prim_take", scheme, 2, |scope, _, args| {
-            let n = scope.root_as_i32(args[0])?;
-            let n = as_nonneg_usize(n);
+            let n = u64_to_usize_saturating(scope.root_as_u64(args[0])?);
             let values = scope.root_as_list(args[1])?;
             let end = values.len().min(n);
             list_range_from_items(scope, values, 0, end)
@@ -2362,13 +2374,12 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
-                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::U64),
                 Type::fun(Type::list(a), Type::list(a)),
             )
         );
         engine.export_native("prim_skip", scheme, 2, |scope, _, args| {
-            let n = scope.root_as_i32(args[0])?;
-            let n = as_nonneg_usize(n);
+            let n = u64_to_usize_saturating(scope.root_as_u64(args[0])?);
             let values = scope.root_as_list(args[1])?;
             let len = values.len();
             let start = len.min(n);
@@ -2379,7 +2390,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
-                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::U64),
                 Type::fun(Type::list(a), a),
             )
         );
@@ -2387,9 +2398,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
             let list_ty = arg_tys[1].clone();
             let _elem_ty = list_elem_type(&list_ty)?;
-            let idx = scope.root_as_i32(args[0])?;
+            let idx = scope.root_as_u64(args[0])?;
             let values = scope.root_as_list(args[1])?;
-            let idx = checked_index(Symbol::intern("prim_get"), idx, values.len())?;
+            let idx = checked_u64_index(Symbol::intern("prim_get"), idx, values.len())?;
             Ok(values[idx])
         })?;
     }
@@ -2397,7 +2408,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     for size in 2..=32 {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
-                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::U64),
                 Type::fun(Type::tuple(vec![a; size]), a),
             )
         );
@@ -2405,8 +2416,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
             let tuple_ty = arg_tys[1].clone();
             let _elem_ty = tuple_elem_type(&tuple_ty)?;
-            let idx = scope.root_as_i32(args[0])?;
-            let idx_usize = checked_index(Symbol::intern("prim_get"), idx, size)?;
+            let idx = scope.root_as_u64(args[0])?;
+            let idx_usize = checked_u64_index(Symbol::intern("prim_get"), idx, size)?;
             let xs = scope.root_as_tuple(args[1])?;
             if xs.len() != size {
                 return Err(EngineError::NativeType {

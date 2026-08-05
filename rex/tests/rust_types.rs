@@ -194,7 +194,7 @@ async fn host_vec_u8_arguments_decode_binary_and_hybrid_lists() {
             Type::builtin(BuiltinTypeId::String),
             Type::tuple(vec![
                 Type::builtin(BuiltinTypeId::U8),
-                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::U64),
             ]),
         ])
     );
@@ -204,7 +204,7 @@ async fn host_vec_u8_arguments_decode_binary_and_hybrid_lists() {
             Value::String("[10, 11, 12, 13]".to_string()),
             Value::String("[11, 12]".to_string()),
             Value::String("[1, 11, 12, 13]".to_string()),
-            Value::Tuple(vec![Value::U8(10), Value::I32(3)]),
+            Value::Tuple(vec![Value::U8(10), Value::U64(3)]),
         ]),
     );
 }

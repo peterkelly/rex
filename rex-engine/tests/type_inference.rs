@@ -882,15 +882,22 @@ fn infer_mod_defaults() {
 
 #[test]
 fn infer_get_list_type() {
-    let expr = parse_expr("get 1 [1, 2, 3]");
+    let expr = parse_expr("get (1 is u64) (([1, 2, 3]) is List i32)");
     let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert!(preds.iter().any(|p| p.class.as_ref() == "Indexable"));
     assert!(preds.iter().all(|p| {
         p.class.as_ref() == "Indexable"
-            || (p.class.as_ref() == "Integral" && p.typ == Type::builtin(BuiltinTypeId::I32))
+            || (p.class.as_ref() == "Integral"
+                && (p.typ == Type::builtin(BuiltinTypeId::U64)
+                    || p.typ == Type::builtin(BuiltinTypeId::I32)))
     }));
+    assert!(
+        preds.iter().any(|p| {
+            p.class.as_ref() == "Integral" && p.typ == Type::builtin(BuiltinTypeId::U64)
+        })
+    );
     for pred in preds.iter().filter(|p| p.class.as_ref() == "Indexable") {
         assert!(entails(&ts.classes, &[], pred).unwrap());
     }

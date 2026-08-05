@@ -283,10 +283,10 @@ async fn spec_length_counts_string_unicode_scalar_values() {
     .await
     .unwrap();
 
-    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)),);
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::U64)),);
     assert_eq!(
         common::list_elements(&value),
-        vec![Value::I32(0), Value::I32(3), Value::I32(3), Value::I32(2)]
+        vec![Value::U64(0), Value::U64(3), Value::U64(3), Value::U64(2)]
     );
 }
 
@@ -297,8 +297,8 @@ async fn spec_length_remains_available_for_lists() {
             .await
             .unwrap();
 
-    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_eq!(value, Value::I32(3));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::U64));
+    assert_eq!(value, Value::U64(3));
 }
 
 #[tokio::test]
@@ -310,11 +310,67 @@ async fn spec_length_counts_dictionary_entries() {
     .await
     .unwrap();
 
-    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::U64)));
     assert_eq!(
         common::list_elements(&value),
-        vec![Value::I32(0), Value::I32(2)]
+        vec![Value::U64(0), Value::U64(2)]
     );
+}
+
+#[tokio::test]
+async fn spec_take_skip_and_get_use_u64() {
+    let (_heap, value, ty) = common::eval_source(
+        Builder::with_prelude(()).unwrap(),
+        r#"
+        (
+            take (2 is u64) (([1, 2, 3]) is List i32),
+            skip (1 is u64) (([1, 2, 3]) is List i32),
+            get (1 is u64) (([1, 2, 3]) is List i32),
+            take (18446744073709551615 is u64) (([1, 2, 3]) is List i32),
+            skip (18446744073709551615 is u64) (([1, 2, 3]) is List i32)
+        )
+        "#,
+    )
+    .await
+    .unwrap();
+
+    let i32_ty = Type::builtin(BuiltinTypeId::I32);
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::list(i32_ty.clone()),
+            Type::list(i32_ty.clone()),
+            i32_ty.clone(),
+            Type::list(i32_ty.clone()),
+            Type::list(i32_ty),
+        ])
+    );
+    assert_eq!(
+        value,
+        Value::Tuple(vec![
+            Value::List(vec![Value::I32(1), Value::I32(2)]),
+            Value::List(vec![Value::I32(2), Value::I32(3)]),
+            Value::I32(2),
+            Value::List(vec![Value::I32(1), Value::I32(2), Value::I32(3)]),
+            Value::List(vec![]),
+        ])
+    );
+}
+
+#[tokio::test]
+async fn spec_get_reports_full_u64_out_of_bounds_index() {
+    let err = common::eval_source(
+        Builder::with_prelude(()).unwrap(),
+        "get (18446744073709551615 is u64) (([1, 2, 3]) is List i32)",
+    )
+    .await
+    .expect_err("the maximum u64 index must be out of bounds");
+
+    assert!(matches!(
+        err,
+        EngineError::IndexOutOfBounds { index, len: 3, .. }
+            if index == i128::from(u64::MAX)
+    ));
 }
 
 #[tokio::test]

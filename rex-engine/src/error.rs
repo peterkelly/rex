@@ -190,7 +190,7 @@ pub enum EngineError {
     #[error("index {index} out of bounds in `{name}` (len {len})")]
     IndexOutOfBounds {
         name: Symbol,
-        index: i32,
+        index: i128,
         len: usize,
     },
     #[error("internal error: {0}")]

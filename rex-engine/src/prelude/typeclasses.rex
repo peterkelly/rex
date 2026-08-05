@@ -91,7 +91,7 @@ class Foldable t where {
 }
 
 class Length a where {
-    length : a -> i32;
+    length : a -> u64;
 }
 
 class Filterable f <= Functor f where {
@@ -100,8 +100,8 @@ class Filterable f <= Functor f where {
 }
 
 class Sequence f <= Functor f, Foldable f where {
-    take<a> : i32 -> f a -> f a;
-    skip<a> : i32 -> f a -> f a;
+    take<a> : u64 -> f a -> f a;
+    skip<a> : u64 -> f a -> f a;
     zip<a,b> : f a -> f b -> f (a, b);
     unzip<a,b> : f (a, b) -> (f a, f b);
 }
@@ -112,7 +112,7 @@ class Alternative f <= Applicative f where {
 
 // Indexable needs two parameters: the container type and the element type.
 class Indexable t a where {
-    get : i32 -> t -> a;
+    get : u64 -> t -> a;
 }
 
 // AdditiveMonoid instances

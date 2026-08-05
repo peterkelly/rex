@@ -718,7 +718,8 @@ async fn dict_entry_filter_starts_all_callbacks_and_preserves_entries() {
                     (({ a = 1, b = 2, c = 3, d = 4 }) is Dict i32)
         in
             match filtered with {
-                case {b, d} -> length filtered * 100 + b * 10 + d;
+                case {b, d} ->
+                    if length filtered == (2 is u64) then 200 + b * 10 + d else 0;
             }
         "#,
         4,
@@ -738,7 +739,8 @@ async fn dict_value_filter_starts_all_async_callbacks() {
                 (({ a = 1, b = 2, c = 3, d = 4 }) is Dict i32)
         in
             match filtered with {
-                case {b, d} -> length filtered * 100 + b * 10 + d;
+                case {b, d} ->
+                    if length filtered == (2 is u64) then 200 + b * 10 + d else 0;
             }
         "#,
         4,
@@ -789,12 +791,12 @@ async fn sibling_map_and_filter_fan_out_their_callbacks() {
         ty,
         Type::tuple(vec![
             Type::builtin(BuiltinTypeId::I32),
-            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::U64),
         ])
     );
     let values = value.as_tuple().unwrap();
     assert_eq!(values[0].as_i32().unwrap(), 3);
-    assert_eq!(values[1].as_i32().unwrap(), 1);
+    assert_eq!(values[1].as_u64().unwrap(), 1);
 }
 
 #[tokio::test]
@@ -1375,7 +1377,7 @@ async fn extreme_stress_handles_broad_evaluator_paths() {
         in
             dict_val
                 + sum_list flat
-                + get (0 is i32) arr2
+                + get (0 is u64) arr2
                 + (if arr == arr then 1 else 0)
                 + tuple_score
         "#,

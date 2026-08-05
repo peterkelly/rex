@@ -128,7 +128,7 @@ Containers that support indexed element access.
 Superclasses: _none_
 
 Methods:
-- `get`: `Indexable ('t, 'a) => (i32 -> ('t -> 'a))`. Get an element by index.
+- `get`: `Indexable ('t, 'a) => (u64 -> ('t -> 'a))`. Get an element by index.
 
 ### `Integral`
 Integral numeric types supporting modulo.
@@ -144,7 +144,7 @@ Collections and strings whose length can be measured.
 Superclasses: _none_
 
 Methods:
-- `length`: `Length 'a => ('a -> i32)`. Return the number of list elements, dictionary entries, or string Unicode scalar values.
+- `length`: `Length 'a => ('a -> u64)`. Return the number of list elements, dictionary entries, or string Unicode scalar values.
 
 ### `Monad`
 Applicatives supporting dependent sequencing (`bind`).
@@ -195,8 +195,8 @@ Ordered containers with slicing/zipping operations.
 Superclasses: `Functor`, `Foldable`
 
 Methods:
-- `take`: `Sequence 'f => (i32 -> (('f 'a) -> ('f 'a)))`. Keep only the first `n` elements.
-- `skip`: `Sequence 'f => (i32 -> (('f 'a) -> ('f 'a)))`. Drop the first `n` elements.
+- `take`: `Sequence 'f => (u64 -> (('f 'a) -> ('f 'a)))`. Keep only the first `n` elements.
+- `skip`: `Sequence 'f => (u64 -> (('f 'a) -> ('f 'a)))`. Drop the first `n` elements.
 - `zip`: `Sequence 'f => (('f 'a) -> (('f 'b) -> ('f ('a, 'b))))`. Pair elements from two containers by position.
 - `unzip`: `Sequence 'f => (('f ('a, 'b)) -> (('f 'a), ('f 'b)))`. Split a container of pairs into a pair of containers.
 
@@ -238,9 +238,9 @@ Methods:
 | `foldr` | `(('a -> ('b -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option` | Right fold. |
 | `fold` | `(('b -> ('a -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option` | Left-style fold over a container. |
 | `map` | `(('a -> 'b) -> (('f 'a) -> ('f`<br>`'b)))` | `List`<br>`Option`<br>`(Result 'e)`<br>`Dict` | Apply a function to each value inside a functor. |
-| `get` | `(i32 -> ('t -> 'a))` | `((List 'a), 'a)` | Get an element by index. |
+| `get` | `(u64 -> ('t -> 'a))` | `((List 'a), 'a)` | Get an element by index. |
 | `%` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64` | Remainder/modulo operation. |
-| `length` | `('a -> i32)` | `(List 'a)`<br>`(Dict 'a)`<br>`String` | Return the number of list elements, dictionary entries, or string Unicode scalar values. |
+| `length` | `('a -> u64)` | `(List 'a)`<br>`(Dict 'a)`<br>`String` | Return the number of list elements, dictionary entries, or string Unicode scalar values. |
 | `bind` | `(('a -> ('m 'b)) -> (('m 'a)`<br>`-> ('m 'b)))` | `List`<br>`Option`<br>`(Result 'e)` | Monadic flat-map/sequencing operation. |
 | `one` | `'a` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Multiplicative identity. |
 | `*` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Multiplication. |
@@ -249,8 +249,8 @@ Methods:
 | `<=` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Less-than-or-equal comparison. |
 | `>` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Greater-than comparison. |
 | `>=` | `('a -> ('a -> Bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String` | Greater-than-or-equal comparison. |
-| `take` | `(i32 -> (('f 'a) -> ('f 'a)))` | `List` | Keep only the first `n` elements. |
-| `skip` | `(i32 -> (('f 'a) -> ('f 'a)))` | `List` | Drop the first `n` elements. |
+| `take` | `(u64 -> (('f 'a) -> ('f 'a)))` | `List` | Keep only the first `n` elements. |
+| `skip` | `(u64 -> (('f 'a) -> ('f 'a)))` | `List` | Drop the first `n` elements. |
 | `zip` | `(('f 'a) -> (('f 'b) -> ('f`<br>`('a, 'b))))` | `List` | Pair elements from two containers by position. |
 | `unzip` | `(('f ('a, 'b)) -> (('f 'a),`<br>`('f 'b)))` | `List` | Split a container of pairs into a pair of containers. |
 | `show` | `('a -> String)` | `Bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`String`<br>`UUID`<br>`Hash`<br>`DateTime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Render a value as a human-readable string. |
