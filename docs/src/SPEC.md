@@ -571,18 +571,21 @@ Defaulting runs after type inference and before evaluation.
 
 A type variable `α` is eligible for defaulting iff:
 
-- `α` appears only in *simple* predicates of the form `C α` (not in compound types), and
-- at least one such `C` is in the numeric defaultable set:
+- `α` appears in at least one *simple* predicate of the form `C α`, and at least one such `C` is
+  in the numeric defaultable set:
   `AdditiveMonoid`, `MultiplicativeMonoid`, `Subtractive`, `AdditiveGroup`, `Ring`, `Divisive`,
-  `Field`, `Integral`.
+  `Field`, `Integral`; and
+- every simple predicate involving `α` is either in that numeric set or is an allowed companion.
 
 `Eq` and `Ord` are allowed as companion predicates when a numeric defaultable predicate is also
 present. They do not make a type variable defaultable on their own. This lets expressions like
 `if x == 0.0 then ...` default through the float literal's `Field` predicate without making
 unconstrained equality default to an arbitrary numeric type.
 
-If `α` appears in any non-simple predicate or any non-defaultable class predicate, it is not
-defaulted.
+Compound predicates do not make a variable eligible for defaulting. They also do not prevent an
+otherwise eligible numeric variable from defaulting, provided that substituting a candidate makes
+each compound predicate ground and the resulting predicate is satisfied. A candidate is rejected
+if substitution leaves another unresolved variable in one of those predicates.
 
 ### Candidate Types (Order Matters)
 
@@ -594,11 +597,11 @@ The candidate list is constructed in this order:
 
 ### Choosing a Default
 
-For an eligible variable `α` with required predicates `{ C₁ α, ..., Cₙ α }`, choose the first
-candidate type `T` such that all predicates are satisfied in the empty context:
+For an eligible variable `α`, choose the first candidate type `T` such that substituting `T` for
+`α` makes every predicate involving `α` ground and satisfied in the empty context:
 
 ```text
-entails([], Cᵢ T) for all i
+entails([], Pᵢ[α := T]) for every predicate Pᵢ involving α
 ```
 
 If no candidate satisfies all predicates, `α` remains ambiguous.
@@ -611,3 +614,14 @@ zero
 ```
 
 Regression: `spec_defaulting_picks_a_concrete_type_for_numeric_classes` (`rex/tests/spec_semantics.rs`).
+
+For example, the integer literals below provide the simple predicate `Integral α`, while list
+addition provides the compound predicate `AdditiveMonoid (List α)`. Substituting `i32` satisfies
+both, so the result type is `List i32`:
+
+```rex,interactive
+[1, 2, 3] + [4, 5, 6]
+```
+
+Regressions: `spec_defaulting_accepts_satisfied_compound_predicates` and
+`spec_defaulting_requires_a_simple_numeric_predicate` (`rex/tests/spec_semantics.rs`).

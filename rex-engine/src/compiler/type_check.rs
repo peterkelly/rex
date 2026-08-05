@@ -6,7 +6,7 @@ use rex_ast::{Expr, Span, Symbol};
 use rex_typesystem::{
     error::TypeError,
     inference::infer_typed,
-    types::{BuiltinTypeId, Predicate, Type, TypeKind, TypedExpr, TypedExprKind, Types},
+    types::{BuiltinTypeId, Predicate, Type, TypeKind, TypeVarId, TypedExpr, TypedExprKind, Types},
     typesystem::{TypeSystem, entails},
     unification::{Subst, compose_subst, unify},
 };
@@ -268,23 +268,22 @@ fn default_ambiguous_types(
             if subst.get(&tv).is_some() {
                 continue;
             }
-            let mut relevant = Vec::new();
-            let mut simple = true;
-            for pred in &preds {
-                if pred.typ.ftv().contains(&tv) {
-                    match pred.typ.as_ref() {
-                        TypeKind::Var(v) if v.id == tv => relevant.push(pred.clone()),
-                        _ => {
-                            simple = false;
-                            break;
-                        }
-                    }
-                }
-            }
-            if !simple || !predicates_are_defaultable(&relevant) {
+            let relevant: Vec<_> = preds
+                .iter()
+                .filter(|pred| pred.typ.ftv().contains(&tv))
+                .cloned()
+                .collect();
+            // Simple numeric predicates grant eligibility. Compound predicates
+            // cannot grant it, but every one must accept the chosen candidate.
+            let simple: Vec<_> = relevant
+                .iter()
+                .filter(|pred| matches!(pred.typ.as_ref(), TypeKind::Var(v) if v.id == tv))
+                .cloned()
+                .collect();
+            if !predicates_are_defaultable(&simple) {
                 continue;
             }
-            if let Some(choice) = choose_default_type(type_system, &relevant, &candidates)? {
+            if let Some(choice) = choose_default_type(type_system, tv, &relevant, &candidates)? {
                 let mut next = Subst::new_sync();
                 next = next.insert(tv, choice.clone());
                 preds = preds.apply(&next);
@@ -388,14 +387,17 @@ fn predicates_are_defaultable(preds: &[Predicate]) -> bool {
 
 fn choose_default_type(
     type_system: &TypeSystem,
+    variable: TypeVarId,
     preds: &[Predicate],
     candidates: &[Type],
 ) -> Result<Option<Type>, EngineError> {
     for candidate in candidates {
+        let mut candidate_subst = Subst::new_sync();
+        candidate_subst = candidate_subst.insert(variable, candidate.clone());
         let mut ok = true;
         for pred in preds {
-            let test = Predicate::new(pred.class.clone(), candidate.clone());
-            if !entails(&type_system.classes, &[], &test)? {
+            let test = pred.apply(&candidate_subst);
+            if !test.typ.ftv().is_empty() || !entails(&type_system.classes, &[], &test)? {
                 ok = false;
                 break;
             }

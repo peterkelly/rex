@@ -1,8 +1,9 @@
 mod common;
 
 use rex::{
-    engine::{Builder, EngineError, Value},
-    typesystem::{BuiltinTypeId, Type, TypeError},
+    engine::{Builder, CompileOptions, EngineError, Value},
+    parser::parse as parse_rex,
+    typesystem::{BuiltinTypeId, Type, TypeError, TypeKind},
 };
 
 use common::strip_type_span;
@@ -121,6 +122,50 @@ async fn spec_defaulting_picks_a_concrete_type_for_numeric_classes() {
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::F32));
     assert!(matches!(handle.clone(), Value::F32(_)));
+}
+
+#[tokio::test]
+async fn spec_defaulting_accepts_satisfied_compound_predicates() {
+    let (_heap, value, ty) =
+        common::eval_source(Builder::with_prelude(()).unwrap(), "[1, 2, 3] + [4, 5, 6]")
+            .await
+            .unwrap();
+
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
+    assert_eq!(
+        common::list_elements(&value),
+        vec![
+            Value::I32(1),
+            Value::I32(2),
+            Value::I32(3),
+            Value::I32(4),
+            Value::I32(5),
+            Value::I32(6),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn spec_defaulting_requires_a_simple_numeric_predicate() {
+    let program = parse_rex("[] + []").unwrap();
+    let compiler = Builder::with_prelude(()).unwrap().build_compiler();
+    let (compiled, _evaluator) = compiler
+        .compile_program(
+            &program,
+            CompileOptions::for_module("test.defaulting").unwrap(),
+        )
+        .await
+        .unwrap();
+    let ty = compiled.result_type();
+
+    let TypeKind::App(list, element) = ty.as_ref() else {
+        panic!("expected a list type, got {ty}");
+    };
+    assert_eq!(list, &Type::builtin(BuiltinTypeId::List));
+    assert!(
+        matches!(element.as_ref(), TypeKind::Var(_)),
+        "compound predicates alone must not default the element type: {ty}"
+    );
 }
 
 #[tokio::test]
