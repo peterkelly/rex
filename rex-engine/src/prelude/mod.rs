@@ -80,10 +80,11 @@ use crate::{
         native_functions::{
             NativeApplyUnary, NativeArrayEq, NativeArrayEqState, NativeDictEntryMap,
             NativeDictFilter, NativeDictFilterMap, NativeDictMap, NativeDictUpdate, NativeFold,
-            NativeFoldOrder, NativeFoldState, NativeMean, NativeMeanState, NativeSequenceFilter,
-            NativeSequenceFilterMap, NativeSequenceFlatMap, NativeSequenceMap, NativeSequenceShape,
-            NativeSum, NativeTask, NativeUnaryFilter, NativeUnaryFilterMap, NativeUnaryFlatMap,
-            NativeUnaryMap,
+            NativeFoldOrder, NativeFoldState, NativeListSearch, NativeListSearchMode, NativeMean,
+            NativeMeanState, NativeSequenceFilter, NativeSequenceFilterMap, NativeSequenceFlatMap,
+            NativeSequenceMap, NativeSequencePredicate, NativeSequencePredicateMode,
+            NativeSequenceShape, NativeSum, NativeTask, NativeUnaryFilter, NativeUnaryFilterMap,
+            NativeUnaryFlatMap, NativeUnaryMap,
         },
     },
     memory::{
@@ -409,27 +410,6 @@ fn split_fun_chain(typ: &Type, count: usize) -> Result<(Vec<Type>, Type), Engine
     Ok((args, cur))
 }
 
-fn tuple_elem_type(typ: &Type) -> Result<Type, EngineError> {
-    match typ.as_ref() {
-        TypeKind::Tuple(elems) if !elems.is_empty() => {
-            let first = elems[0].clone();
-            for elem in elems.iter().skip(1) {
-                if *elem != first {
-                    return Err(EngineError::NativeType {
-                        expected: first.to_string(),
-                        got: elem.to_string(),
-                    });
-                }
-            }
-            Ok(first)
-        }
-        _ => Err(EngineError::NativeType {
-            expected: "tuple".into(),
-            got: typ.to_string(),
-        }),
-    }
-}
-
 fn extremum_root_by_type(
     scope: &mut RootScope<'_>,
     elem_ty: &Type,
@@ -445,20 +425,6 @@ fn extremum_root_by_type(
         }
     }
     Ok(best)
-}
-
-fn checked_u64_index(name: Symbol, index: u64, len: usize) -> Result<usize, EngineError> {
-    let index_usize = usize::try_from(index).ok();
-    if let Some(index_usize) = index_usize
-        && index_usize < len
-    {
-        return Ok(index_usize);
-    }
-    Err(EngineError::IndexOutOfBounds {
-        name,
-        index: i128::from(index),
-        len,
-    })
 }
 
 fn checked_endpoint(name: Symbol, index: i32, len: usize) -> Result<usize, EngineError> {
@@ -493,6 +459,54 @@ fn list_range_from_items(
         )));
     }
     scope.alloc_root_list(items[start..end].to_vec())
+}
+
+fn list_search_scheduler(
+    scope: &mut RootScope<'_>,
+    call_type: &Type,
+    args: &[RootedPtr],
+    mode: NativeListSearchMode,
+) -> Result<SchedulerNativeResult, EngineError> {
+    let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
+    let func_ty = arg_tys[0].clone();
+    let list_ty = arg_tys[1].clone();
+    let elem_ty = list_elem_type(&list_ty)?;
+    let values = scope.list_items(args[1])?;
+    Ok(SchedulerNativeResult::Task(NativeTask::ListSearch(
+        NativeListSearch {
+            func: args[0],
+            func_type: func_ty,
+            elem_type: elem_ty,
+            values,
+            mode,
+            next_index: 0,
+        },
+    )))
+}
+
+fn list_predicate_scheduler(
+    scope: &mut RootScope<'_>,
+    call_type: &Type,
+    args: &[RootedPtr],
+    mode: NativeSequencePredicateMode,
+) -> Result<SchedulerNativeResult, EngineError> {
+    let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
+    let func_ty = arg_tys[0].clone();
+    let list_ty = arg_tys[1].clone();
+    let elem_ty = list_elem_type(&list_ty)?;
+    let values = scope.list_items(args[1])?;
+    Ok(SchedulerNativeResult::Task(NativeTask::SequencePredicate(
+        NativeSequencePredicate {
+            func: args[0],
+            func_type: func_ty,
+            elem_type: elem_ty,
+            values,
+            mode,
+            children: Vec::new(),
+            matches: Vec::new(),
+            remaining: 0,
+        },
+    )))
 }
 
 fn zip_tuple2_roots(
@@ -2337,6 +2351,181 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
 
     {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::builtin(BuiltinTypeId::U64),
+                Type::fun(Type::list(a), Type::option(a)),
+            )
+        );
+        engine.export_native("list_get", scheme, 2, |scope, _, args| {
+            let index = scope.root_as_u64(args[0])?;
+            let values = scope.list_items(args[1])?;
+            let value = match usize::try_from(index).ok() {
+                Some(index) if index < values.len() => Some(values.get(scope, index)?),
+                _ => None,
+            };
+            option_from_root(scope, value)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::builtin(BuiltinTypeId::U64),
+                Type::fun(
+                    Type::builtin(BuiltinTypeId::U64),
+                    Type::fun(Type::list(a), Type::option(Type::list(a))),
+                ),
+            )
+        );
+        engine.export_native("list_slice", scheme, 3, |scope, _, args| {
+            let start = usize::try_from(scope.root_as_u64(args[0])?).ok();
+            let end = usize::try_from(scope.root_as_u64(args[1])?).ok();
+            let values = scope.root_as_list(args[2])?;
+            let value = match (start, end) {
+                (Some(start), Some(end)) if start <= end && end <= values.len() => {
+                    Some(list_range_from_items(scope, values, start, end)?)
+                }
+                _ => None,
+            };
+            option_from_root(scope, value)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::list(a), Type::list(a))
+        );
+        engine.export_native("list_reverse", scheme, 1, |scope, _, args| {
+            let mut values = scope.root_as_list(args[0])?;
+            values.reverse();
+            scope.alloc_root_list(values)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::list(Type::list(a)), Type::list(a))
+        );
+        engine.export_native("list_concat", scheme, 1, |scope, _, args| {
+            let lists = scope.root_as_list(args[0])?;
+            let mut output = Vec::new();
+            for list in lists {
+                output.extend(scope.root_as_list(list)?);
+            }
+            scope.alloc_root_list(output)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::builtin(BuiltinTypeId::U64),
+                Type::fun(a, Type::list(a)),
+            )
+        );
+        engine.export_native("list_repeat", scheme, 2, |scope, _, args| {
+            let count = scope.root_as_u64(args[0])?;
+            let count = usize::try_from(count)
+                .map_err(|_| EngineError::Custom("list_repeat: count is too large".into()))?;
+            let mut output = Vec::new();
+            output.try_reserve_exact(count).map_err(|_| {
+                EngineError::Custom("list_repeat: unable to allocate requested list".into())
+            })?;
+            output.resize(count, args[1]);
+            scope.alloc_root_list(output)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::fun(a, Type::builtin(BuiltinTypeId::Bool)),
+                Type::fun(Type::list(a), Type::builtin(BuiltinTypeId::Bool)),
+            )
+        );
+        engine.export_native_scheduler("list_any", scheme, 2, |scope, call_type, args| {
+            list_search_scheduler(scope, &call_type, &args, NativeListSearchMode::Any)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::fun(a, Type::builtin(BuiltinTypeId::Bool)),
+                Type::fun(Type::list(a), Type::builtin(BuiltinTypeId::Bool)),
+            )
+        );
+        engine.export_native_scheduler("list_all", scheme, 2, |scope, call_type, args| {
+            list_search_scheduler(scope, &call_type, &args, NativeListSearchMode::All)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::fun(a, Type::builtin(BuiltinTypeId::Bool)),
+                Type::fun(Type::list(a), Type::option(a)),
+            )
+        );
+        engine.export_native_scheduler("list_find", scheme, 2, |scope, call_type, args| {
+            list_search_scheduler(scope, &call_type, &args, NativeListSearchMode::Find)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::fun(a, Type::builtin(BuiltinTypeId::Bool)),
+                Type::fun(
+                    Type::list(a),
+                    Type::option(Type::builtin(BuiltinTypeId::U64)),
+                ),
+            )
+        );
+        engine.export_native_scheduler(
+            "list_find_index",
+            scheme,
+            2,
+            |scope, call_type, args| {
+                list_search_scheduler(scope, &call_type, &args, NativeListSearchMode::FindIndex)
+            },
+        )?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::fun(a, Type::builtin(BuiltinTypeId::Bool)),
+                Type::fun(Type::list(a), Type::builtin(BuiltinTypeId::U64)),
+            )
+        );
+        engine.export_native_scheduler("list_count", scheme, 2, |scope, call_type, args| {
+            list_predicate_scheduler(scope, &call_type, &args, NativeSequencePredicateMode::Count)
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(
+                Type::fun(a, Type::builtin(BuiltinTypeId::Bool)),
+                Type::fun(
+                    Type::list(a),
+                    Type::tuple(vec![Type::list(a), Type::list(a)]),
+                ),
+            )
+        );
+        engine.export_native_scheduler("list_partition", scheme, 2, |scope, call_type, args| {
+            list_predicate_scheduler(
+                scope,
+                &call_type,
+                &args,
+                NativeSequencePredicateMode::Partition,
+            )
+        })?;
+    }
+
+    {
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(Type::list(a), Type::builtin(BuiltinTypeId::U64))
         );
         engine.export_native("prim_list_length", scheme, 1, |scope, _, args| {
@@ -2443,48 +2632,6 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let len = values.len();
             let start = len.min(n);
             list_range_from_items(scope, values, start, len)
-        })?;
-    }
-
-    {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(
-                Type::builtin(BuiltinTypeId::U64),
-                Type::fun(Type::list(a), a),
-            )
-        );
-        engine.export_native("prim_get", scheme, 2, |scope, call_type, args| {
-            let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
-            let list_ty = arg_tys[1].clone();
-            let _elem_ty = list_elem_type(&list_ty)?;
-            let idx = scope.root_as_u64(args[0])?;
-            let values = scope.root_as_list(args[1])?;
-            let idx = checked_u64_index(Symbol::intern("prim_get"), idx, values.len())?;
-            Ok(values[idx])
-        })?;
-    }
-
-    for size in 2..=32 {
-        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
-            Type::fun(
-                Type::builtin(BuiltinTypeId::U64),
-                Type::fun(Type::tuple(vec![a; size]), a),
-            )
-        );
-        engine.export_native("prim_get", scheme, 2, move |scope, call_type, args| {
-            let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
-            let tuple_ty = arg_tys[1].clone();
-            let _elem_ty = tuple_elem_type(&tuple_ty)?;
-            let idx = scope.root_as_u64(args[0])?;
-            let idx_usize = checked_u64_index(Symbol::intern("prim_get"), idx, size)?;
-            let xs = scope.root_as_tuple(args[1])?;
-            if xs.len() != size {
-                return Err(EngineError::NativeType {
-                    expected: format!("tuple{}", size),
-                    got: format!("tuple{}", xs.len()),
-                });
-            }
-            Ok(xs[idx_usize])
         })?;
     }
 

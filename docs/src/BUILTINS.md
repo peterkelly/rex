@@ -446,15 +446,93 @@ The empty list constructor.
 
 Constructs a non-empty list whose first element is `head` and whose remaining elements are `tail`.
 
-### `get`
+### `list_get`
 
-**Call:** `get index list`
+**Call:** `list_get index list`
 
-**Type:** `u64 -> 't -> 'a`
+**Type:** `u64 -> List 'a -> Option 'a`
 
-**Available for:** `List 'a`
+Returns the element at zero-based `index`, or `None` when `index` is out of bounds.
 
-Returns the element at zero-based `index` in `list`; raises an error when `index` is out of range.
+### `list_slice`
+
+**Call:** `list_slice start end list`
+
+**Type:** `u64 -> u64 -> List 'a -> Option (List 'a)`
+
+Returns the half-open range `start..end`, or `None` for invalid bounds.
+
+### `list_reverse`
+
+**Call:** `list_reverse list`
+
+**Type:** `List 'a -> List 'a`
+
+Returns the elements of `list` in reverse order.
+
+### `list_concat`
+
+**Call:** `list_concat lists`
+
+**Type:** `List (List 'a) -> List 'a`
+
+Concatenates the nested `lists` into one list while preserving their order.
+
+### `list_repeat`
+
+**Call:** `list_repeat count value`
+
+**Type:** `u64 -> 'a -> List 'a`
+
+Returns a list containing `count` copies of `value`.
+
+### `list_any`
+
+**Call:** `list_any predicate list`
+
+**Type:** `('a -> Bool) -> List 'a -> Bool`
+
+Returns whether `predicate` is `true` for any element, stopping at the first `true` result.
+
+### `list_all`
+
+**Call:** `list_all predicate list`
+
+**Type:** `('a -> Bool) -> List 'a -> Bool`
+
+Returns whether `predicate` is `true` for every element, stopping at the first `false` result.
+
+### `list_find`
+
+**Call:** `list_find predicate list`
+
+**Type:** `('a -> Bool) -> List 'a -> Option 'a`
+
+Returns the first element for which `predicate` returns `true`, or `None` when no element matches.
+
+### `list_find_index`
+
+**Call:** `list_find_index predicate list`
+
+**Type:** `('a -> Bool) -> List 'a -> Option u64`
+
+Returns the zero-based index of the first matching element, or `None` when no element matches.
+
+### `list_count`
+
+**Call:** `list_count predicate list`
+
+**Type:** `('a -> Bool) -> List 'a -> u64`
+
+Returns the number of elements for which `predicate` returns `true`.
+
+### `list_partition`
+
+**Call:** `list_partition predicate list`
+
+**Type:** `('a -> Bool) -> List 'a -> (List 'a, List 'a)`
+
+Returns matching and non-matching elements as a pair of lists, preserving their relative order.
 
 ### `take`
 

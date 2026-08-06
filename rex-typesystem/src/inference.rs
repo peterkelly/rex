@@ -9,7 +9,7 @@ use crate::{
         is_overloaded_numeric_literal_expr, predicates_from_constraints, reject_ambiguous_scheme,
         type_from_annotation_expr_vars,
     },
-    unification::{Subst, Unifier, compose_subst, subst_is_empty, unify},
+    unification::{Subst, Unifier, subst_is_empty, unify},
 };
 use rex_ast::{Expr, LetRecBinding, Pattern, Symbol, TypeConstraint, TypeExpr};
 use std::{
@@ -398,15 +398,9 @@ fn infer_typed_inner(
     )
     .map_err(|err| err.with_span(expr.span()))?;
     let subst = unifier.into_subst();
-    let mut typed = typed.apply(&subst);
-    let mut preds = dedup_preds(preds.apply(&subst));
-    let mut t = t.apply(&subst);
-    let improve = improve_indexable(&preds)?;
-    if !subst_is_empty(&improve) {
-        typed = typed.apply(&improve);
-        preds = dedup_preds(preds.apply(&improve));
-        t = t.apply(&improve);
-    }
+    let typed = typed.apply(&subst);
+    let preds = dedup_preds(preds.apply(&subst));
+    let t = t.apply(&subst);
     type_system.check_predicate_kinds(&preds)?;
     validate_literal_predicates(&preds)?;
     Ok((typed, preds, t))
@@ -435,72 +429,10 @@ fn infer_inner(
     )
     .map_err(|err| err.with_span(expr.span()))?;
     let subst = unifier.into_subst();
-    let mut preds = dedup_preds(preds.apply(&subst));
-    let mut t = t.apply(&subst);
-    let improve = improve_indexable(&preds)?;
-    if !subst_is_empty(&improve) {
-        preds = dedup_preds(preds.apply(&improve));
-        t = t.apply(&improve);
-    }
+    let preds = dedup_preds(preds.apply(&subst));
+    let t = t.apply(&subst);
     type_system.check_predicate_kinds(&preds)?;
     finalize_infer_for_public_api(preds, t)
-}
-
-fn improve_indexable(preds: &[Predicate]) -> Result<Subst, TypeError> {
-    let mut subst = Subst::new_sync();
-    loop {
-        let mut changed = false;
-        for pred in preds {
-            let pred = pred.apply(&subst);
-            if pred.class.as_ref() != "Indexable" {
-                continue;
-            }
-            let TypeKind::Tuple(parts) = pred.typ.as_ref() else {
-                continue;
-            };
-            if parts.len() != 2 {
-                continue;
-            }
-            let container = parts[0].clone();
-            let elem = parts[1].clone();
-            let s = indexable_elem_subst(&container, &elem)?;
-            if !subst_is_empty(&s) {
-                subst = compose_subst(s, subst);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    Ok(subst)
-}
-
-fn indexable_elem_subst(container: &Type, elem: &Type) -> Result<Subst, TypeError> {
-    match container.as_ref() {
-        TypeKind::App(head, arg) => match head.as_ref() {
-            TypeKind::Con(tc) if matches!(tc.builtin_id(), Some(BuiltinTypeId::List)) => {
-                unify(elem, arg)
-            }
-            _ => Ok(Subst::new_sync()),
-        },
-        TypeKind::Tuple(elems) => {
-            if elems.is_empty() {
-                return Ok(Subst::new_sync());
-            }
-            let mut subst = Subst::new_sync();
-            let mut cur = elems[0].clone();
-            for ty in elems.iter().skip(1) {
-                let s_next = unify(&cur.apply(&subst), &ty.apply(&subst))?;
-                subst = compose_subst(s_next, subst);
-                cur = cur.apply(&subst);
-            }
-            let elem = elem.apply(&subst);
-            let s_elem = unify(&elem, &cur.apply(&subst))?;
-            Ok(compose_subst(s_elem, subst))
-        }
-        _ => Ok(Subst::new_sync()),
-    }
 }
 
 type LambdaChain<'a> = (

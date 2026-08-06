@@ -115,11 +115,6 @@ class Alternative f <= Applicative f where {
     or_else<a> : (f a -> f a) -> f a -> f a;
 }
 
-// Indexable needs two parameters: the container type and the element type.
-class Indexable t a where {
-    get : u64 -> t -> a;
-}
-
 // AdditiveMonoid instances
 instance<a> AdditiveMonoid (List a) where {
     zero = [];
@@ -953,11 +948,6 @@ instance Alternative Option <= Applicative Option where {
 
 instance<e> Alternative (Result e) <= Applicative (Result e) where {
     or_else = prim_or_else;
-}
-
-// Indexable instances
-instance<a> Indexable (List a, a) where {
-    get = prim_get;
 }
 
 

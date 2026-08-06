@@ -713,8 +713,8 @@ async fn eval_simple_mod() {
 }
 
 #[tokio::test]
-async fn eval_get_list_and_tuple() {
-    let expr = parse("get (1 is u64) (([1, 2, 3]) is List i32)");
+async fn eval_list_get_and_tuple_projection() {
+    let expr = parse("unwrap (list_get (1 is u64) (([1, 2, 3]) is List i32))");
     let value = eval_expr(builder_with_arith(), expr.as_ref())
         .await
         .unwrap();

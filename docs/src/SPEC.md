@@ -524,9 +524,22 @@ length, and `slice n m xs` with `m < n` are runtime errors. `n == length`/`m == 
 empty suffixes and half-open slice endpoints.
 
 The `Sequence` methods `take` and `skip` use a `u64` count. Counts greater than the list length are
-clamped to the list length, so `take` returns the whole list and `skip` returns an empty list. The
-`Indexable` method `get` likewise uses a `u64` index and reports a runtime error when the index is
-outside the list or tuple.
+clamped to the list length, so `take` returns the whole list and `skip` returns an empty list.
+
+The list-specific operations use `u64` positions and return ordinary data failures as options:
+
+- `list_get index xs` returns `Some` for an in-bounds zero-based index and `None` otherwise.
+- `list_slice start end xs` returns `Some` of the half-open range `start..end` when
+  `0 <= start <= end <= length xs`, including `Some []` for an empty valid range, and `None` for
+  invalid bounds.
+- `list_reverse`, `list_concat`, and `list_repeat` preserve element values and construct a new list
+  in the order implied by their names. `list_repeat 0 value` returns `[]`.
+- `list_any`, `list_all`, `list_find`, and `list_find_index` evaluate predicates from left to right
+  and stop once their result is known. On an empty list, `list_any` is `false`, `list_all` is
+  `true`, and both find operations return `None`.
+- `list_count` and `list_partition` evaluate every predicate application. Independent applications
+  may run concurrently. `list_partition` returns matching elements first and rejected elements
+  second, preserving relative input order in both lists.
 
 ### Instance-Method Checking (Static)
 

@@ -9,10 +9,10 @@ This example is from `rex-cli/examples/type_classes.rex`:
 
 ```rex,interactive
 let
-  use_classes<t,f,a> =
-    \ (x: t) (y: f a) (z: a) where Indexable (t, a), Foldable f ->
+  use_classes<f,a> =
+    \ (x: List a) (y: f a) (z: a) where Foldable f ->
     let
-      first = get 0 x,
+      first = unwrap (list_get 0 x),
       total = foldl (\acc _ -> acc) z y
     in
       (first, total, z)
@@ -23,8 +23,6 @@ in
 Notes:
 
 - `where ... ->` attaches constraints to the lambda.
-- Multi-parameter classes like `Indexable t a` are written as `Indexable (t, a)` in the `where`
-  list (internally they’re represented as tupled predicates).
 - Constraints can use module-qualified class names when imported via alias (for example
   `where M.ClassName t -> ...`).
 

@@ -1377,7 +1377,7 @@ async fn extreme_stress_handles_broad_evaluator_paths() {
         in
             dict_val
                 + sum_list flat
-                + get (0 is u64) arr2
+                + unwrap (list_get (0 is u64) arr2)
                 + (if arr == arr then 1 else 0)
                 + tuple_score
         "#,

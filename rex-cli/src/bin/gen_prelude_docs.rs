@@ -70,7 +70,26 @@ const FUNCTION_SECTIONS: &[FunctionSection] = &[
         title: "List Functions",
         introduction: "Construct, index, slice, and combine `List` values.",
         functions: &[
-            "Empty", "Cons", "get", "take", "skip", "first", "last", "slice", "zip", "unzip",
+            "Empty",
+            "Cons",
+            "list_get",
+            "list_slice",
+            "list_reverse",
+            "list_concat",
+            "list_repeat",
+            "list_any",
+            "list_all",
+            "list_find",
+            "list_find_index",
+            "list_count",
+            "list_partition",
+            "take",
+            "skip",
+            "first",
+            "last",
+            "slice",
+            "zip",
+            "unzip",
         ],
     },
     FunctionSection {
@@ -400,13 +419,7 @@ fn format_scheme(scheme: &Scheme) -> String {
     }
 }
 
-fn format_instance_target(class_name: &str, inst: &Instance) -> String {
-    if class_name == "Indexable"
-        && let TypeKind::Tuple(types) = inst.head.typ.as_ref()
-        && let Some(container) = types.first()
-    {
-        return container.to_string();
-    }
+fn format_instance_target(_class_name: &str, inst: &Instance) -> String {
     inst.head.typ.to_string()
 }
 

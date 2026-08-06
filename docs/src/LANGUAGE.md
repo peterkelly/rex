@@ -530,8 +530,9 @@ Rex ships a prelude with common abstractions and instances. Highlights:
 - `Eq` / `Ord`
 - `Functor` / `Applicative` / `Monad` for `List`, `Option`, `Result`
 - `Foldable`, `Filterable`, `Sequence`
-- multi-parameter `Indexable t a` with instances for lists and tuples
 - list range helpers: `first n xs`, `last n xs`, and half-open `slice n m xs`
+- total list access and query helpers such as `list_get`, `list_slice`, `list_find`, and
+  `list_partition`
 
 Example: `Functor` across different container types:
 
@@ -542,10 +543,10 @@ Example: `Functor` across different container types:
 )
 ```
 
-Example: `Indexable`:
+Example: safe list indexing:
 
 ```rex,interactive
-get 0 [10, 20, 30]
+list_get 0 [10, 20, 30]
 ```
 
 ## Defaulting (Ambiguous Types)

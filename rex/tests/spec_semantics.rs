@@ -1,6 +1,7 @@
 mod common;
 
 use rex::{
+    ast::Symbol,
     engine::{Builder, CompileOptions, EngineError, Value},
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type, TypeError, TypeKind},
@@ -357,14 +358,14 @@ async fn spec_length_counts_dictionary_entries() {
 }
 
 #[tokio::test]
-async fn spec_take_skip_and_get_use_u64() {
+async fn spec_take_skip_and_list_get_use_u64() {
     let (_heap, value, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
         r#"
         (
             take (2 is u64) (([1, 2, 3]) is List i32),
             skip (1 is u64) (([1, 2, 3]) is List i32),
-            get (1 is u64) (([1, 2, 3]) is List i32),
+            list_get (1 is u64) (([1, 2, 3]) is List i32),
             take (18446744073709551615 is u64) (([1, 2, 3]) is List i32),
             skip (18446744073709551615 is u64) (([1, 2, 3]) is List i32)
         )
@@ -379,7 +380,7 @@ async fn spec_take_skip_and_get_use_u64() {
         Type::tuple(vec![
             Type::list(i32_ty.clone()),
             Type::list(i32_ty.clone()),
-            i32_ty.clone(),
+            Type::option(i32_ty.clone()),
             Type::list(i32_ty.clone()),
             Type::list(i32_ty),
         ])
@@ -389,7 +390,7 @@ async fn spec_take_skip_and_get_use_u64() {
         Value::Tuple(vec![
             Value::List(vec![Value::I32(1), Value::I32(2)]),
             Value::List(vec![Value::I32(2), Value::I32(3)]),
-            Value::I32(2),
+            Value::Adt(Symbol::intern("Some"), vec![Value::I32(2)]),
             Value::List(vec![Value::I32(1), Value::I32(2), Value::I32(3)]),
             Value::List(vec![]),
         ])
@@ -397,19 +398,16 @@ async fn spec_take_skip_and_get_use_u64() {
 }
 
 #[tokio::test]
-async fn spec_get_reports_full_u64_out_of_bounds_index() {
-    let err = common::eval_source(
+async fn spec_list_get_accepts_full_u64_and_returns_none() {
+    let (_heap, value, ty) = common::eval_source(
         Builder::with_prelude(()).unwrap(),
-        "get (18446744073709551615 is u64) (([1, 2, 3]) is List i32)",
+        "list_get (18446744073709551615 is u64) (([1, 2, 3]) is List i32)",
     )
     .await
-    .expect_err("the maximum u64 index must be out of bounds");
+    .unwrap();
 
-    assert!(matches!(
-        err,
-        EngineError::IndexOutOfBounds { index, len: 3, .. }
-            if index == i128::from(u64::MAX)
-    ));
+    assert_eq!(ty, Type::option(Type::builtin(BuiltinTypeId::I32)));
+    assert_eq!(value, Value::Adt(Symbol::intern("None"), vec![]));
 }
 
 #[tokio::test]

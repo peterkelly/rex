@@ -21,6 +21,6 @@ These examples are interactive in the docs: edit and run them directly on each p
 7. [Result Workflows](07_result_workflows.md)
 8. [Custom Show Printing](08_custom_show.md)
 9. [Custom Size](09_custom_size.md)
-10. [Indexable](10_indexable.md)
+10. [List Helpers](10_list_helpers.md)
 11. [Small Standard Module](11_small_std_module.md)
 12. [Mini Project](12_mini_project.md)

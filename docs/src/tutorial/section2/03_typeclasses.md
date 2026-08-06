@@ -46,20 +46,20 @@ If you have an `Ord a`, you also must have an `Eq a` instance.
 
 ## Multi-parameter classes (tupled)
 
-Some prelude classes logically take multiple type parameters, such as `Indexable t a`.
+User-defined classes may take multiple type parameters. For example:
 
 In Rex source you write:
 
 ```rex
-class Indexable t a where {
-  get : u64 -> t -> a;
+class Convert a b where {
+  convert : a -> b;
 }
 ```
 
 In `where` constraints, multi-parameter classes are written using a tuple:
 
 ```rex
-where Indexable (t, a) -> ...
+where Convert (a, b) -> ...
 ```
 
 This matches the implementation model described in [Specification](../../SPEC.md).

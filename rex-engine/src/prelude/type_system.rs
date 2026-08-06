@@ -345,7 +345,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // Collection intrinsics used by the standard type class instances.
     //
     // These are all `prim_` because they are the host-provided “bottom layer”.
-    // The user-facing API is the class methods (`map`, `foldl`, `zip`, `get`, ...).
+    // The user-facing API is the class methods (`map`, `foldl`, `zip`, ...).
     {
         let list_con = Type::builtin(BuiltinTypeId::List);
         let option_con = Type::builtin(BuiltinTypeId::Option);
@@ -616,34 +616,6 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             );
         }
 
-        // prim_get
-        {
-            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
-            let a = Type::var(a_tv.clone());
-            let idx = u64_ty.clone();
-            ts.add_overload(
-                "prim_get",
-                Scheme::new(
-                    vec![a_tv.clone()],
-                    vec![],
-                    Type::fun(idx.clone(), Type::fun(list_of(a.clone()), a.clone())),
-                ),
-            );
-            for size in 2..=32 {
-                ts.add_overload(
-                    "prim_get",
-                    Scheme::new(
-                        vec![a_tv.clone()],
-                        vec![],
-                        Type::fun(
-                            idx.clone(),
-                            Type::fun(Type::tuple(vec![a.clone(); size]), a.clone()),
-                        ),
-                    ),
-                );
-            }
-        }
-
         // prim_dict_map : (a -> b) -> Dict a -> Dict b
         {
             let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
@@ -842,6 +814,7 @@ pub(super) fn inject_standard_prelude(
     );
 
     inject_string_builtin_schemes(ts);
+    inject_list_builtin_schemes(ts);
 
     // Collection helpers (type class based)
     let sum_scheme = scheme!(&mut ts.supply; forall [f, a]
@@ -1055,6 +1028,102 @@ pub(super) fn inject_standard_prelude(
     ts.add_value("is_err", is_err_scheme);
 
     Ok(())
+}
+
+fn inject_list_builtin_schemes(ts: &mut TypeSystem) {
+    let bool_ty = Type::builtin(BuiltinTypeId::Bool);
+    let u64_ty = Type::builtin(BuiltinTypeId::U64);
+
+    macro_rules! add {
+        ($name:literal, $scheme:expr $(,)?) => {{
+            let scheme = $scheme;
+            ts.add_value($name, scheme);
+        }};
+    }
+
+    add!(
+        "list_get",
+        scheme!(&mut ts.supply; forall [a] =>
+            Type::fun(&u64_ty, Type::fun(Type::list(a), Type::option(a)))
+        ),
+    );
+    add!(
+        "list_slice",
+        scheme!(&mut ts.supply; forall [a] =>
+            Type::fun(
+                &u64_ty,
+                Type::fun(
+                    &u64_ty,
+                    Type::fun(Type::list(a), Type::option(Type::list(a))),
+                ),
+            )
+        ),
+    );
+    add!(
+        "list_reverse",
+        scheme!(&mut ts.supply; forall [a] => Type::fun(Type::list(a), Type::list(a))),
+    );
+    add!(
+        "list_concat",
+        scheme!(&mut ts.supply; forall [a] =>
+            Type::fun(Type::list(Type::list(a)), Type::list(a))
+        ),
+    );
+    add!(
+        "list_repeat",
+        scheme!(&mut ts.supply; forall [a] =>
+            Type::fun(&u64_ty, Type::fun(a, Type::list(a)))
+        ),
+    );
+
+    for name in ["list_any", "list_all"] {
+        let scheme = scheme!(&mut ts.supply; forall [a] =>
+            Type::fun(
+                Type::fun(a, &bool_ty),
+                Type::fun(Type::list(a), &bool_ty),
+            )
+        );
+        ts.add_value(name, scheme);
+    }
+    add!(
+        "list_find",
+        scheme!(&mut ts.supply; forall [a] =>
+            Type::fun(
+                Type::fun(a, &bool_ty),
+                Type::fun(Type::list(a), Type::option(a)),
+            )
+        ),
+    );
+    add!(
+        "list_find_index",
+        scheme!(&mut ts.supply; forall [a] =>
+            Type::fun(
+                Type::fun(a, &bool_ty),
+                Type::fun(Type::list(a), Type::option(&u64_ty)),
+            )
+        ),
+    );
+    add!(
+        "list_count",
+        scheme!(&mut ts.supply; forall [a] =>
+            Type::fun(
+                Type::fun(a, &bool_ty),
+                Type::fun(Type::list(a), &u64_ty),
+            )
+        ),
+    );
+    add!(
+        "list_partition",
+        scheme!(&mut ts.supply; forall [a] =>
+            Type::fun(
+                Type::fun(a, &bool_ty),
+                Type::fun(
+                    Type::list(a),
+                    Type::tuple(vec![Type::list(a), Type::list(a)]),
+                ),
+            )
+        ),
+    );
 }
 
 // Register the user-facing string function signatures in the standard type system.

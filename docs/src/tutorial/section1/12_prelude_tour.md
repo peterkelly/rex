@@ -44,9 +44,6 @@ defaulting pass, which resolves ambiguous type variables for defaultable classes
 - `Foldable t` (`foldl`, `foldr`, `fold`)
 - `Filterable f` (`filter`, `filter_map`)
 - `Sequence f` (`take`, `skip`, `zip`, `unzip`)
-- `Indexable t a` (`get`)
-
-For tuples, use numeric projection like `.0` and `.1` instead of `get`.
 
 ## A few useful helper functions
 
@@ -54,6 +51,7 @@ The prelude also exposes some generic helpers (type-class-based):
 
 - `sum`, `mean`, `length`, `min`, `max`
 - `first`, `last`, `slice` for strict list range extraction
+- `list_get`, `list_slice`, `list_find`, and other total list helpers
 - `is_some`, `is_none` (for `Option`)
 - `is_ok`, `is_err` (for `Result`)
 

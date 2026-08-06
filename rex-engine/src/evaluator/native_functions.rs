@@ -112,8 +112,10 @@ pub enum NativeTask<P> {
     ApplyUnary(NativeApplyUnary<P>),
     SequenceMap(NativeSequenceMap<P>),
     SequenceFilter(NativeSequenceFilter<P>),
+    SequencePredicate(NativeSequencePredicate<P>),
     SequenceFilterMap(NativeSequenceFilterMap<P>),
     SequenceFlatMap(NativeSequenceFlatMap<P>),
+    ListSearch(NativeListSearch<P>),
     UnaryMap(NativeUnaryMap<P>),
     UnaryFilter(NativeUnaryFilter<P>),
     UnaryFilterMap(NativeUnaryFilterMap<P>),
@@ -222,6 +224,18 @@ impl<P> NativeTask<P> {
                 keep: task.keep,
                 remaining: task.remaining,
             }),
+            Self::SequencePredicate(task) => {
+                NativeTask::SequencePredicate(NativeSequencePredicate {
+                    func: map(task.func)?,
+                    func_type: task.func_type,
+                    elem_type: task.elem_type,
+                    values: task.values.map_values(map)?,
+                    mode: task.mode,
+                    children: task.children,
+                    matches: task.matches,
+                    remaining: task.remaining,
+                })
+            }
             Self::SequenceFilterMap(task) => {
                 NativeTask::SequenceFilterMap(NativeSequenceFilterMap {
                     func: map(task.func)?,
@@ -243,6 +257,14 @@ impl<P> NativeTask<P> {
                 children: task.children,
                 output: map_option_value_vecs(task.output, map)?,
                 remaining: task.remaining,
+            }),
+            Self::ListSearch(task) => NativeTask::ListSearch(NativeListSearch {
+                func: map(task.func)?,
+                func_type: task.func_type,
+                elem_type: task.elem_type,
+                values: task.values.map_values(map)?,
+                mode: task.mode,
+                next_index: task.next_index,
             }),
             Self::UnaryMap(task) => NativeTask::UnaryMap(NativeUnaryMap {
                 func: map(task.func)?,
@@ -380,6 +402,10 @@ impl NativeTask<RootedPtr> {
                 task.children.push(child);
                 Ok(())
             }
+            NativeTask::SequencePredicate(task) => {
+                task.children.push(child);
+                Ok(())
+            }
             NativeTask::SequenceFilterMap(task) => {
                 task.children.push(child);
                 Ok(())
@@ -418,6 +444,7 @@ impl NativeTask<RootedPtr> {
         match self {
             NativeTask::SequenceMap(task) => Ok(task.children.clone()),
             NativeTask::SequenceFilter(task) => Ok(task.children.clone()),
+            NativeTask::SequencePredicate(task) => Ok(task.children.clone()),
             NativeTask::SequenceFilterMap(task) => Ok(task.children.clone()),
             NativeTask::SequenceFlatMap(task) => Ok(task.children.clone()),
             NativeTask::DictMap(task) => Ok(task.children.clone()),
@@ -439,6 +466,7 @@ impl NativeTask<RootedPtr> {
         match self {
             NativeTask::SequenceMap(task) => task.child_spec(scope, index),
             NativeTask::SequenceFilter(task) => task.child_spec(scope, index),
+            NativeTask::SequencePredicate(task) => task.child_spec(scope, index),
             NativeTask::SequenceFilterMap(task) => task.child_spec(scope, index),
             NativeTask::SequenceFlatMap(task) => task.child_spec(scope, index),
             NativeTask::DictMap(task) => task.child_spec(index),
@@ -459,8 +487,10 @@ impl Coroutine for NativeTask<RootedPtr> {
             NativeTask::ApplyUnary(task) => task.enter(scope),
             NativeTask::SequenceMap(task) => task.enter(scope),
             NativeTask::SequenceFilter(task) => task.enter(scope),
+            NativeTask::SequencePredicate(task) => task.enter(scope),
             NativeTask::SequenceFilterMap(task) => task.enter(scope),
             NativeTask::SequenceFlatMap(task) => task.enter(scope),
+            NativeTask::ListSearch(task) => task.enter(scope),
             NativeTask::UnaryMap(task) => task.enter(scope),
             NativeTask::UnaryFilter(task) => task.enter(scope),
             NativeTask::UnaryFilterMap(task) => task.enter(scope),
@@ -487,8 +517,10 @@ impl Coroutine for NativeTask<RootedPtr> {
             NativeTask::ApplyUnary(task) => task.receive(scope, child, value),
             NativeTask::SequenceMap(task) => task.receive(scope, child, value),
             NativeTask::SequenceFilter(task) => task.receive(scope, child, value),
+            NativeTask::SequencePredicate(task) => task.receive(scope, child, value),
             NativeTask::SequenceFilterMap(task) => task.receive(scope, child, value),
             NativeTask::SequenceFlatMap(task) => task.receive(scope, child, value),
+            NativeTask::ListSearch(task) => task.receive(scope, child, value),
             NativeTask::UnaryMap(task) => task.receive(scope, child, value),
             NativeTask::UnaryFilter(task) => task.receive(scope, child, value),
             NativeTask::UnaryFilterMap(task) => task.receive(scope, child, value),
@@ -737,6 +769,210 @@ impl NativeSequenceFilter<RootedPtr> {
             value,
             self.elem_type.clone(),
         )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum NativeSequencePredicateMode {
+    Count,
+    Partition,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeSequencePredicate<P> {
+    pub func: P,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub values: ListItems<P>,
+    pub mode: NativeSequencePredicateMode,
+    pub children: Vec<FrameId>,
+    pub matches: Vec<Option<bool>>,
+    pub remaining: usize,
+}
+
+impl Coroutine for NativeSequencePredicate<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
+        if self.values.is_empty() {
+            return self.finish(scope);
+        }
+        self.children.clear();
+        self.matches = vec![None; self.values.len()];
+        self.remaining = self.values.len();
+        Ok(NativeStep::Schedule(self.values.len()))
+    }
+
+    fn receive(
+        &mut self,
+        scope: &mut RootScope<'_>,
+        child: FrameId,
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
+        let index = self
+            .children
+            .iter()
+            .position(|candidate| *candidate == child)
+            .ok_or_else(|| {
+                EngineError::Internal("native sequence predicate received unknown child".into())
+            })?;
+        let slot = self.matches.get_mut(index).ok_or_else(|| {
+            EngineError::Internal("native sequence predicate result slot out of bounds".into())
+        })?;
+        if slot.is_some() {
+            return Err(EngineError::Internal(
+                "native sequence predicate received duplicate child result".into(),
+            ));
+        }
+        *slot = Some(scope.root_as_bool(value)?);
+        self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
+            EngineError::Internal("native sequence predicate received too many results".into())
+        })?;
+        if self.remaining == 0 {
+            return self.finish(scope);
+        }
+        Ok(NativeStep::Wait)
+    }
+}
+
+impl NativeSequencePredicate<RootedPtr> {
+    fn child_spec(
+        &self,
+        scope: &mut RootScope<'_>,
+        index: usize,
+    ) -> Result<NativeChildSpec, EngineError> {
+        let value = self.values.get(scope, index)?;
+        native_apply_spec(
+            self.func,
+            self.func_type.clone(),
+            value,
+            self.elem_type.clone(),
+        )
+    }
+
+    fn finish(&self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
+        match self.mode {
+            NativeSequencePredicateMode::Count => {
+                let count = self
+                    .matches
+                    .iter()
+                    .filter(|matched| **matched == Some(true))
+                    .count();
+                let count = u64::try_from(count)
+                    .map_err(|_| EngineError::Internal("list count overflow".into()))?;
+                Ok(NativeStep::Return(scope.alloc_root_u64(count)?))
+            }
+            NativeSequencePredicateMode::Partition => {
+                let mut matching = Vec::new();
+                let mut rejected = Vec::new();
+                for index in 0..self.values.len() {
+                    let value = self.values.get(scope, index)?;
+                    match self.matches.get(index).copied().flatten() {
+                        Some(true) => matching.push(value),
+                        Some(false) => rejected.push(value),
+                        None => {
+                            return Err(EngineError::Internal(
+                                "native list partition completed with missing result".into(),
+                            ));
+                        }
+                    }
+                }
+                let matching = scope.alloc_root_list(matching)?;
+                let rejected = scope.alloc_root_list(rejected)?;
+                Ok(NativeStep::Return(
+                    scope.alloc_root_tuple(vec![matching, rejected])?,
+                ))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum NativeListSearchMode {
+    Any,
+    All,
+    Find,
+    FindIndex,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeListSearch<P> {
+    pub func: P,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub values: ListItems<P>,
+    pub mode: NativeListSearchMode,
+    pub next_index: usize,
+}
+
+impl Coroutine for NativeListSearch<RootedPtr> {
+    fn enter(&mut self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
+        self.next_index = 0;
+        if self.values.is_empty() {
+            return self.exhausted(scope);
+        }
+        self.apply_next(scope)
+    }
+
+    fn receive(
+        &mut self,
+        scope: &mut RootScope<'_>,
+        _child: FrameId,
+        value: RootedPtr,
+    ) -> Result<NativeStep, EngineError> {
+        let matched = scope.root_as_bool(value)?;
+        match (self.mode.clone(), matched) {
+            (NativeListSearchMode::Any, true) => {
+                return Ok(NativeStep::Return(scope.alloc_root_bool(true)?));
+            }
+            (NativeListSearchMode::All, false) => {
+                return Ok(NativeStep::Return(scope.alloc_root_bool(false)?));
+            }
+            (NativeListSearchMode::Find, true) => {
+                let value = self.values.get(scope, self.next_index)?;
+                return Ok(NativeStep::Return(option_from_native_pointer(
+                    scope,
+                    Some(value),
+                )?));
+            }
+            (NativeListSearchMode::FindIndex, true) => {
+                let index = u64::try_from(self.next_index)
+                    .map_err(|_| EngineError::Internal("list index overflow".into()))?;
+                let index = scope.alloc_root_u64(index)?;
+                return Ok(NativeStep::Return(option_from_native_pointer(
+                    scope,
+                    Some(index),
+                )?));
+            }
+            _ => {}
+        }
+
+        self.next_index += 1;
+        if self.next_index == self.values.len() {
+            return self.exhausted(scope);
+        }
+        self.apply_next(scope)
+    }
+}
+
+impl NativeListSearch<RootedPtr> {
+    fn apply_next(&self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
+        let value = self.values.get(scope, self.next_index)?;
+        native_apply_step(
+            self.func,
+            self.func_type.clone(),
+            value,
+            self.elem_type.clone(),
+        )
+    }
+
+    fn exhausted(&self, scope: &mut RootScope<'_>) -> Result<NativeStep, EngineError> {
+        let value = match self.mode {
+            NativeListSearchMode::Any => scope.alloc_root_bool(false)?,
+            NativeListSearchMode::All => scope.alloc_root_bool(true)?,
+            NativeListSearchMode::Find | NativeListSearchMode::FindIndex => {
+                option_from_native_pointer(scope, None)?
+            }
+        };
+        Ok(NativeStep::Return(value))
     }
 }
 

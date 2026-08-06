@@ -42,7 +42,7 @@
     - [Result Workflows](tutorial/section3/07_result_workflows.md)
     - [Custom Show Printing](tutorial/section3/08_custom_show.md)
     - [Custom Size](tutorial/section3/09_custom_size.md)
-    - [Indexable](tutorial/section3/10_indexable.md)
+    - [List Helpers](tutorial/section3/10_list_helpers.md)
     - [Small Standard Module](tutorial/section3/11_small_std_module.md)
     - [Mini Project](tutorial/section3/12_mini_project.md)
 

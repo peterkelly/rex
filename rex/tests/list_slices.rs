@@ -481,6 +481,32 @@ async fn slice_crosses_hybrid_cons_prefix_and_binary_tail() {
 }
 
 #[tokio::test]
+async fn list_helpers_work_on_binary_backed_lists() {
+    let option_u8 = Type::option(Type::builtin(BuiltinTypeId::U8));
+    let option_u8_list = Type::option(u8_list_type());
+
+    assert_eval(
+        r#"
+        ( list_get 1 (make_binary_slice 3 7)
+        , list_slice 1 4 (make_binary_hybrid 2 3 8)
+        , list_reverse (make_binary_slice 3 7)
+        , list_concat [make_binary_slice 0 2, make_binary_slice 6 8]
+        , list_find (\x -> x > 104) (make_binary_slice 3 7)
+        )
+        "#,
+        "(Some 104u8, Some [1u8, 103u8, 104u8], [106u8, 105u8, 104u8, 103u8], [100u8, 101u8, 106u8, 107u8], Some 105u8)",
+        Type::tuple(vec![
+            option_u8.clone(),
+            option_u8_list,
+            u8_list_type(),
+            u8_list_type(),
+            option_u8,
+        ]),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn binary_list_equality_uses_visible_elements_across_runtime_shapes() {
     assert_eval(
         r#"

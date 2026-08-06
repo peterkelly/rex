@@ -1,8 +1,8 @@
 
 let
-    use_classes<t,f,a> = \ (x: t) (y: f a) (z: a) where Indexable (t, a), Foldable f ->
+    use_classes<f,a> = \ (x: List a) (y: f a) (z: a) where Foldable f ->
         let
-            first = get 0 x,
+            first = unwrap (list_get 0 x),
             total = foldl (\acc _ -> acc) z y
         in
             (first, total, z)

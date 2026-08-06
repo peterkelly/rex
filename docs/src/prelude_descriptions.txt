@@ -71,12 +71,22 @@ fn:first	first count list	Returns the first `count` elements of `list`; raises a
 fn:fold	fold step initial container	Reduces `container` from left to right by applying `step` to the accumulator and each value, beginning with `initial`.
 fn:foldl	foldl step initial container	Strictly reduces `container` from left to right by applying `step` to the accumulator and each value, beginning with `initial`.
 fn:foldr	foldr step initial container	Reduces `container` from right to left by applying `step` to each value and the accumulator, beginning with `initial`.
-fn:get	get index list	Returns the element at zero-based `index` in `list`; raises an error when `index` is out of range.
 fn:is_err	is_err result	Returns whether `result` is `Err`.
 fn:is_none	is_none option	Returns whether `option` is `None`.
 fn:is_ok	is_ok result	Returns whether `result` is `Ok`.
 fn:is_some	is_some option	Returns whether `option` is `Some`.
 fn:last	last count list	Returns the last `count` elements of `list`; raises an error when `count` is out of range.
+fn:list_all	list_all predicate list	Returns whether `predicate` is `true` for every element, stopping at the first `false` result.
+fn:list_any	list_any predicate list	Returns whether `predicate` is `true` for any element, stopping at the first `true` result.
+fn:list_concat	list_concat lists	Concatenates the nested `lists` into one list while preserving their order.
+fn:list_count	list_count predicate list	Returns the number of elements for which `predicate` returns `true`.
+fn:list_find	list_find predicate list	Returns the first element for which `predicate` returns `true`, or `None` when no element matches.
+fn:list_find_index	list_find_index predicate list	Returns the zero-based index of the first matching element, or `None` when no element matches.
+fn:list_get	list_get index list	Returns the element at zero-based `index`, or `None` when `index` is out of bounds.
+fn:list_partition	list_partition predicate list	Returns matching and non-matching elements as a pair of lists, preserving their relative order.
+fn:list_repeat	list_repeat count value	Returns a list containing `count` copies of `value`.
+fn:list_reverse	list_reverse list	Returns the elements of `list` in reverse order.
+fn:list_slice	list_slice start end list	Returns the half-open range `start..end`, or `None` for invalid bounds.
 fn:map	map transform container	Applies `transform` to every value in `container` while preserving its structure.
 fn:max	max values	Returns the greatest element in `values` according to its ordering; raises an error when `values` is empty.
 fn:mean	mean values	Returns the arithmetic mean of `values`; raises an error when `values` is empty.
