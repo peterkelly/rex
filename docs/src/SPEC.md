@@ -127,8 +127,8 @@ The zero-arity primitive types are `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`
 to Rust's `char` and implements `RexType`, `IntoRex`, and `FromRex`. The `Hash` type corresponds to a
 `blake3::Hash` in Rust. At JSON boundaries, hash values are exactly 32 bytes encoded as hexadecimal
 strings; Rex emits the canonical lowercase 64-character representation. `show` uses the same
-representation. `string_to_hash : String -> Hash` accepts a valid hexadecimal BLAKE3 hash and
-raises an evaluation error for invalid input.
+representation. The `Parse Hash` instance accepts the same representation and returns `None` for
+invalid input.
 
 ## Program Entry Points
 
@@ -452,6 +452,24 @@ Resolution:
    (`EngineError::AmbiguousTypeclassImpl`).
 
 Regression: `spec_typeclass_method_value_without_type_is_ambiguous` (`rex/tests/spec_semantics.rs`).
+
+### Prelude Parsing
+
+The prelude class `Parse a` provides `parse : String -> Option a`. It has instances for `Bool`,
+`u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `Char`, `UUID`, `Hash`, and
+`DateTime`. A successful conversion returns `Some value`; malformed or out-of-range input returns
+`None` rather than raising an evaluation error. Parsing a `Char` succeeds only when the input
+contains exactly one Unicode scalar value.
+
+The desired result type must be determined by context so that the corresponding `Parse` instance
+can be selected, for example:
+
+```rex
+let port: Option u16 = parse "8080" in port
+```
+
+Regressions: `parse_returns_some_for_every_supported_type` and
+`parse_returns_none_for_every_supported_type` (`rex/tests/typeclasses_system.rs`).
 
 ### Overloaded Method Values (Deferred Resolution)
 

@@ -280,7 +280,7 @@ Returns the greatest element in `values` according to its ordering; raises an er
 
 ## General Value Functions
 
-Functions for constructing defaults and rendering values.
+Functions for constructing defaults, parsing strings, and rendering values.
 
 ### `default`
 
@@ -291,6 +291,16 @@ Functions for constructing defaults and rendering values.
 **Available for:** `Bool`, `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `Char`, `String`, `List 'a`, `Option 'a`, `Result 'a 'e`
 
 Returns the canonical default value for the inferred result type. For `Result a e`, the success type `a` must also have a default.
+
+### `parse`
+
+**Call:** `parse input`
+
+**Type:** `String -> Option 'a`
+
+**Available for:** `Bool`, `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `Char`, `UUID`, `Hash`, `DateTime`
+
+Attempts to convert `input` to the result type selected by context, returning `Some value` on success or `None` for malformed or out-of-range input.
 
 ### `show`
 
@@ -773,14 +783,6 @@ Encodes `input` as its UTF-8 byte sequence.
 **Type:** `List u8 -> Option String`
 
 Decodes `bytes` as UTF-8, returning `None` when the byte sequence is invalid.
-
-### `string_to_hash`
-
-**Call:** `string_to_hash input`
-
-**Type:** `String -> Hash`
-
-Parses `input` as a hexadecimal BLAKE3 hash; raises an error when `input` is invalid.
 
 ## Option and Result Functions
 

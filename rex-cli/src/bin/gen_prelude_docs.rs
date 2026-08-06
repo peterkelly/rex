@@ -46,8 +46,8 @@ const FUNCTION_SECTIONS: &[FunctionSection] = &[
     },
     FunctionSection {
         title: "General Value Functions",
-        introduction: "Functions for constructing defaults and rendering values.",
-        functions: &["default", "show"],
+        introduction: "Functions for constructing defaults, parsing strings, and rendering values.",
+        functions: &["default", "parse", "show"],
     },
     FunctionSection {
         title: "Collection and Container Functions",
@@ -115,7 +115,6 @@ const FUNCTION_SECTIONS: &[FunctionSection] = &[
             "chars_to_string",
             "string_to_utf8",
             "utf8_to_string",
-            "string_to_hash",
         ],
     },
     FunctionSection {

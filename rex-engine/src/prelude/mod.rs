@@ -135,8 +135,8 @@ where
     inject_equality_ops(engine)?;
     inject_order_ops(engine)?;
     inject_show_ops(engine)?;
+    inject_parse_ops(engine)?;
     inject_boolean_ops(engine)?;
-    inject_hash_ops(engine)?;
     strings::inject_string_builtins(engine)?;
     inject_numeric_ops(engine)?;
     inject_list_builtins(engine)?;
@@ -990,21 +990,68 @@ fn inject_show_ops<State: Clone + Send + Sync + 'static>(
     Ok(())
 }
 
+fn inject_parse_ops<State: Clone + Send + Sync + 'static>(
+    engine: &mut Builder<State>,
+) -> Result<(), EngineError> {
+    macro_rules! export_from_str_parse {
+        ($builtin:ident, $ty:ty, $allocator:ident) => {
+            let output = Type::builtin(BuiltinTypeId::$builtin);
+            let scheme = Scheme::new(
+                vec![],
+                vec![],
+                Type::fun(Type::builtin(BuiltinTypeId::String), Type::option(output)),
+            );
+            engine.export_native("prim_parse", scheme, 1, |scope, _, args| {
+                let input = scope.root_as_string(args[0])?;
+                let parsed = match input.parse::<$ty>() {
+                    Ok(value) => Some(scope.$allocator(value)?),
+                    Err(_) => None,
+                };
+                option_from_root(scope, parsed)
+            })?;
+        };
+    }
+
+    export_from_str_parse!(Bool, bool, alloc_root_bool);
+    export_from_str_parse!(U8, u8, alloc_root_u8);
+    export_from_str_parse!(U16, u16, alloc_root_u16);
+    export_from_str_parse!(U32, u32, alloc_root_u32);
+    export_from_str_parse!(U64, u64, alloc_root_u64);
+    export_from_str_parse!(I8, i8, alloc_root_i8);
+    export_from_str_parse!(I16, i16, alloc_root_i16);
+    export_from_str_parse!(I32, i32, alloc_root_i32);
+    export_from_str_parse!(I64, i64, alloc_root_i64);
+    export_from_str_parse!(F32, f32, alloc_root_f32);
+    export_from_str_parse!(F64, f64, alloc_root_f64);
+    export_from_str_parse!(Char, char, alloc_root_char);
+    export_from_str_parse!(Uuid, Uuid, alloc_root_uuid);
+
+    let hash_scheme = Scheme::new(
+        vec![],
+        vec![],
+        Type::fun(
+            Type::builtin(BuiltinTypeId::String),
+            Type::option(Type::builtin(BuiltinTypeId::Hash)),
+        ),
+    );
+    engine.export_native("prim_parse", hash_scheme, 1, |scope, _, args| {
+        let input = scope.root_as_string(args[0])?;
+        let parsed = match Hash::from_hex(&input) {
+            Ok(value) => Some(scope.alloc_root_hash(value)?),
+            Err(_) => None,
+        };
+        option_from_root(scope, parsed)
+    })?;
+
+    export_from_str_parse!(DateTime, DateTime<Utc>, alloc_root_datetime);
+    Ok(())
+}
+
 fn inject_boolean_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
     engine.export("(&&)", |_: &State, a: bool, b: bool| Ok(a && b))?;
     engine.export("(||)", |_: &State, a: bool, b: bool| Ok(a || b))?;
-    Ok(())
-}
-
-fn inject_hash_ops<State: Clone + Send + Sync + 'static>(
-    engine: &mut Builder<State>,
-) -> Result<(), EngineError> {
-    engine.export("string_to_hash", |_: &State, value: String| {
-        Hash::from_hex(&value)
-            .map_err(|error| EngineError::Custom(format!("invalid hash string: {error}")))
-    })?;
     Ok(())
 }
 

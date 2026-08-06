@@ -59,6 +59,11 @@ class Show a where {
     show : a -> String;
 }
 
+// string parsing
+class Parse a where {
+    parse : String -> Option a;
+}
+
 // default values
 class Default a where {
     default : a;
@@ -684,6 +689,67 @@ instance Show Hash where {
 
 instance Show DateTime where {
     show = prim_show;
+}
+
+// Parse instances
+instance Parse Bool where {
+    parse = prim_parse;
+}
+
+instance Parse u8 where {
+    parse = prim_parse;
+}
+
+instance Parse u16 where {
+    parse = prim_parse;
+}
+
+instance Parse u32 where {
+    parse = prim_parse;
+}
+
+instance Parse u64 where {
+    parse = prim_parse;
+}
+
+instance Parse i8 where {
+    parse = prim_parse;
+}
+
+instance Parse i16 where {
+    parse = prim_parse;
+}
+
+instance Parse i32 where {
+    parse = prim_parse;
+}
+
+instance Parse i64 where {
+    parse = prim_parse;
+}
+
+instance Parse f32 where {
+    parse = prim_parse;
+}
+
+instance Parse f64 where {
+    parse = prim_parse;
+}
+
+instance Parse Char where {
+    parse = prim_parse;
+}
+
+instance Parse UUID where {
+    parse = prim_parse;
+}
+
+instance Parse Hash where {
+    parse = prim_parse;
+}
+
+instance Parse DateTime where {
+    parse = prim_parse;
 }
 
 // Default instances

@@ -310,6 +310,38 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
         }
     }
 
+    // String-parsing intrinsics (monomorphic overloads).
+    {
+        let parse_types = [
+            BuiltinTypeId::Bool,
+            BuiltinTypeId::U8,
+            BuiltinTypeId::U16,
+            BuiltinTypeId::U32,
+            BuiltinTypeId::U64,
+            BuiltinTypeId::I8,
+            BuiltinTypeId::I16,
+            BuiltinTypeId::I32,
+            BuiltinTypeId::I64,
+            BuiltinTypeId::F32,
+            BuiltinTypeId::F64,
+            BuiltinTypeId::Char,
+            BuiltinTypeId::Uuid,
+            BuiltinTypeId::Hash,
+            BuiltinTypeId::DateTime,
+        ];
+        for builtin in parse_types {
+            let t = Type::builtin(builtin);
+            ts.add_overload(
+                "prim_parse",
+                Scheme::new(
+                    vec![],
+                    vec![],
+                    Type::fun(string_ty.clone(), Type::option(t)),
+                ),
+            );
+        }
+    }
+
     // Collection intrinsics used by the standard type class instances.
     //
     // These are all `prim_` because they are the host-provided “bottom layer”.
@@ -807,15 +839,6 @@ pub(super) fn inject_standard_prelude(
     ts.add_value(
         "||",
         scheme!(Type::fun(&bool_ty, Type::fun(&bool_ty, &bool_ty))),
-    );
-
-    // Primitive conversions
-    ts.add_value(
-        "string_to_hash",
-        scheme!(Type::fun(
-            Type::builtin(BuiltinTypeId::String),
-            Type::builtin(BuiltinTypeId::Hash),
-        )),
     );
 
     inject_string_builtin_schemes(ts);

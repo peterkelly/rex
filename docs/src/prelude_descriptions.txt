@@ -84,6 +84,7 @@ fn:min	min values	Returns the least element in `values` according to its orderin
 fn:negate	negate value	Returns the additive inverse of `value`.
 fn:one	one	Returns the multiplicative identity for the inferred result type.
 fn:or_else	or_else fallback value	Returns `value` when it is non-empty, present, or successful; otherwise applies `fallback` to `value`.
+fn:parse	parse input	Attempts to convert `input` to the result type selected by context, returning `Some value` on success or `None` for malformed or out-of-range input.
 fn:show	show value	Renders `value` as a human-readable string. Lists, options, and results require their contained types to be renderable.
 fn:slice	slice start end list	Returns elements in the half-open range `start..end` from `list`; raises an error for out-of-range bounds or when `end < start`.
 fn:string_contains	string_contains needle haystack	Returns whether `haystack` contains `needle` as a substring.
@@ -96,7 +97,6 @@ fn:string_slice	string_slice start end input	Returns the half-open Unicode scala
 fn:string_split	string_split separator input	Splits `input` at each non-overlapping occurrence of `separator`.
 fn:string_starts_with	string_starts_with prefix input	Returns whether `input` starts with `prefix`.
 fn:string_to_chars	string_to_chars input	Returns the Unicode scalar values in `input` as a character list.
-fn:string_to_hash	string_to_hash input	Parses `input` as a hexadecimal BLAKE3 hash; raises an error when `input` is invalid.
 fn:string_to_lower	string_to_lower input	Converts `input` using the Unicode lowercase mapping.
 fn:string_to_upper	string_to_upper input	Converts `input` using the Unicode uppercase mapping.
 fn:string_to_utf8	string_to_utf8 input	Encodes `input` as its UTF-8 byte sequence.

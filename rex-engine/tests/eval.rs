@@ -96,10 +96,10 @@ async fn compile_program_returns_evaluator() {
 }
 
 #[tokio::test]
-async fn eval_hash_show_and_string_conversion() {
+async fn eval_hash_show_and_parse() {
     let expected = blake3::hash(b"rex hash conversion");
     let hex = expected.to_hex().to_string();
-    let source = format!(r#"let value = string_to_hash "{hex}" in (value, show value)"#);
+    let source = format!(r#"let value: Hash = unwrap (parse "{hex}") in (value, show value)"#);
     let expr = parse(&source);
     let value = eval_expr(Builder::with_prelude(()).unwrap(), expr.as_ref())
         .await
@@ -111,14 +111,13 @@ async fn eval_hash_show_and_string_conversion() {
     assert_eq!(values[0].to_rust::<blake3::Hash>().unwrap(), expected);
     assert_eq!(values[1].to_rust::<String>().unwrap(), hex);
 
-    let invalid = parse(r#"string_to_hash "not-a-hash""#);
-    match eval_expr(Builder::with_prelude(()).unwrap(), invalid.as_ref()).await {
-        Err(EngineError::Custom(message)) => {
-            assert!(message.starts_with("invalid hash string:"), "{message}");
-        }
-        Err(other) => panic!("expected custom error, got {other:?}"),
-        Ok(_) => panic!("expected invalid hash to fail"),
-    }
+    let invalid = parse(r#"let value: Option Hash = parse "not-a-hash" in value"#);
+    let value = eval_expr(Builder::with_prelude(()).unwrap(), invalid.as_ref())
+        .await
+        .unwrap();
+    assert!(
+        matches!(value, Value::Adt(ref tag, ref args) if tag.as_ref() == "None" && args.is_empty())
+    );
 }
 
 #[tokio::test]

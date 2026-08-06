@@ -1,10 +1,170 @@
 mod common;
 
-use rex::typesystem::{BuiltinTypeId, Type};
+use rex::{
+    ast::Symbol,
+    engine::{Builder, Value},
+    typesystem::{BuiltinTypeId, Type},
+};
 
 use common::{
     assert_eval_display as assert_eval, assert_eval_error_contains as assert_err_contains,
+    eval_source,
 };
+
+struct ParseCase {
+    typ: BuiltinTypeId,
+    valid: &'static str,
+    expected: Value,
+    invalid: &'static str,
+}
+
+fn supported_parse_cases() -> Vec<ParseCase> {
+    const HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+    const UUID: &str = "12345678-1234-5678-90ab-cdef12345678";
+    const DATETIME: &str = "2024-02-29T12:34:56Z";
+
+    vec![
+        ParseCase {
+            typ: BuiltinTypeId::Bool,
+            valid: "true",
+            expected: Value::Bool(true),
+            invalid: "TRUE",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::Char,
+            valid: "😀",
+            expected: Value::Char('😀'),
+            invalid: "",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::U8,
+            valid: "255",
+            expected: Value::U8(u8::MAX),
+            invalid: "256",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::U16,
+            valid: "65535",
+            expected: Value::U16(u16::MAX),
+            invalid: "65536",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::U32,
+            valid: "4294967295",
+            expected: Value::U32(u32::MAX),
+            invalid: "4294967296",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::U64,
+            valid: "18446744073709551615",
+            expected: Value::U64(u64::MAX),
+            invalid: "18446744073709551616",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::I8,
+            valid: "-128",
+            expected: Value::I8(i8::MIN),
+            invalid: "128",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::I16,
+            valid: "-32768",
+            expected: Value::I16(i16::MIN),
+            invalid: "32768",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::I32,
+            valid: "-2147483648",
+            expected: Value::I32(i32::MIN),
+            invalid: "2147483648",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::I64,
+            valid: "-9223372036854775808",
+            expected: Value::I64(i64::MIN),
+            invalid: "9223372036854775808",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::F32,
+            valid: "3.5",
+            expected: Value::F32(3.5),
+            invalid: "three point five",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::F64,
+            valid: "-2.25e100",
+            expected: Value::F64(-2.25e100),
+            invalid: "negative infinity?",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::Uuid,
+            valid: UUID,
+            expected: Value::Uuid(UUID.parse().unwrap()),
+            invalid: "not-a-uuid",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::Hash,
+            valid: HASH,
+            expected: Value::Hash(blake3::Hash::from_hex(HASH).unwrap()),
+            invalid: "000000000000000000000000000000000000000000000000000000000000000",
+        },
+        ParseCase {
+            typ: BuiltinTypeId::DateTime,
+            valid: DATETIME,
+            expected: Value::DateTime(DATETIME.parse().unwrap()),
+            invalid: "2023-02-29T12:34:56Z",
+        },
+    ]
+}
+
+async fn eval_parse(input: &str, typ: BuiltinTypeId) -> (Value, Type) {
+    let source = format!(
+        "let parsed: Option {} = parse {input:?} in parsed",
+        typ.as_str()
+    );
+    let (_, value, actual_type) = eval_source(Builder::with_prelude(()).unwrap(), &source)
+        .await
+        .unwrap_or_else(|error| panic!("failed to evaluate `{source}`: {error}"));
+    (value, actual_type)
+}
+
+#[tokio::test]
+async fn parse_returns_some_for_every_supported_type() {
+    for case in supported_parse_cases() {
+        let (actual, actual_type) = eval_parse(case.valid, case.typ).await;
+        assert_eq!(actual_type, Type::option(Type::builtin(case.typ)));
+        assert_eq!(
+            actual,
+            Value::Adt(Symbol::intern("Some"), vec![case.expected]),
+            "failed positive Parse case for {}",
+            case.typ.as_str()
+        );
+    }
+}
+
+#[tokio::test]
+async fn parse_returns_none_for_every_supported_type() {
+    for case in supported_parse_cases() {
+        let (actual, actual_type) = eval_parse(case.invalid, case.typ).await;
+        assert_eq!(actual_type, Type::option(Type::builtin(case.typ)));
+        assert_eq!(
+            actual,
+            Value::Adt(Symbol::intern("None"), vec![]),
+            "failed negative Parse case for {}",
+            case.typ.as_str()
+        );
+    }
+}
+
+#[tokio::test]
+async fn parse_char_rejects_multiple_unicode_scalars() {
+    let (actual, actual_type) = eval_parse("é😀", BuiltinTypeId::Char).await;
+    assert_eq!(
+        actual_type,
+        Type::option(Type::builtin(BuiltinTypeId::Char))
+    );
+    assert_eq!(actual, Value::Adt(Symbol::intern("None"), vec![]));
+}
 
 #[tokio::test]
 async fn default_record_dispatch() {
