@@ -6,7 +6,7 @@ use std::{
 use rex_ast::{
     ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause,
     ImportDecl, ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, LetRecBinding, NameRef,
-    Pattern, Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
+    Pattern, Scope, Symbol, TypeConstraint, TypeDecl, TypeDeclKind, TypeExpr, TypeVariant, Var,
 };
 use rex_ast::{Position, Span, Spanned};
 
@@ -258,15 +258,21 @@ impl AstBuilder {
                     .map(|name| Symbol::intern(&name))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let variants = child_rules(node, RexRule::TypeVariant)
-            .map(|variant| self.type_variant(variant))
-            .collect::<Result<Vec<_>, _>>()?;
+        let kind = if let Some(record) = first_rule(node, RexRule::TypeRecord) {
+            TypeDeclKind::Alias(self.type_record(record)?)
+        } else {
+            TypeDeclKind::Adt(
+                child_rules(node, RexRule::TypeVariant)
+                    .map(|variant| self.type_variant(variant))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        };
         Ok(TypeDecl {
             span: node.span,
             is_pub,
             name,
             params,
-            variants,
+            kind,
         })
     }
 

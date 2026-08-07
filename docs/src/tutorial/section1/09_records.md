@@ -18,12 +18,21 @@ let p: { x: i32, y: i32 } = { x = 1, y = 2 } in
   p
 ```
 
+Give a record shape a reusable name with a transparent alias. The alias does not introduce a
+constructor; its values are still ordinary records:
+
+```rex,interactive
+type Point = { x: i32, y: i32 };
+
+let p: Point = { x = 1, y = 2 } in p
+```
+
 ## Projection
 
 ```rex,interactive
-type Point = Point { x: i32, y: i32 };
+type Point = { x: i32, y: i32 };
 
-let p: Point = Point { x = 1, y = 2 } in p.x
+let p: Point = { x = 1, y = 2 } in p.x
 ```
 
 Projection is accepted when the field is *definitely available* on the type (see [Specification](../../SPEC.md)).
@@ -34,18 +43,18 @@ Projection is accepted when the field is *definitely available* on the type (see
 ## Update
 
 ```rex,interactive
-type Point = Point { x: i32, y: i32 };
+type Point = { x: i32, y: i32 };
 
-let p: Point = Point { x = 1, y = 2 } in
+let p: Point = { x = 1, y = 2 } in
   { p with { x = p.x + 10 } }
 ```
 
 Updates can set multiple fields at once:
 
 ```rex,interactive
-type Point = Point { x: i32, y: i32 };
+type Point = { x: i32, y: i32 };
 
-let p: Point = Point { x = 1, y = 2 } in
+let p: Point = { x = 1, y = 2 } in
   { p with { x = 100, y = 200 } }
 ```
 

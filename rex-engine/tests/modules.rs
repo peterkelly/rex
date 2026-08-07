@@ -729,6 +729,37 @@ async fn imported_class_names_in_instance_headers_are_rewritten() {
 }
 
 #[tokio::test]
+async fn imported_named_record_aliases_remain_transparent() {
+    let dir = temp_dir("imported_named_record_aliases_remain_transparent");
+    let dep = dir.join("dep.rex");
+    let main = dir.join("main.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Person = { name: String, age: i32 };
+        pub fn rename person: Person -> name: String -> Person =
+            { person with { name = name } };
+        "#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D;
+
+        let person: D.Person = { name = "Ada", age = 36 } in
+          (D.rename person "Grace").name
+        "#,
+    );
+
+    let (value, ty) = eval_module_via_fs(builder_with_prelude(), &main)
+        .await
+        .unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
+    assert_eq!(value, Value::String("Grace".into()));
+}
+
+#[tokio::test]
 async fn module_import_selected_clause_can_import_class_exports() {
     let dir = temp_dir("module_import_selected_clause_can_import_class_exports");
     let dep = dir.join("dep.rex");

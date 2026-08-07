@@ -1742,6 +1742,16 @@ fn project_pointer(
                 value: "tuple".into(),
             });
     }
+    if scope.type_name(pointer)? == "dict" {
+        return scope
+            .root_as_dict(pointer)?
+            .get(field.as_ref())
+            .copied()
+            .ok_or_else(|| EngineError::UnknownField {
+                field: field.clone(),
+                value: "record".into(),
+            });
+    }
     if scope.type_name(pointer)? != "adt" {
         return Err(EngineError::UnknownField {
             field: field.clone(),

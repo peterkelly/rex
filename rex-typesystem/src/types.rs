@@ -1008,6 +1008,35 @@ pub struct AdtParam {
     pub var: TypeVar,
 }
 
+/// A transparent type alias.
+///
+/// Alias bodies are stored using the alias parameters' type variables and are
+/// expanded before inference/unification. `typ` is temporarily `None` while a
+/// batch of mutually visible type declaration headers is being registered.
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) struct TypeAlias {
+    pub name: Symbol,
+    pub params: Vec<AdtParam>,
+    pub typ: Option<Type>,
+}
+
+impl TypeAlias {
+    pub(crate) fn new(name: &Symbol, param_names: &[Symbol], supply: &mut TypeVarSupply) -> Self {
+        let params = param_names
+            .iter()
+            .map(|p| AdtParam {
+                name: p.clone(),
+                var: supply.fresh(Some(p.clone())),
+            })
+            .collect();
+        Self {
+            name: name.clone(),
+            params,
+            typ: None,
+        }
+    }
+}
+
 /// A single ADT variant with zero or more constructor arguments.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct AdtVariant {

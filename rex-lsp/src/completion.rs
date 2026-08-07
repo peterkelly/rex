@@ -527,7 +527,11 @@ pub(crate) fn collect_type_names(compilation_unit: &CompilationUnit) -> BTreeSet
 pub(crate) fn collect_constructors(compilation_unit: &CompilationUnit) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     for decl in &compilation_unit.decls {
-        if let Decl::Type(TypeDecl { variants, .. }) = decl {
+        if let Decl::Type(TypeDecl {
+            kind: TypeDeclKind::Adt(variants),
+            ..
+        }) = decl
+        {
             for variant in variants {
                 names.insert(variant.name.to_string());
             }
@@ -593,7 +597,12 @@ pub(crate) fn type_fields_map(
 ) -> HashMap<String, BTreeSet<String>> {
     let mut map = HashMap::new();
     for decl in &compilation_unit.decls {
-        if let Decl::Type(TypeDecl { name, variants, .. }) = decl {
+        if let Decl::Type(TypeDecl {
+            name,
+            kind: TypeDeclKind::Adt(variants),
+            ..
+        }) = decl
+        {
             let mut fields = BTreeSet::new();
             for variant in variants {
                 for arg in &variant.args {

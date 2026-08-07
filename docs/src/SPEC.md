@@ -259,6 +259,7 @@ semicolons:
 ```rex
 import math.core as Math;
 type Box a = Box a;
+type Point = { x: i32, y: i32 };
 fn inc x: i32 -> i32 = x + 1;
 declare fn host_value : i32;
 ```
@@ -293,6 +294,31 @@ Rules:
   parameters with `<...>` after the value name.
 - `type` and `class` declarations bind type parameters with whitespace after the declaration head.
 - `instance` declarations bind type parameters with `<...>` immediately after `instance`.
+
+## Named Record Aliases
+
+### Syntax
+
+A `type` declaration whose right-hand side begins with a record type declares a transparent record
+alias rather than an ADT:
+
+```rex
+type Point = { x: i32, y: i32 };
+type Tagged a = { tag: String, value: a };
+```
+
+### Typing and Runtime Representation
+
+- Applying a record alias is equivalent to writing its expanded record type. Alias names do not
+  make otherwise identical record shapes distinct.
+- Alias parameters are substituted structurally, so `Tagged i32` expands to
+  `{ tag: String, value: i32 }`.
+- Aliases may refer to other aliases and ADTs. Cyclic aliases are rejected.
+- A record alias introduces no value-level constructor and no runtime tag. Its values are ordinary
+  record/dict values.
+- A record literal checked against a record type receives the expected type of each field. This
+  permits heterogeneous and nested literals such as
+  `let user: { name: String, age: i32 } = { name = "Ada", age = 36 } in user`.
 
 ## Top-Level `fn` Recursion
 

@@ -1351,6 +1351,54 @@ fn record_update_plain_record_type() {
 }
 
 #[test]
+fn plain_record_projection_infers() {
+    let program = parse_program(
+        r#"
+            let p: { x: i32, label: String } = { x = 1, label = "one" } in
+              p.label
+            "#,
+    );
+    let mut ts = standard_type_system().unwrap();
+    let (_preds, typ) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
+    assert_eq!(typ.to_string(), "String");
+    let (_typed, _preds, typ) =
+        infer_typed(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
+    assert_eq!(typ.to_string(), "String");
+}
+
+#[test]
+fn named_generic_record_alias_expands_structurally() {
+    let program = parse_program(
+        r#"
+            type Pair a b = { first: a, second: b };
+            let pair: Pair i32 String = { first = 1, second = "one" } in
+              pair.second
+            "#,
+    );
+    let mut ts = standard_type_system().unwrap();
+    ts.register_decls(&program.decls).unwrap();
+    let (_preds, typ) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
+    assert_eq!(typ.to_string(), "String");
+    let (_typed, _preds, typ) =
+        infer_typed(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
+    assert_eq!(typ.to_string(), "String");
+}
+
+#[test]
+fn cyclic_record_aliases_are_rejected() {
+    let program = parse_program(
+        r#"
+            type A = { b: B };
+            type B = { a: A };
+            0
+            "#,
+    );
+    let mut ts = standard_type_system().unwrap();
+    let err = strip_span(ts.register_decls(&program.decls).unwrap_err());
+    assert!(matches!(err, TypeError::CyclicTypeAlias(_)));
+}
+
+#[test]
 fn infer_typed_hole_expr_is_hole_kind() {
     let expr = parse_expr("?");
     let mut ts = standard_type_system().unwrap();

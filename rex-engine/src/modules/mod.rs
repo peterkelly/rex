@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rex_ast::{
     CompilationUnit, Decl, DeclareFnDecl, ImportClause, ImportDecl, ImportPath, NameRef, Pattern,
-    Span, Symbol,
+    Span, Symbol, TypeDeclKind,
 };
 use rex_parser::parse as parse_rex;
 
@@ -247,8 +247,10 @@ pub fn decl_value_names_from_declarations(decls: &Declarations) -> BTreeSet<Symb
         out.insert(df.name.name.clone());
     }
     for td in &decls.types {
-        for variant in &td.variants {
-            out.insert(variant.name.clone());
+        if let TypeDeclKind::Adt(variants) = &td.kind {
+            for variant in variants {
+                out.insert(variant.name.clone());
+            }
         }
     }
     out
@@ -395,17 +397,19 @@ fn exports_from_declarations(
                     ),
                 );
             }
-            for variant in &td.variants {
-                if let Some(internal) = value_renames.get(&variant.name) {
-                    exports.insert_value(
-                        variant.name.clone(),
-                        CanonicalSymbol::from_symbol(
-                            module_key,
-                            SymbolKind::Value,
+            if let TypeDeclKind::Adt(variants) = &td.kind {
+                for variant in variants {
+                    if let Some(internal) = value_renames.get(&variant.name) {
+                        exports.insert_value(
                             variant.name.clone(),
-                            internal.clone(),
-                        ),
-                    );
+                            CanonicalSymbol::from_symbol(
+                                module_key,
+                                SymbolKind::Value,
+                                variant.name.clone(),
+                                internal.clone(),
+                            ),
+                        );
+                    }
                 }
             }
         }

@@ -1122,7 +1122,14 @@ where
 
     let result: Result<(), EngineError> = (|| {
         for (decl, slot) in decls.iter().zip(slots.iter()) {
-            let mut lam_body = decl.body.clone();
+            let mut lam_body = match decl.body.as_ref() {
+                Expr::Dict(..) | Expr::RecordUpdate(..) => Arc::new(Expr::Ann(
+                    *decl.body.span(),
+                    decl.body.clone(),
+                    decl.ret.clone(),
+                )),
+                _ => decl.body.clone(),
+            };
             for (idx, (param, ann)) in decl.params.iter().enumerate().rev() {
                 let lam_constraints = if idx == 0 {
                     decl.constraints.clone()

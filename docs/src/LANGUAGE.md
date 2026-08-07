@@ -359,6 +359,25 @@ type User = User { name: String, age: i32 };
 let u: User = User { name = "Ada", age = 36 } in u
 ```
 
+#### Named Record Aliases
+
+Use `type Name = { ... };` to give a structural record type a reusable name without introducing an
+ADT constructor:
+
+```rex,interactive
+type User = { name: String, age: i32 };
+
+let u: User = { name = "Ada", age = 36 } in u.name
+```
+
+Aliases may have type parameters and remain transparent:
+
+```rex,interactive
+type Tagged a = { tag: String, value: a };
+
+let item: Tagged i32 = { tag = "answer", value = 42 } in item.value
+```
+
 ### Type Annotations
 
 Annotate let bindings, lambda parameters, and function declarations:
@@ -390,6 +409,7 @@ Rex supports:
 Projection and update are valid when the field is *definitely available* on the base:
 
 - on plain record types `{ field: Ty, ... }`
+- on named record aliases, which expand to plain record types
 - on single-variant ADTs whose payload is a record
 - on multi-variant ADTs only after the constructor has been proven (typically by `match`)
 

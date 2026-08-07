@@ -21,6 +21,8 @@ pub enum TypeError {
     DuplicateValue(Symbol),
     #[error("duplicate type definition `{0}`")]
     DuplicateType(Symbol),
+    #[error("cyclic type alias involving `{0}`")]
+    CyclicTypeAlias(Symbol),
     #[error("duplicate class definition `{0}`")]
     DuplicateClass(Symbol),
     #[error("class `{class}` must have at least one type parameter (got {got})")]

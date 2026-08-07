@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rex_ast::{
     ClassDecl, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, InstanceDecl, Span,
-    TypeDecl, TypeVariant,
+    TypeDecl, TypeDeclKind, TypeVariant,
 };
 use rex_typesystem::{
     types::{AdtDecl, RexType, Scheme, Type},
@@ -567,13 +567,14 @@ fn type_decl_from_adt(adt: &AdtDecl) -> TypeDecl {
         is_pub: true,
         name: adt.name.clone(),
         params: adt.params.iter().map(|p| p.name.clone()).collect(),
-        variants: adt
-            .variants
-            .iter()
-            .map(|variant| TypeVariant {
-                name: variant.name.clone(),
-                args: variant.args.iter().map(type_expr_from_type).collect(),
-            })
-            .collect(),
+        kind: TypeDeclKind::Adt(
+            adt.variants
+                .iter()
+                .map(|variant| TypeVariant {
+                    name: variant.name.clone(),
+                    args: variant.args.iter().map(type_expr_from_type).collect(),
+                })
+                .collect(),
+        ),
     }
 }

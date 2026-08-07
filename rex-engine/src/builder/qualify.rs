@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use rex_ast::{
     ClassDecl, ClassMethodSig, CompilationUnit, DeclareFnDecl, Expr, FnDecl, InstanceDecl,
-    InstanceMethodImpl, NameRef, Pattern, Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant,
-    Var,
+    InstanceMethodImpl, NameRef, Pattern, Symbol, TypeConstraint, TypeDecl, TypeDeclKind, TypeExpr,
+    TypeVariant, Var,
 };
 
 use crate::modules::{CompilationPackage, Declarations, collect_pattern_bindings, types::qualify};
@@ -80,27 +80,33 @@ fn qualify_type_decl(
         .get(&td.name)
         .cloned()
         .unwrap_or_else(|| td.name.clone());
-    let variants = td
-        .variants
-        .iter()
-        .map(|v| TypeVariant {
-            name: value_renames
-                .get(&v.name)
-                .cloned()
-                .unwrap_or_else(|| v.name.clone()),
-            args: v
-                .args
+    let kind = match &td.kind {
+        TypeDeclKind::Alias(alias) => {
+            TypeDeclKind::Alias(rename_type_expr(alias, type_renames, class_renames))
+        }
+        TypeDeclKind::Adt(variants) => TypeDeclKind::Adt(
+            variants
                 .iter()
-                .map(|t| rename_type_expr(t, type_renames, class_renames))
+                .map(|v| TypeVariant {
+                    name: value_renames
+                        .get(&v.name)
+                        .cloned()
+                        .unwrap_or_else(|| v.name.clone()),
+                    args: v
+                        .args
+                        .iter()
+                        .map(|t| rename_type_expr(t, type_renames, class_renames))
+                        .collect(),
+                })
                 .collect(),
-        })
-        .collect();
+        ),
+    };
     TypeDecl {
         span: td.span,
         is_pub: td.is_pub,
         name,
         params: td.params.clone(),
-        variants,
+        kind,
     }
 }
 
@@ -681,8 +687,10 @@ pub(crate) fn collect_local_renames_from_declarations(
     }
     for td in &decls.types {
         types.insert(td.name.clone(), qualify(prefix, &td.name));
-        for variant in &td.variants {
-            values.insert(variant.name.clone(), qualify(prefix, &variant.name));
+        if let TypeDeclKind::Adt(variants) = &td.kind {
+            for variant in variants {
+                values.insert(variant.name.clone(), qualify(prefix, &variant.name));
+            }
         }
     }
     for cd in &decls.classes {

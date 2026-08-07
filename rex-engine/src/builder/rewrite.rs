@@ -22,8 +22,8 @@ use crate::{
 use futures::future::BoxFuture;
 use rex_ast::{
     ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl,
-    InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Symbol, TypeConstraint, TypeDecl, TypeExpr,
-    TypeVariant, Var,
+    InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Symbol, TypeConstraint, TypeDecl,
+    TypeDeclKind, TypeExpr, TypeVariant, Var,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -518,18 +518,26 @@ fn validate_import_uses_decls_and_body(
                     )?;
                 }
             }
-            Decl::Type(td) => {
-                for v in &td.variants {
-                    for t in &v.args {
-                        validate_import_uses_type_expr(
-                            t,
-                            &BTreeSet::new(),
-                            aliases,
-                            shadowed_values,
-                        )?;
+            Decl::Type(td) => match &td.kind {
+                TypeDeclKind::Alias(alias) => validate_import_uses_type_expr(
+                    alias,
+                    &BTreeSet::new(),
+                    aliases,
+                    shadowed_values,
+                )?,
+                TypeDeclKind::Adt(variants) => {
+                    for v in variants {
+                        for t in &v.args {
+                            validate_import_uses_type_expr(
+                                t,
+                                &BTreeSet::new(),
+                                aliases,
+                                shadowed_values,
+                            )?;
+                        }
                     }
                 }
-            }
+            },
             Decl::Class(cd) => {
                 for c in &cd.supers {
                     validate_import_uses_class_name(
@@ -645,9 +653,21 @@ fn validate_import_uses_declarations_and_body(
         }
     }
     for td in &decls.types {
-        for v in &td.variants {
-            for t in &v.args {
-                validate_import_uses_type_expr(t, &BTreeSet::new(), aliases, shadowed_values)?;
+        match &td.kind {
+            TypeDeclKind::Alias(alias) => {
+                validate_import_uses_type_expr(alias, &BTreeSet::new(), aliases, shadowed_values)?;
+            }
+            TypeDeclKind::Adt(variants) => {
+                for v in variants {
+                    for t in &v.args {
+                        validate_import_uses_type_expr(
+                            t,
+                            &BTreeSet::new(),
+                            aliases,
+                            shadowed_values,
+                        )?;
+                    }
+                }
             }
         }
     }
@@ -944,27 +964,40 @@ fn rewrite_import_uses_decls_and_body(
                 is_pub: td.is_pub,
                 name: td.name.clone(),
                 params: td.params.clone(),
-                variants: td
-                    .variants
-                    .iter()
-                    .map(|v| TypeVariant {
-                        name: v.name.clone(),
-                        args: v
-                            .args
+                kind: match &td.kind {
+                    TypeDeclKind::Alias(alias) => {
+                        TypeDeclKind::Alias(rewrite_import_uses_type_expr(
+                            alias,
+                            &decl_bound,
+                            aliases,
+                            imported_types,
+                            shadowed_types,
+                            shadowed_values,
+                        ))
+                    }
+                    TypeDeclKind::Adt(variants) => TypeDeclKind::Adt(
+                        variants
                             .iter()
-                            .map(|t| {
-                                rewrite_import_uses_type_expr(
-                                    t,
-                                    &decl_bound,
-                                    aliases,
-                                    imported_types,
-                                    shadowed_types,
-                                    shadowed_values,
-                                )
+                            .map(|v| TypeVariant {
+                                name: v.name.clone(),
+                                args: v
+                                    .args
+                                    .iter()
+                                    .map(|t| {
+                                        rewrite_import_uses_type_expr(
+                                            t,
+                                            &decl_bound,
+                                            aliases,
+                                            imported_types,
+                                            shadowed_types,
+                                            shadowed_values,
+                                        )
+                                    })
+                                    .collect(),
                             })
                             .collect(),
-                    })
-                    .collect(),
+                    ),
+                },
             }),
             Decl::Class(cd) => Decl::Class(ClassDecl {
                 span: cd.span,

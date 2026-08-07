@@ -24,7 +24,7 @@ ImportAlias        <- AS IDENT
 
 # Type declarations
 
-TypeDecl           <- TYPE cut(IDENT TypeParam* ASSIGN TypeVariant (PIPE TypeVariant)* label("expected `;` after type declaration", SEMI_COLON))
+TypeDecl           <- TYPE cut(IDENT TypeParam* ASSIGN (TypeRecord / TypeVariant (PIPE TypeVariant)*) label("expected `;` after type declaration", SEMI_COLON))
 GenericParams      <- LT IDENT (COMMA IDENT)* GT
 TypeParam          <- IDENT
 TypeVariant        <- IDENT TypeAtom*

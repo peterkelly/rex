@@ -403,12 +403,20 @@ pub struct TypeVariant {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub enum TypeDeclKind {
+    /// A transparent type alias such as `type Point = { x: i32, y: i32 };`.
+    Alias(TypeExpr),
+    /// An algebraic data type defined by one or more variants.
+    Adt(Vec<TypeVariant>),
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TypeDecl {
     pub span: Span,
     pub is_pub: bool,
     pub name: Symbol,
     pub params: Vec<Symbol>,
-    pub variants: Vec<TypeVariant>,
+    pub kind: TypeDeclKind,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]

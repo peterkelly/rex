@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use rex_ast::{
-    Decl, Expr, ImportClause, NameRef, Pattern, Scope, Span, Symbol, TypeExpr, Var, app,
-    assert_expr_eq, b, c, d, f, l, s, tup, u, v,
+    Decl, Expr, ImportClause, NameRef, Pattern, Scope, Span, Symbol, TypeDeclKind, TypeExpr, Var,
+    app, assert_expr_eq, b, c, d, f, l, s, tup, u, v,
 };
 use rex_parser::error::ParseError;
 use rex_parser::{MAX_AST_DEPTH, parse as parse_rex, span};
@@ -430,13 +430,16 @@ fn test_parse_type_decl() {
                     Symbol::intern("c")
                 ]
             );
-            assert_eq!(decl.variants.len(), 3);
-            assert_eq!(decl.variants[0].name, Symbol::intern("MyCtor1"));
-            assert!(decl.variants[0].args.is_empty());
-            assert_eq!(decl.variants[1].name, Symbol::intern("MyCtor2"));
-            assert_eq!(decl.variants[1].args.len(), 2);
-            assert_eq!(decl.variants[2].name, Symbol::intern("MyCtor3"));
-            match &decl.variants[2].args[0] {
+            let TypeDeclKind::Adt(variants) = &decl.kind else {
+                panic!("expected ADT declaration");
+            };
+            assert_eq!(variants.len(), 3);
+            assert_eq!(variants[0].name, Symbol::intern("MyCtor1"));
+            assert!(variants[0].args.is_empty());
+            assert_eq!(variants[1].name, Symbol::intern("MyCtor2"));
+            assert_eq!(variants[1].args.len(), 2);
+            assert_eq!(variants[2].name, Symbol::intern("MyCtor3"));
+            match &variants[2].args[0] {
                 TypeExpr::Record(_, fields) => {
                     assert_eq!(fields.len(), 1);
                     assert_eq!(fields[0].0, Symbol::intern("field1"));
@@ -451,6 +454,21 @@ fn test_parse_type_decl() {
         other => panic!("expected type decl, got {other:?}"),
     }
     assert_expr_eq!(program.body.unwrap(), u!(span!(3:5 - 3:7); 42));
+}
+
+#[test]
+fn test_parse_named_record_alias() {
+    let program = parse_rex("type Point = { x: i32, y: i32 }; 42").unwrap();
+    let Decl::Type(decl) = &program.decls[0] else {
+        panic!("expected type declaration");
+    };
+    assert_eq!(decl.name, Symbol::intern("Point"));
+    let TypeDeclKind::Alias(TypeExpr::Record(_, fields)) = &decl.kind else {
+        panic!("expected record alias");
+    };
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].0, Symbol::intern("x"));
+    assert_eq!(fields[1].0, Symbol::intern("y"));
 }
 
 #[test]
@@ -477,9 +495,12 @@ fn test_parse_type_decl_semicolon_preserves_ident_expr_boundary() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Type(decl) => {
-            assert_eq!(decl.variants.len(), 1);
-            assert_eq!(decl.variants[0].name, Symbol::intern("MyCtor"));
-            assert!(decl.variants[0].args.is_empty());
+            let TypeDeclKind::Adt(variants) = &decl.kind else {
+                panic!("expected ADT declaration");
+            };
+            assert_eq!(variants.len(), 1);
+            assert_eq!(variants[0].name, Symbol::intern("MyCtor"));
+            assert!(variants[0].args.is_empty());
         }
         other => panic!("expected type decl, got {other:?}"),
     }

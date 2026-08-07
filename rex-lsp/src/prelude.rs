@@ -13,7 +13,8 @@ pub(crate) use lsp_types::{
     TextEdit, Url, WorkspaceEdit,
 };
 pub(crate) use rex_ast::{
-    CompilationUnit, Decl, Expr, ImportDecl, ImportPath, Pattern, Symbol, TypeDecl, TypeExpr,
+    CompilationUnit, Decl, Expr, ImportDecl, ImportPath, Pattern, Symbol, TypeDecl, TypeDeclKind,
+    TypeExpr,
 };
 pub(crate) use rex_ast::{Position as RexPosition, Span, Spanned};
 pub(crate) use rex_engine::{

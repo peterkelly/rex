@@ -469,8 +469,13 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                         tok(T::Ident),
                         rep(rule(R::TypeParam)),
                         tok(T::Assign),
-                        rule(R::TypeVariant),
-                        rep(seq([tok(T::Pipe), rule(R::TypeVariant)])),
+                        choice([
+                            rule(R::TypeRecord),
+                            seq([
+                                rule(R::TypeVariant),
+                                rep(seq([tok(T::Pipe), rule(R::TypeVariant)])),
+                            ]),
+                        ]),
                         label("expected `;` after type declaration", tok(T::SemiColon)),
                     ])),
                 ]),

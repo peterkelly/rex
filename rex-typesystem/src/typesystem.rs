@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use rex_ast::{
     ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl,
-    Scope, Span, Symbol, TypeConstraint, TypeDecl, TypeExpr,
+    Scope, Span, Symbol, TypeConstraint, TypeDecl, TypeDeclKind, TypeExpr,
 };
 
 pub use crate::unification::{Subst, compose_subst, unify};
@@ -14,8 +14,8 @@ use crate::{
     error::TypeError,
     inference::infer_typed,
     types::{
-        AdtDecl, BuiltinTypeId, ClassEnv, Instance, Predicate, Scheme, Type, TypeEnv, TypeKind,
-        TypeVar, TypeVarId, TypedExpr, Types,
+        AdtDecl, BuiltinTypeId, ClassEnv, Instance, Predicate, Scheme, Type, TypeAlias, TypeEnv,
+        TypeKind, TypeVar, TypeVarId, TypedExpr, Types,
     },
     unification::scheme_compatible,
 };
@@ -294,6 +294,7 @@ pub struct TypeSystem {
     pub env: TypeEnv,
     pub classes: ClassEnv,
     pub adts: BTreeMap<Symbol, AdtDecl>,
+    pub(crate) aliases: BTreeMap<Symbol, TypeAlias>,
     pub class_info: BTreeMap<Symbol, ClassInfo>,
     pub class_methods: BTreeMap<Symbol, ClassMethodInfo>,
     /// Names introduced by `declare fn` (forward declarations).
@@ -351,6 +352,7 @@ impl TypeSystem {
             env: TypeEnv::new(),
             classes: ClassEnv::new(),
             adts: BTreeMap::new(),
+            aliases: BTreeMap::new(),
             class_info: BTreeMap::new(),
             class_methods: BTreeMap::new(),
             declared_values: BTreeSet::new(),
@@ -488,6 +490,7 @@ impl TypeSystem {
                 vars.insert(param, param_tv.clone());
                 let sup_ty = type_from_annotation_expr_vars(
                     &self.adts,
+                    &self.aliases,
                     &sup.typ,
                     &mut vars,
                     &mut self.supply,
@@ -522,8 +525,13 @@ impl TypeSystem {
                 }
                 extend_type_params(&mut vars, type_params, &mut self.supply)?;
 
-                let ty =
-                    type_from_annotation_expr_vars(&self.adts, typ, &mut vars, &mut self.supply)?;
+                let ty = type_from_annotation_expr_vars(
+                    &self.adts,
+                    &self.aliases,
+                    typ,
+                    &mut vars,
+                    &mut self.supply,
+                )?;
 
                 let mut scheme_vars: Vec<TypeVar> = vars.values().cloned().collect();
                 scheme_vars.sort_by_key(|tv| tv.id);
@@ -578,12 +586,14 @@ impl TypeSystem {
             let mut vars = type_vars_from_params(&decl.type_params, &mut self.supply)?;
             let head = type_from_annotation_expr_vars(
                 &self.adts,
+                &self.aliases,
                 &decl.head,
                 &mut vars,
                 &mut self.supply,
             )?;
             let context = predicates_from_constraints(
                 &self.adts,
+                &self.aliases,
                 &decl.context,
                 &mut vars,
                 &mut self.supply,
@@ -643,12 +653,14 @@ impl TypeSystem {
             let mut vars = type_vars_from_params(&decl.type_params, &mut self.supply)?;
             let head = type_from_annotation_expr_vars(
                 &self.adts,
+                &self.aliases,
                 &decl.head,
                 &mut vars,
                 &mut self.supply,
             )?;
             let context = predicates_from_constraints(
                 &self.adts,
+                &self.aliases,
                 &decl.context,
                 &mut vars,
                 &mut self.supply,
@@ -748,12 +760,14 @@ impl TypeSystem {
                     let mut ann_vars = type_vars_from_params(&decl.type_params, &mut self.supply)?;
                     let expected = type_from_annotation_expr_vars(
                         &self.adts,
+                        &self.aliases,
                         &sig,
                         &mut ann_vars,
                         &mut self.supply,
                     )?;
                     let declared_preds = predicates_from_constraints(
                         &self.adts,
+                        &self.aliases,
                         &decl.constraints,
                         &mut ann_vars,
                         &mut self.supply,
@@ -843,7 +857,17 @@ impl TypeSystem {
     pub fn check_fn_decl_bodies(&mut self, infos: &[PreparedFnDecl]) -> Result<(), TypeError> {
         for info in infos {
             let span = info.decl.span;
-            let mut lam_body = info.decl.body.clone();
+            // Feed the declared return type into expression inference. Record
+            // literals need this context to distinguish heterogeneous records
+            // from homogeneous `Dict a` values.
+            let mut lam_body = match info.decl.body.as_ref() {
+                Expr::Dict(..) | Expr::RecordUpdate(..) => Arc::new(Expr::Ann(
+                    *info.decl.body.span(),
+                    info.decl.body.clone(),
+                    info.decl.ret.clone(),
+                )),
+                _ => info.decl.body.clone(),
+            };
             let mut lam_end = lam_body.span().end;
             for (param, ann) in info.decl.params.iter().rev() {
                 let lam_constraints = Vec::new();
@@ -938,10 +962,16 @@ impl TypeSystem {
             }
 
             let mut ann_vars = type_vars_from_params(&decl.type_params, &mut self.supply)?;
-            let expected =
-                type_from_annotation_expr_vars(&self.adts, &sig, &mut ann_vars, &mut self.supply)?;
+            let expected = type_from_annotation_expr_vars(
+                &self.adts,
+                &self.aliases,
+                &sig,
+                &mut ann_vars,
+                &mut self.supply,
+            )?;
             let declared_preds = predicates_from_constraints(
                 &self.adts,
+                &self.aliases,
                 &decl.constraints,
                 &mut ann_vars,
                 &mut self.supply,
@@ -1026,6 +1056,7 @@ impl TypeSystem {
         if let Some(ann) = &method.ann {
             let ann_ty = type_from_annotation_expr_vars(
                 &self.adts,
+                &self.aliases,
                 ann,
                 &mut method_type_vars,
                 &mut self.supply,
@@ -1098,26 +1129,40 @@ impl TypeSystem {
         if BuiltinTypeId::from_symbol(&decl.name).is_some() {
             return Err(TypeError::ReservedTypeName(decl.name.clone()));
         }
-        if self.adts.contains_key(&decl.name) {
+        if self.adts.contains_key(&decl.name) || self.aliases.contains_key(&decl.name) {
             return Err(TypeError::DuplicateType(decl.name.clone()));
         }
-        let adt = AdtDecl::new(&decl.name, &decl.params, &mut self.supply);
-        self.adts.insert(decl.name.clone(), adt);
+        match &decl.kind {
+            TypeDeclKind::Alias(_) => {
+                let alias = TypeAlias::new(&decl.name, &decl.params, &mut self.supply);
+                self.aliases.insert(decl.name.clone(), alias);
+            }
+            TypeDeclKind::Adt(_) => {
+                let adt = AdtDecl::new(&decl.name, &decl.params, &mut self.supply);
+                self.adts.insert(decl.name.clone(), adt);
+            }
+        }
         Ok(())
     }
 
     pub fn adt_from_decl(&mut self, decl: &TypeDecl) -> Result<AdtDecl, TypeError> {
+        let TypeDeclKind::Adt(variants) = &decl.kind else {
+            return Err(TypeError::Internal(format!(
+                "type alias `{}` cannot be converted to an ADT",
+                decl.name
+            )));
+        };
         let mut adt = AdtDecl::new(&decl.name, &decl.params, &mut self.supply);
         let mut param_map: BTreeMap<Symbol, TypeVar> = BTreeMap::new();
         for param in &adt.params {
             param_map.insert(param.name.clone(), param.var.clone());
         }
 
-        for variant in &decl.variants {
+        for variant in variants {
             let mut args = Vec::new();
             for arg in &variant.args {
                 let ty = self.type_from_expr(decl, &param_map, arg)?;
-                args.push(ty);
+                args.push(expand_type_aliases(&self.aliases, &ty)?);
             }
             adt.add_variant(variant.name.clone(), args);
         }
@@ -1137,24 +1182,85 @@ impl TypeSystem {
             result.map_err(|err| err.with_span(&span))?;
         }
 
+        // Resolve every alias body before building ADTs so an ADT can use an
+        // alias declared later in the same mutually visible declaration batch.
+        for decl in decls {
+            if let TypeDeclKind::Alias(alias_expr) = &decl.kind {
+                let alias = self.aliases.get(&decl.name).cloned().ok_or_else(|| {
+                    TypeError::Internal(format!("missing type alias header `{}`", decl.name))
+                })?;
+                let params = alias
+                    .params
+                    .iter()
+                    .map(|param| (param.name.clone(), param.var.clone()))
+                    .collect();
+                let typ = self.type_from_expr(decl, &params, alias_expr)?;
+                self.aliases
+                    .get_mut(&decl.name)
+                    .ok_or_else(|| {
+                        TypeError::Internal(format!("missing type alias header `{}`", decl.name))
+                    })?
+                    .typ = Some(typ);
+            }
+        }
+
+        for decl in decls {
+            if matches!(&decl.kind, TypeDeclKind::Alias(_)) {
+                let alias_ty = Type::con(&decl.name, decl.params.len());
+                let mut applied = alias_ty;
+                let alias = self.aliases.get(&decl.name).ok_or_else(|| {
+                    TypeError::Internal(format!("missing type alias `{}`", decl.name))
+                })?;
+                for param in &alias.params {
+                    applied = Type::app(applied, Type::var(param.var.clone()));
+                }
+                expand_type_aliases(&self.aliases, &applied)
+                    .map_err(|err| err.with_span(&decl.span))?;
+            }
+        }
+
         let mut adts = Vec::with_capacity(decls.len());
         for decl in decls {
-            let adt = self.adt_from_decl(decl)?;
-            self.register_adt(&adt);
-            adts.push(adt);
+            if matches!(&decl.kind, TypeDeclKind::Adt(_)) {
+                let adt = self.adt_from_decl(decl)?;
+                self.register_adt(&adt);
+                adts.push(adt);
+            }
         }
         Ok(adts)
     }
 
     pub fn register_type_decl(&mut self, decl: &TypeDecl) -> Result<(), TypeError> {
-        if BuiltinTypeId::from_symbol(&decl.name).is_some() {
-            return Err(TypeError::ReservedTypeName(decl.name.clone()));
+        self.register_type_decl_header(decl)?;
+        match &decl.kind {
+            TypeDeclKind::Alias(alias_expr) => {
+                let alias = self.aliases.get(&decl.name).cloned().ok_or_else(|| {
+                    TypeError::Internal(format!("missing type alias header `{}`", decl.name))
+                })?;
+                let params = alias
+                    .params
+                    .iter()
+                    .map(|param| (param.name.clone(), param.var.clone()))
+                    .collect();
+                let typ = self.type_from_expr(decl, &params, alias_expr)?;
+                self.aliases
+                    .get_mut(&decl.name)
+                    .ok_or_else(|| {
+                        TypeError::Internal(format!("missing type alias header `{}`", decl.name))
+                    })?
+                    .typ = Some(typ);
+
+                let mut applied = Type::con(&decl.name, decl.params.len());
+                for param in &alias.params {
+                    applied = Type::app(applied, Type::var(param.var.clone()));
+                }
+                expand_type_aliases(&self.aliases, &applied)?;
+            }
+            TypeDeclKind::Adt(_) => {
+                let adt = self.adt_from_decl(decl)?;
+                self.register_adt(&adt);
+            }
         }
-        if self.adts.contains_key(&decl.name) {
-            return Err(TypeError::DuplicateType(decl.name.clone()));
-        }
-        let adt = self.adt_from_decl(decl)?;
-        self.register_adt(&adt);
         Ok(())
     }
 
@@ -1213,6 +1319,9 @@ impl TypeSystem {
         }
         if let Some(adt) = self.adts.get(name) {
             return Some(adt.params.len());
+        }
+        if let Some(alias) = self.aliases.get(name) {
+            return Some(alias.params.len());
         }
         BuiltinTypeId::from_symbol(name).map(BuiltinTypeId::arity)
     }
@@ -1289,15 +1398,26 @@ impl TypeSystem {
 
 pub(crate) fn type_from_annotation_expr_vars(
     adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
     expr: &TypeExpr,
     vars: &mut BTreeMap<Symbol, TypeVar>,
     _supply: &mut TypeVarSupply,
+) -> Result<Type, TypeError> {
+    let typ = type_from_annotation_expr_vars_raw(adts, aliases, expr, vars)?;
+    expand_type_aliases(aliases, &typ)
+}
+
+fn type_from_annotation_expr_vars_raw(
+    adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
+    expr: &TypeExpr,
+    vars: &mut BTreeMap<Symbol, TypeVar>,
 ) -> Result<Type, TypeError> {
     let span = *expr.span();
     let res = (|| match expr {
         TypeExpr::Name(_, name) => {
             let name = normalize_type_name(&name.to_dotted_symbol());
-            if let Some(arity) = annotation_type_arity(adts, &name) {
+            if let Some(arity) = annotation_type_arity(adts, aliases, &name) {
                 Ok(Type::con(name, arity))
             } else if let Some(tv) = vars.get(&name) {
                 Ok(Type::var(tv.clone()))
@@ -1306,19 +1426,21 @@ pub(crate) fn type_from_annotation_expr_vars(
             }
         }
         TypeExpr::App(_, fun, arg) => {
-            let fty = type_from_annotation_expr_vars(adts, fun, vars, _supply)?;
-            let aty = type_from_annotation_expr_vars(adts, arg, vars, _supply)?;
+            let fty = type_from_annotation_expr_vars_raw(adts, aliases, fun, vars)?;
+            let aty = type_from_annotation_expr_vars_raw(adts, aliases, arg, vars)?;
             Ok(type_app_with_result_syntax(fty, aty))
         }
         TypeExpr::Fun(_, arg, ret) => {
-            let arg_ty = type_from_annotation_expr_vars(adts, arg, vars, _supply)?;
-            let ret_ty = type_from_annotation_expr_vars(adts, ret, vars, _supply)?;
+            let arg_ty = type_from_annotation_expr_vars_raw(adts, aliases, arg, vars)?;
+            let ret_ty = type_from_annotation_expr_vars_raw(adts, aliases, ret, vars)?;
             Ok(Type::fun(arg_ty, ret_ty))
         }
         TypeExpr::Tuple(_, elems) => {
             let mut out = Vec::new();
             for elem in elems {
-                out.push(type_from_annotation_expr_vars(adts, elem, vars, _supply)?);
+                out.push(type_from_annotation_expr_vars_raw(
+                    adts, aliases, elem, vars,
+                )?);
             }
             Ok(Type::tuple(out))
         }
@@ -1327,7 +1449,7 @@ pub(crate) fn type_from_annotation_expr_vars(
             for (name, ty) in fields {
                 out.push((
                     name.clone(),
-                    type_from_annotation_expr_vars(adts, ty, vars, _supply)?,
+                    type_from_annotation_expr_vars_raw(adts, aliases, ty, vars)?,
                 ));
             }
             Ok(Type::record(out))
@@ -1359,11 +1481,96 @@ pub(crate) fn type_vars_from_params(
     Ok(vars)
 }
 
-fn annotation_type_arity(adts: &BTreeMap<Symbol, AdtDecl>, name: &Symbol) -> Option<usize> {
+fn annotation_type_arity(
+    adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
+    name: &Symbol,
+) -> Option<usize> {
     if let Some(adt) = adts.get(name) {
         return Some(adt.params.len());
     }
+    if let Some(alias) = aliases.get(name) {
+        return Some(alias.params.len());
+    }
     BuiltinTypeId::from_symbol(name).map(BuiltinTypeId::arity)
+}
+
+pub(crate) fn expand_type_aliases(
+    aliases: &BTreeMap<Symbol, TypeAlias>,
+    typ: &Type,
+) -> Result<Type, TypeError> {
+    expand_type_aliases_inner(aliases, typ, &mut BTreeSet::new())
+}
+
+fn expand_type_aliases_inner(
+    aliases: &BTreeMap<Symbol, TypeAlias>,
+    typ: &Type,
+    expanding: &mut BTreeSet<Symbol>,
+) -> Result<Type, TypeError> {
+    let expanded = match typ.as_ref() {
+        TypeKind::Var(_) | TypeKind::Con(_) => typ.clone(),
+        TypeKind::App(fun, arg) => Type::app(
+            expand_type_aliases_inner(aliases, fun, expanding)?,
+            expand_type_aliases_inner(aliases, arg, expanding)?,
+        ),
+        TypeKind::Fun(arg, ret) => Type::fun(
+            expand_type_aliases_inner(aliases, arg, expanding)?,
+            expand_type_aliases_inner(aliases, ret, expanding)?,
+        ),
+        TypeKind::Tuple(elems) => Type::tuple(
+            elems
+                .iter()
+                .map(|elem| expand_type_aliases_inner(aliases, elem, expanding))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        TypeKind::Record(fields) => Type::record(
+            fields
+                .iter()
+                .map(|(name, field_ty)| {
+                    Ok((
+                        name.clone(),
+                        expand_type_aliases_inner(aliases, field_ty, expanding)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, TypeError>>()?,
+        ),
+    };
+
+    let mut head = expanded.clone();
+    let mut args = Vec::new();
+    while let TypeKind::App(fun, arg) = head.as_ref() {
+        args.push(arg.clone());
+        head = fun.clone();
+    }
+    args.reverse();
+
+    let TypeKind::Con(con) = head.as_ref() else {
+        return Ok(expanded);
+    };
+    let name = con.name();
+    let Some(alias) = aliases.get(&name) else {
+        return Ok(expanded);
+    };
+    if args.len() != alias.params.len() {
+        return Ok(expanded);
+    }
+    if !expanding.insert(name.clone()) {
+        return Err(TypeError::CyclicTypeAlias(name));
+    }
+    let body = alias.typ.as_ref().ok_or_else(|| {
+        TypeError::Internal(format!(
+            "type alias `{}` has no registered body",
+            alias.name
+        ))
+    })?;
+    let mut subst = Subst::new_sync();
+    for (param, arg) in alias.params.iter().zip(args) {
+        subst = subst.insert(param.var.id, arg);
+    }
+    let instantiated = body.apply(&subst);
+    let result = expand_type_aliases_inner(aliases, &instantiated, expanding);
+    expanding.remove(&name);
+    result
 }
 
 fn normalize_type_name(name: &Symbol) -> Symbol {
@@ -1389,13 +1596,14 @@ fn type_app_with_result_syntax(fun: Type, arg: Type) -> Type {
 
 pub(crate) fn predicates_from_constraints(
     adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
     constraints: &[TypeConstraint],
     vars: &mut BTreeMap<Symbol, TypeVar>,
     supply: &mut TypeVarSupply,
 ) -> Result<Vec<Predicate>, TypeError> {
     let mut out = Vec::with_capacity(constraints.len());
     for constraint in constraints {
-        let ty = type_from_annotation_expr_vars(adts, &constraint.typ, vars, supply)?;
+        let ty = type_from_annotation_expr_vars(adts, aliases, &constraint.typ, vars, supply)?;
         out.push(Predicate::new(constraint.class.as_ref(), ty));
     }
     Ok(out)

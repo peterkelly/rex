@@ -383,14 +383,17 @@ pub(crate) fn type_decl_has_record_field(
         if td.name.as_ref() != type_name {
             return false;
         }
-        td.variants.iter().any(|variant| {
-            variant.args.iter().any(|arg| {
-                let TypeExpr::Record(_, fields) = arg else {
-                    return false;
-                };
-                fields.iter().any(|(name, _)| name.as_ref() == field)
-            })
-        })
+        match &td.kind {
+            TypeDeclKind::Alias(_) => false,
+            TypeDeclKind::Adt(variants) => variants.iter().any(|variant| {
+                variant.args.iter().any(|arg| {
+                    let TypeExpr::Record(_, fields) = arg else {
+                        return false;
+                    };
+                    fields.iter().any(|(name, _)| name.as_ref() == field)
+                })
+            }),
+        }
     })
 }
 

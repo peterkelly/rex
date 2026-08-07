@@ -12,8 +12,9 @@ pub(crate) fn symbol_for_decl(decl: &Decl) -> Option<DocumentSymbol> {
             deprecated: None,
             range: span_to_range(td.span),
             selection_range: span_to_range(td.span),
-            children: Some(
-                td.variants
+            children: Some(match &td.kind {
+                TypeDeclKind::Alias(_) => Vec::new(),
+                TypeDeclKind::Adt(variants) => variants
                     .iter()
                     .map(|variant| DocumentSymbol {
                         name: variant.name.to_string(),
@@ -26,7 +27,7 @@ pub(crate) fn symbol_for_decl(decl: &Decl) -> Option<DocumentSymbol> {
                         children: None,
                     })
                     .collect(),
-            ),
+            }),
         }),
         Decl::Fn(fd) => Some(DocumentSymbol {
             name: fd.name.name.to_string(),

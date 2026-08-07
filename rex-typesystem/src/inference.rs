@@ -1,8 +1,8 @@
 use crate::{
     error::TypeError,
     types::{
-        AdtDecl, AdtVariant, BuiltinTypeId, Predicate, Scheme, Type, TypeEnv, TypeKind, TypeVar,
-        TypeVarId, TypedExpr, TypedExprKind, Types,
+        AdtDecl, AdtVariant, BuiltinTypeId, Predicate, Scheme, Type, TypeAlias, TypeEnv, TypeKind,
+        TypeVar, TypeVarId, TypedExpr, TypedExprKind, Types,
     },
     typesystem::{
         TypeSystem, TypeVarSupply, extend_type_params, instantiate,
@@ -393,6 +393,7 @@ fn infer_typed_inner(
         &mut type_system.supply,
         &type_system.env,
         &type_system.adts,
+        &type_system.aliases,
         &known,
         expr,
     )
@@ -424,6 +425,7 @@ fn infer_inner(
         &mut type_system.supply,
         &type_system.env,
         &type_system.adts,
+        &type_system.aliases,
         &known,
         expr,
     )
@@ -751,22 +753,28 @@ fn narrow_overload_candidates(
     out
 }
 
-fn infer_app_arg_type(
+struct HintedExpr<'a> {
+    expected: Option<Type>,
+    expr: &'a Expr,
+}
+
+fn infer_expr_type_with_hint(
     unifier: &mut Unifier,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
     known: &KnownVariants,
-    arg_hint: Option<Type>,
-    arg: &Expr,
+    hinted: HintedExpr<'_>,
 ) -> Result<(Vec<Predicate>, Type), TypeError> {
-    match (arg_hint, arg) {
+    match (hinted.expected, hinted.expr) {
         (Some(arg_hint), Expr::RecordUpdate(_, base, updates)) => {
             infer_record_update_type_with_hint(
                 unifier,
                 supply,
                 env,
                 adts,
+                aliases,
                 known,
                 base.as_ref(),
                 updates,
@@ -791,7 +799,18 @@ fn infer_app_arg_type(
                         typ: Type::record(fields.clone()).to_string(),
                     })?
                     .clone();
-                let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, v.as_ref())?;
+                let (p1, t1) = infer_expr_type_with_hint(
+                    unifier,
+                    supply,
+                    env,
+                    adts,
+                    aliases,
+                    known,
+                    HintedExpr {
+                        expected: Some(expected_ty.clone()),
+                        expr: v.as_ref(),
+                    },
+                )?;
                 unify_or_implicit_widen(unifier, &t1, &expected_ty)?;
                 preds.extend(p1);
                 seen.insert(k.clone());
@@ -811,26 +830,27 @@ fn infer_app_arg_type(
             );
             Ok((preds, record_ty))
         }
-        _ => infer_expr_type(unifier, supply, env, adts, known, arg),
+        (_, arg) => infer_expr_type(unifier, supply, env, adts, aliases, known, arg),
     }
 }
 
-fn infer_app_arg_typed(
+fn infer_expr_typed_with_hint(
     unifier: &mut Unifier,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
     known: &KnownVariants,
-    arg_hint: Option<Type>,
-    arg: &Expr,
+    hinted: HintedExpr<'_>,
 ) -> Result<(Vec<Predicate>, Type, TypedExpr), TypeError> {
-    match (arg_hint, arg) {
+    match (hinted.expected, hinted.expr) {
         (Some(arg_hint), Expr::RecordUpdate(_, base, updates)) => {
             infer_record_update_typed_with_hint(
                 unifier,
                 supply,
                 env,
                 adts,
+                aliases,
                 known,
                 base.as_ref(),
                 updates,
@@ -855,7 +875,18 @@ fn infer_app_arg_typed(
                         typ: Type::record(fields.clone()).to_string(),
                     })?
                     .clone();
-                let (p1, t1, typed_v) = infer_expr(unifier, supply, env, adts, known, v.as_ref())?;
+                let (p1, t1, typed_v) = infer_expr_typed_with_hint(
+                    unifier,
+                    supply,
+                    env,
+                    adts,
+                    aliases,
+                    known,
+                    HintedExpr {
+                        expected: Some(expected_ty.clone()),
+                        expr: v.as_ref(),
+                    },
+                )?;
                 let (_field_ty, typed_v) =
                     coerce_typed_to_expected(unifier, &t1, &expected_ty, typed_v)?;
                 preds.extend(p1);
@@ -877,7 +908,7 @@ fn infer_app_arg_typed(
             let typed = TypedExpr::new(record_ty.clone(), TypedExprKind::Dict(typed_kvs));
             Ok((preds, record_ty, typed))
         }
-        _ => infer_expr(unifier, supply, env, adts, known, arg),
+        (_, arg) => infer_expr(unifier, supply, env, adts, aliases, known, arg),
     }
 }
 
@@ -907,10 +938,11 @@ fn infer_typed_app_head(
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
     known: &KnownVariants,
     head: &Expr,
 ) -> Result<TypedAppState, TypeError> {
-    let (preds, func_ty, typed) = infer_expr(unifier, supply, env, adts, known, head)?;
+    let (preds, func_ty, typed) = infer_expr(unifier, supply, env, adts, aliases, known, head)?;
     let mut overload_name = None;
     let overload_candidates = match typed.kind.as_ref() {
         TypedExprKind::Var { name, overloads } if !overloads.is_empty() => {
@@ -977,13 +1009,24 @@ fn infer_typed_app_expr_arg(
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
     known: &KnownVariants,
     state: &mut TypedAppState,
     arg: &Expr,
 ) -> Result<(), TypeError> {
     let expected_arg = app_arg_hint(unifier, &state.func_ty);
-    let (p_arg, arg_ty, typed_arg) =
-        infer_app_arg_typed(unifier, supply, env, adts, known, expected_arg.clone(), arg)?;
+    let (p_arg, arg_ty, typed_arg) = infer_expr_typed_with_hint(
+        unifier,
+        supply,
+        env,
+        adts,
+        aliases,
+        known,
+        HintedExpr {
+            expected: expected_arg.clone(),
+            expr: arg,
+        },
+    )?;
     apply_typed_app_arg(unifier, supply, state, p_arg, arg_ty, typed_arg)
 }
 
@@ -1013,17 +1056,19 @@ fn infer_tail_app_chain_typed(
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
     known: &KnownVariants,
     leaf: &Expr,
     frames: Vec<TailAppFrame<'_>>,
 ) -> Result<(Vec<Predicate>, Type, TypedExpr), TypeError> {
     let (mut preds, mut tail_ty, mut typed_tail) =
-        infer_expr(unifier, supply, env, adts, known, leaf)?;
+        infer_expr(unifier, supply, env, adts, aliases, known, leaf)?;
 
     for frame in frames.into_iter().rev() {
-        let mut state = infer_typed_app_head(unifier, supply, env, adts, known, frame.head)?;
+        let mut state =
+            infer_typed_app_head(unifier, supply, env, adts, aliases, known, frame.head)?;
         for arg in frame.prefix_args {
-            infer_typed_app_expr_arg(unifier, supply, env, adts, known, &mut state, arg)?;
+            infer_typed_app_expr_arg(unifier, supply, env, adts, aliases, known, &mut state, arg)?;
         }
         apply_typed_app_arg(unifier, supply, &mut state, Vec::new(), tail_ty, typed_tail)?;
         preds.extend(state.preds);
@@ -1040,12 +1085,13 @@ fn infer_record_update_type_with_hint(
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
     known: &KnownVariants,
     base: &Expr,
     updates: &BTreeMap<Symbol, Arc<Expr>>,
     hint_ty: &Type,
 ) -> Result<(Vec<Predicate>, Type), TypeError> {
-    let (p_base, t_base) = infer_expr_type(unifier, supply, env, adts, known, base)?;
+    let (p_base, t_base) = infer_expr_type(unifier, supply, env, adts, aliases, known, base)?;
     unifier.unify(&t_base, hint_ty)?;
     let base_ty = unifier.apply_type(&t_base);
     let known_variant = known_variant_from_expr_with_known(base, &base_ty, adts, known);
@@ -1066,7 +1112,7 @@ fn infer_record_update_type_with_hint(
             field: k.clone(),
             typ: result_ty.to_string(),
         })?;
-        let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, v.as_ref())?;
+        let (p1, t1) = infer_expr_type(unifier, supply, env, adts, aliases, known, v.as_ref())?;
         unify_or_implicit_widen(unifier, &t1, expected_ty)?;
         preds.extend(p1);
     }
@@ -1079,12 +1125,14 @@ fn infer_record_update_typed_with_hint(
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
     known: &KnownVariants,
     base: &Expr,
     updates: &BTreeMap<Symbol, Arc<Expr>>,
     hint_ty: &Type,
 ) -> Result<(Vec<Predicate>, Type, TypedExpr), TypeError> {
-    let (p_base, t_base, typed_base) = infer_expr(unifier, supply, env, adts, known, base)?;
+    let (p_base, t_base, typed_base) =
+        infer_expr(unifier, supply, env, adts, aliases, known, base)?;
     unifier.unify(&t_base, hint_ty)?;
     let base_ty = unifier.apply_type(&t_base);
     let known_variant = known_variant_from_expr_with_known(base, &base_ty, adts, known);
@@ -1106,7 +1154,7 @@ fn infer_record_update_typed_with_hint(
             field: k.clone(),
             typ: result_ty.to_string(),
         })?;
-        let (p1, t1, typed_v) = infer_expr(unifier, supply, env, adts, known, v.as_ref())?;
+        let (p1, t1, typed_v) = infer_expr(unifier, supply, env, adts, aliases, known, v.as_ref())?;
         let (_field_ty, typed_v) = coerce_typed_to_expected(unifier, &t1, expected_ty, typed_v)?;
         preds.extend(p1);
         typed_updates.insert(k.clone(), Arc::new(typed_v));
@@ -1127,12 +1175,13 @@ fn infer_expr_type(
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
     known: &KnownVariants,
     expr: &Expr,
 ) -> Result<(Vec<Predicate>, Type), TypeError> {
     let span = *expr.span();
     let res = unifier.with_infer_depth(span, |unifier| {
-        infer_expr_type_inner(unifier, supply, env, adts, known, expr)
+        infer_expr_type_inner(unifier, supply, env, adts, aliases, known, expr)
     });
     res.map_err(|err| err.with_span(&span))
 }
@@ -1142,6 +1191,7 @@ fn infer_expr_type_inner(
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
     known: &KnownVariants,
     expr: &Expr,
 ) -> Result<(Vec<Predicate>, Type), TypeError> {
@@ -1197,7 +1247,9 @@ fn infer_expr_type_inner(
             let mut param_tys = Vec::with_capacity(params.len());
             for (name, ann) in &params {
                 let param_ty = match ann {
-                    Some(ann) => type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?,
+                    Some(ann) => {
+                        type_from_annotation_expr_vars(adts, aliases, ann, &mut ann_vars, supply)?
+                    }
                     None => Type::var(supply.fresh(Some(name.clone()))),
                 };
                 param_tys.push((name.clone(), param_ty));
@@ -1211,9 +1263,9 @@ fn infer_expr_type_inner(
             }
 
             let (mut preds, body_ty) =
-                infer_expr_type(unifier, supply, &env1, adts, &known_body, body)?;
+                infer_expr_type(unifier, supply, &env1, adts, aliases, &known_body, body)?;
             let constraint_preds =
-                predicates_from_constraints(adts, &constraints, &mut ann_vars, supply)?;
+                predicates_from_constraints(adts, aliases, &constraints, &mut ann_vars, supply)?;
             preds.extend(constraint_preds);
 
             let mut fun_ty = unifier.apply_type(&body_ty);
@@ -1225,7 +1277,7 @@ fn infer_expr_type_inner(
         Expr::App(..) => {
             let (head, args) = collect_app_chain(expr);
             let (mut preds, mut func_ty) =
-                infer_expr_type(unifier, supply, env, adts, known, head)?;
+                infer_expr_type(unifier, supply, env, adts, aliases, known, head)?;
             let mut overload_name = None;
             let mut overload_candidates = if let Expr::Var(var) = head {
                 if let Some(schemes) = env.lookup(&var.name) {
@@ -1258,8 +1310,18 @@ fn infer_expr_type_inner(
                     TypeKind::Fun(arg, _) => Some(arg.clone()),
                     _ => None,
                 };
-                let (p_arg, arg_ty) =
-                    infer_app_arg_type(unifier, supply, env, adts, known, arg_hint, arg)?;
+                let (p_arg, arg_ty) = infer_expr_type_with_hint(
+                    unifier,
+                    supply,
+                    env,
+                    adts,
+                    aliases,
+                    known,
+                    HintedExpr {
+                        expected: arg_hint,
+                        expr: arg,
+                    },
+                )?;
                 let arg_ty = unifier.apply_type(&arg_ty);
                 if let Some(candidates) = overload_candidates.take() {
                     let candidates = candidates
@@ -1289,7 +1351,7 @@ fn infer_expr_type_inner(
             Ok((preds, func_ty))
         }
         Expr::Project(_, base, field) => {
-            let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, base)?;
+            let (p1, t1) = infer_expr_type(unifier, supply, env, adts, aliases, known, base)?;
             let base_ty = unifier.apply_type(&t1);
             let known_variant = known_variant_from_expr_with_known(base, &base_ty, adts, known);
             let field_ty =
@@ -1297,7 +1359,8 @@ fn infer_expr_type_inner(
             Ok((p1, field_ty))
         }
         Expr::RecordUpdate(_, base, updates) => {
-            let (p_base, t_base) = infer_expr_type(unifier, supply, env, adts, known, base)?;
+            let (p_base, t_base) =
+                infer_expr_type(unifier, supply, env, adts, aliases, known, base)?;
             let base_ty = unifier.apply_type(&t_base);
             let known_variant = known_variant_from_expr_with_known(base, &base_ty, adts, known);
             let update_fields: Vec<Symbol> = updates.keys().cloned().collect();
@@ -1317,7 +1380,8 @@ fn infer_expr_type_inner(
                     field: k.clone(),
                     typ: result_ty.to_string(),
                 })?;
-                let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, v.as_ref())?;
+                let (p1, t1) =
+                    infer_expr_type(unifier, supply, env, adts, aliases, known, v.as_ref())?;
                 unify_or_implicit_widen(unifier, &t1, expected_ty)?;
                 preds.extend(p1);
             }
@@ -1340,28 +1404,29 @@ fn infer_expr_type_inner(
                     let mut ann_vars = annotation_vars_from_env(&env_cur);
                     extend_type_params(&mut ann_vars, &type_params, supply)?;
                     env_def.type_vars = ann_vars.clone();
-                    let ann_ty =
-                        type_from_annotation_expr_vars(adts, ann_expr, &mut ann_vars, supply)?;
-                    match d.as_ref() {
-                        Expr::RecordUpdate(_, base, updates) => infer_record_update_type_with_hint(
-                            unifier,
-                            supply,
-                            &env_def,
-                            adts,
-                            &known_cur,
-                            base.as_ref(),
-                            updates,
-                            &ann_ty,
-                        )?,
-                        _ => {
-                            let (p1, t1) =
-                                infer_expr_type(unifier, supply, &env_def, adts, &known_cur, &d)?;
-                            let t1 = unify_or_implicit_widen(unifier, &t1, &ann_ty)?;
-                            (p1, t1)
-                        }
-                    }
+                    let ann_ty = type_from_annotation_expr_vars(
+                        adts,
+                        aliases,
+                        ann_expr,
+                        &mut ann_vars,
+                        supply,
+                    )?;
+                    let (p1, t1) = infer_expr_type_with_hint(
+                        unifier,
+                        supply,
+                        &env_def,
+                        adts,
+                        aliases,
+                        &known_cur,
+                        HintedExpr {
+                            expected: Some(ann_ty.clone()),
+                            expr: &d,
+                        },
+                    )?;
+                    let t1 = unify_or_implicit_widen(unifier, &t1, &ann_ty)?;
+                    (p1, t1)
                 } else {
-                    infer_expr_type(unifier, supply, &env_def, adts, &known_cur, &d)?
+                    infer_expr_type(unifier, supply, &env_def, adts, aliases, &known_cur, &d)?
                 };
                 let def_ty = unifier.apply_type(&t1);
                 let (p1, def_ty) = default_literal_constraints_outside_type(p1, def_ty, unifier)?;
@@ -1389,7 +1454,7 @@ fn infer_expr_type_inner(
             }
 
             let (p_body, t_body) =
-                infer_expr_type(unifier, supply, &env_cur, adts, &known_cur, cur)?;
+                infer_expr_type(unifier, supply, &env_cur, adts, aliases, &known_cur, cur)?;
             Ok((p_body, t_body))
         }
         Expr::LetRec(_, bindings, body) => {
@@ -1408,14 +1473,28 @@ fn infer_expr_type_inner(
             for (var, type_params, ann, def) in bindings {
                 let mut env_def = env_seed.clone();
                 extend_type_params(&mut env_def.type_vars, type_params, supply)?;
-                let (preds, mut def_ty) =
-                    infer_expr_type(unifier, supply, &env_def, adts, &known_seed, def)?;
-                if let Some(ann) = ann {
+                let (preds, def_ty) = if let Some(ann) = ann {
                     let mut ann_vars = annotation_vars_from_env(&env_seed);
                     extend_type_params(&mut ann_vars, type_params, supply)?;
-                    let ann_ty = type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
-                    def_ty = unify_or_implicit_widen(unifier, &def_ty, &ann_ty)?;
-                }
+                    let ann_ty =
+                        type_from_annotation_expr_vars(adts, aliases, ann, &mut ann_vars, supply)?;
+                    let (preds, def_ty) = infer_expr_type_with_hint(
+                        unifier,
+                        supply,
+                        &env_def,
+                        adts,
+                        aliases,
+                        &known_seed,
+                        HintedExpr {
+                            expected: Some(ann_ty.clone()),
+                            expr: def,
+                        },
+                    )?;
+                    let def_ty = unify_or_implicit_widen(unifier, &def_ty, &ann_ty)?;
+                    (preds, def_ty)
+                } else {
+                    infer_expr_type(unifier, supply, &env_def, adts, aliases, &known_seed, def)?
+                };
                 let binding_ty = binding_tys
                     .get(&var.name)
                     .cloned()
@@ -1449,14 +1528,14 @@ fn infer_expr_type_inner(
             }
 
             let (p_body, t_body) =
-                infer_expr_type(unifier, supply, &env_body, adts, &known_seed, body)?;
+                infer_expr_type(unifier, supply, &env_body, adts, aliases, &known_seed, body)?;
             Ok((p_body, t_body))
         }
         Expr::Ite(_, cond, then_expr, else_expr) => {
-            let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, cond)?;
+            let (p1, t1) = infer_expr_type(unifier, supply, env, adts, aliases, known, cond)?;
             unifier.unify(&t1, &Type::builtin(BuiltinTypeId::Bool))?;
-            let (p2, t2) = infer_expr_type(unifier, supply, env, adts, known, then_expr)?;
-            let (p3, t3) = infer_expr_type(unifier, supply, env, adts, known, else_expr)?;
+            let (p2, t2) = infer_expr_type(unifier, supply, env, adts, aliases, known, then_expr)?;
+            let (p3, t3) = infer_expr_type(unifier, supply, env, adts, aliases, known, else_expr)?;
             unifier.unify(&t2, &t3)?;
             let out_ty = unifier.apply_type(&t2);
             let mut preds = p1;
@@ -1468,7 +1547,8 @@ fn infer_expr_type_inner(
             let mut preds = Vec::new();
             let mut types = Vec::new();
             for elem in elems {
-                let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, elem.as_ref())?;
+                let (p1, t1) =
+                    infer_expr_type(unifier, supply, env, adts, aliases, known, elem.as_ref())?;
                 preds.extend(p1);
                 types.push(unifier.apply_type(&t1));
             }
@@ -1479,7 +1559,8 @@ fn infer_expr_type_inner(
             let elem_tv = Type::var(supply.fresh(Some(Symbol::intern("a"))));
             let mut preds = Vec::new();
             for elem in elems {
-                let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, elem.as_ref())?;
+                let (p1, t1) =
+                    infer_expr_type(unifier, supply, env, adts, aliases, known, elem.as_ref())?;
                 unifier.unify(&t1, &elem_tv)?;
                 preds.extend(p1);
             }
@@ -1493,7 +1574,8 @@ fn infer_expr_type_inner(
             let elem_tv = Type::var(supply.fresh(Some(Symbol::intern("v"))));
             let mut preds = Vec::new();
             for v in kvs.values() {
-                let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, v.as_ref())?;
+                let (p1, t1) =
+                    infer_expr_type(unifier, supply, env, adts, aliases, known, v.as_ref())?;
                 unifier.unify(&t1, &elem_tv)?;
                 preds.extend(p1);
             }
@@ -1504,7 +1586,15 @@ fn infer_expr_type_inner(
             Ok((preds, dict_ty))
         }
         Expr::Match(_, scrutinee, arms) => {
-            let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, scrutinee.as_ref())?;
+            let (p1, t1) = infer_expr_type(
+                unifier,
+                supply,
+                env,
+                adts,
+                aliases,
+                known,
+                scrutinee.as_ref(),
+            )?;
             let mut preds = p1;
             let res_ty = Type::var(supply.fresh(Some(Symbol::intern("match"))));
             let patterns: Vec<Pattern> = arms.iter().map(|(pat, _)| pat.clone()).collect();
@@ -1541,7 +1631,7 @@ fn infer_expr_type_inner(
                     }
                 }
                 let (p_expr, t_expr) =
-                    infer_expr_type(unifier, supply, &env_arm, adts, &known_arm, expr)?;
+                    infer_expr_type(unifier, supply, &env_arm, adts, aliases, &known_arm, expr)?;
                 unifier.unify(&res_ty, &t_expr)?;
                 preds.extend(p_expr);
             }
@@ -1553,28 +1643,21 @@ fn infer_expr_type_inner(
         }
         Expr::Ann(_, expr, ann) => {
             let mut ann_vars = annotation_vars_from_env(env);
-            let ann_ty = type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
-            match expr.as_ref() {
-                Expr::RecordUpdate(_, base, updates) => {
-                    let (preds, out_ty) = infer_record_update_type_with_hint(
-                        unifier,
-                        supply,
-                        env,
-                        adts,
-                        known,
-                        base.as_ref(),
-                        updates,
-                        &ann_ty,
-                    )?;
-                    Ok((preds, out_ty))
-                }
-                _ => {
-                    let (preds, expr_ty) =
-                        infer_expr_type(unifier, supply, env, adts, known, expr)?;
-                    let out_ty = unify_or_implicit_widen(unifier, &expr_ty, &ann_ty)?;
-                    Ok((preds, out_ty))
-                }
-            }
+            let ann_ty = type_from_annotation_expr_vars(adts, aliases, ann, &mut ann_vars, supply)?;
+            let (preds, expr_ty) = infer_expr_type_with_hint(
+                unifier,
+                supply,
+                env,
+                adts,
+                aliases,
+                known,
+                HintedExpr {
+                    expected: Some(ann_ty.clone()),
+                    expr,
+                },
+            )?;
+            let out_ty = unify_or_implicit_widen(unifier, &expr_ty, &ann_ty)?;
+            Ok((preds, out_ty))
         }
     }
 }
@@ -1584,6 +1667,7 @@ fn infer_expr(
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
     known: &KnownVariants,
     expr: &Expr,
 ) -> Result<(Vec<Predicate>, Type, TypedExpr), TypeError> {
@@ -1707,9 +1791,13 @@ fn infer_expr(
                 let mut param_tys = Vec::with_capacity(params.len());
                 for (name, ann) in &params {
                     let param_ty = match ann {
-                        Some(ann) => {
-                            type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?
-                        }
+                        Some(ann) => type_from_annotation_expr_vars(
+                            adts,
+                            aliases,
+                            ann,
+                            &mut ann_vars,
+                            supply,
+                        )?,
                         None => Type::var(supply.fresh(Some(name.clone()))),
                     };
                     param_tys.push((name.clone(), param_ty));
@@ -1723,9 +1811,14 @@ fn infer_expr(
                 }
 
                 let (mut preds, body_ty, typed_body) =
-                    infer_expr(unifier, supply, &env1, adts, &known_body, body)?;
-                let constraint_preds =
-                    predicates_from_constraints(adts, &constraints, &mut ann_vars, supply)?;
+                    infer_expr(unifier, supply, &env1, adts, aliases, &known_body, body)?;
+                let constraint_preds = predicates_from_constraints(
+                    adts,
+                    aliases,
+                    &constraints,
+                    &mut ann_vars,
+                    supply,
+                )?;
                 preds.extend(constraint_preds);
 
                 let mut typed = typed_body;
@@ -1746,18 +1839,22 @@ fn infer_expr(
             Expr::App(..) => {
                 if let Some((leaf, frames)) = collect_tail_app_chain(expr) {
                     return infer_tail_app_chain_typed(
-                        unifier, supply, env, adts, known, leaf, frames,
+                        unifier, supply, env, adts, aliases, known, leaf, frames,
                     );
                 }
                 let (head, args) = collect_app_chain(expr);
-                let mut state = infer_typed_app_head(unifier, supply, env, adts, known, head)?;
+                let mut state =
+                    infer_typed_app_head(unifier, supply, env, adts, aliases, known, head)?;
                 for arg in args {
-                    infer_typed_app_expr_arg(unifier, supply, env, adts, known, &mut state, arg)?;
+                    infer_typed_app_expr_arg(
+                        unifier, supply, env, adts, aliases, known, &mut state, arg,
+                    )?;
                 }
                 Ok((state.preds, state.func_ty, state.typed))
             }
             Expr::Project(_, base, field) => {
-                let (p1, t1, typed_base) = infer_expr(unifier, supply, env, adts, known, base)?;
+                let (p1, t1, typed_base) =
+                    infer_expr(unifier, supply, env, adts, aliases, known, base)?;
                 let base_ty = unifier.apply_type(&t1);
                 let known_variant = known_variant_from_expr_with_known(base, &base_ty, adts, known);
                 let field_ty =
@@ -1773,7 +1870,7 @@ fn infer_expr(
             }
             Expr::RecordUpdate(_, base, updates) => {
                 let (p_base, t_base, typed_base) =
-                    infer_expr(unifier, supply, env, adts, known, base)?;
+                    infer_expr(unifier, supply, env, adts, aliases, known, base)?;
                 let base_ty = unifier.apply_type(&t_base);
                 let known_variant = known_variant_from_expr_with_known(base, &base_ty, adts, known);
                 let update_fields: Vec<Symbol> = updates.keys().cloned().collect();
@@ -1795,7 +1892,7 @@ fn infer_expr(
                         typ: result_ty.to_string(),
                     })?;
                     let (p1, t1, typed_v) =
-                        infer_expr(unifier, supply, env, adts, known, v.as_ref())?;
+                        infer_expr(unifier, supply, env, adts, aliases, known, v.as_ref())?;
                     let (_field_ty, typed_v) =
                         coerce_typed_to_expected(unifier, &t1, expected_ty, typed_v)?;
                     preds.extend(p1);
@@ -1828,31 +1925,30 @@ fn infer_expr(
                         let mut ann_vars = annotation_vars_from_env(&env_cur);
                         extend_type_params(&mut ann_vars, &type_params, supply)?;
                         env_def.type_vars = ann_vars.clone();
-                        let ann_ty =
-                            type_from_annotation_expr_vars(adts, ann_expr, &mut ann_vars, supply)?;
-                        match d.as_ref() {
-                            Expr::RecordUpdate(_, base, updates) => {
-                                infer_record_update_typed_with_hint(
-                                    unifier,
-                                    supply,
-                                    &env_def,
-                                    adts,
-                                    &known_cur,
-                                    base.as_ref(),
-                                    updates,
-                                    &ann_ty,
-                                )?
-                            }
-                            _ => {
-                                let (p1, t1, typed_def) =
-                                    infer_expr(unifier, supply, &env_def, adts, &known_cur, &d)?;
-                                let (t1, typed_def) =
-                                    coerce_typed_to_expected(unifier, &t1, &ann_ty, typed_def)?;
-                                (p1, t1, typed_def)
-                            }
-                        }
+                        let ann_ty = type_from_annotation_expr_vars(
+                            adts,
+                            aliases,
+                            ann_expr,
+                            &mut ann_vars,
+                            supply,
+                        )?;
+                        let (p1, t1, typed_def) = infer_expr_typed_with_hint(
+                            unifier,
+                            supply,
+                            &env_def,
+                            adts,
+                            aliases,
+                            &known_cur,
+                            HintedExpr {
+                                expected: Some(ann_ty.clone()),
+                                expr: &d,
+                            },
+                        )?;
+                        let (t1, typed_def) =
+                            coerce_typed_to_expected(unifier, &t1, &ann_ty, typed_def)?;
+                        (p1, t1, typed_def)
                     } else {
-                        infer_expr(unifier, supply, &env_def, adts, &known_cur, &d)?
+                        infer_expr(unifier, supply, &env_def, adts, aliases, &known_cur, &d)?
                     };
                     let def_ty = unifier.apply_type(&t1);
                     let (p1, def_ty) =
@@ -1882,7 +1978,7 @@ fn infer_expr(
                 }
 
                 let (p_body, t_body, typed_body) =
-                    infer_expr(unifier, supply, &env_cur, adts, &known_cur, cur)?;
+                    infer_expr(unifier, supply, &env_cur, adts, aliases, &known_cur, cur)?;
 
                 let mut typed = typed_body;
                 for (name, def) in typed_defs.into_iter().rev() {
@@ -1913,18 +2009,34 @@ fn infer_expr(
                 for (var, type_params, ann, def) in bindings {
                     let mut env_def = env_seed.clone();
                     extend_type_params(&mut env_def.type_vars, type_params, supply)?;
-                    let (preds, mut def_ty, mut typed_def) =
-                        infer_expr(unifier, supply, &env_def, adts, &known_seed, def)?;
-                    if let Some(ann) = ann {
+                    let (preds, def_ty, typed_def) = if let Some(ann) = ann {
                         let mut ann_vars = annotation_vars_from_env(&env_seed);
                         extend_type_params(&mut ann_vars, type_params, supply)?;
-                        let ann_ty =
-                            type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
+                        let ann_ty = type_from_annotation_expr_vars(
+                            adts,
+                            aliases,
+                            ann,
+                            &mut ann_vars,
+                            supply,
+                        )?;
+                        let (preds, def_ty, typed_def) = infer_expr_typed_with_hint(
+                            unifier,
+                            supply,
+                            &env_def,
+                            adts,
+                            aliases,
+                            &known_seed,
+                            HintedExpr {
+                                expected: Some(ann_ty.clone()),
+                                expr: def,
+                            },
+                        )?;
                         let coerced =
                             coerce_typed_to_expected(unifier, &def_ty, &ann_ty, typed_def)?;
-                        def_ty = coerced.0;
-                        typed_def = coerced.1;
-                    }
+                        (preds, coerced.0, coerced.1)
+                    } else {
+                        infer_expr(unifier, supply, &env_def, adts, aliases, &known_seed, def)?
+                    };
                     let binding_ty = binding_tys
                         .get(&var.name)
                         .cloned()
@@ -1960,7 +2072,7 @@ fn infer_expr(
                 }
 
                 let (p_body, t_body, typed_body) =
-                    infer_expr(unifier, supply, &env_body, adts, &known_seed, body)?;
+                    infer_expr(unifier, supply, &env_body, adts, aliases, &known_seed, body)?;
                 let typed = TypedExpr::new(
                     t_body.clone(),
                     TypedExprKind::LetRec {
@@ -1971,12 +2083,13 @@ fn infer_expr(
                 Ok((p_body, t_body, typed))
             }
             Expr::Ite(_, cond, then_expr, else_expr) => {
-                let (p1, t1, typed_cond) = infer_expr(unifier, supply, env, adts, known, cond)?;
+                let (p1, t1, typed_cond) =
+                    infer_expr(unifier, supply, env, adts, aliases, known, cond)?;
                 unifier.unify(&t1, &Type::builtin(BuiltinTypeId::Bool))?;
                 let (p2, t2, typed_then) =
-                    infer_expr(unifier, supply, env, adts, known, then_expr)?;
+                    infer_expr(unifier, supply, env, adts, aliases, known, then_expr)?;
                 let (p3, t3, typed_else) =
-                    infer_expr(unifier, supply, env, adts, known, else_expr)?;
+                    infer_expr(unifier, supply, env, adts, aliases, known, else_expr)?;
                 unifier.unify(&t2, &t3)?;
                 let out_ty = unifier.apply_type(&t2);
                 let mut preds = p1;
@@ -1997,7 +2110,8 @@ fn infer_expr(
                 let mut types = Vec::new();
                 let mut typed_elems = Vec::new();
                 for elem in elems {
-                    let (p1, t1, typed_elem) = infer_expr(unifier, supply, env, adts, known, elem)?;
+                    let (p1, t1, typed_elem) =
+                        infer_expr(unifier, supply, env, adts, aliases, known, elem)?;
                     preds.extend(p1);
                     types.push(unifier.apply_type(&t1));
                     typed_elems.push(Arc::new(typed_elem));
@@ -2011,7 +2125,8 @@ fn infer_expr(
                 let mut preds = Vec::new();
                 let mut typed_elems = Vec::new();
                 for elem in elems {
-                    let (p1, t1, typed_elem) = infer_expr(unifier, supply, env, adts, known, elem)?;
+                    let (p1, t1, typed_elem) =
+                        infer_expr(unifier, supply, env, adts, aliases, known, elem)?;
                     unifier.unify(&t1, &elem_tv)?;
                     preds.extend(p1);
                     typed_elems.push(Arc::new(typed_elem));
@@ -2028,7 +2143,8 @@ fn infer_expr(
                 let mut preds = Vec::new();
                 let mut typed_kvs = BTreeMap::new();
                 for (k, v) in kvs {
-                    let (p1, t1, typed_v) = infer_expr(unifier, supply, env, adts, known, v)?;
+                    let (p1, t1, typed_v) =
+                        infer_expr(unifier, supply, env, adts, aliases, known, v)?;
                     unifier.unify(&t1, &elem_tv)?;
                     preds.extend(p1);
                     typed_kvs.insert(k.clone(), Arc::new(typed_v));
@@ -2042,7 +2158,7 @@ fn infer_expr(
             }
             Expr::Match(_, scrutinee, arms) => {
                 let (p1, t1, typed_scrutinee) =
-                    infer_expr(unifier, supply, env, adts, known, scrutinee)?;
+                    infer_expr(unifier, supply, env, adts, aliases, known, scrutinee)?;
                 let mut preds = p1;
                 let mut typed_arms = Vec::new();
                 let res_ty = Type::var(supply.fresh(Some(Symbol::intern("match"))));
@@ -2080,7 +2196,7 @@ fn infer_expr(
                         }
                     }
                     let (p_expr, t_expr, typed_expr) =
-                        infer_expr(unifier, supply, &env_arm, adts, &known_arm, expr)?;
+                        infer_expr(unifier, supply, &env_arm, adts, aliases, &known_arm, expr)?;
                     unifier.unify(&res_ty, &t_expr)?;
                     preds.extend(p_expr);
                     typed_arms.push((pat.clone(), Arc::new(typed_expr)));
@@ -2100,26 +2216,23 @@ fn infer_expr(
             }
             Expr::Ann(_, expr, ann) => {
                 let mut ann_vars = annotation_vars_from_env(env);
-                let ann_ty = type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
-                match expr.as_ref() {
-                    Expr::RecordUpdate(_, base, updates) => infer_record_update_typed_with_hint(
-                        unifier,
-                        supply,
-                        env,
-                        adts,
-                        known,
-                        base.as_ref(),
-                        updates,
-                        &ann_ty,
-                    ),
-                    _ => {
-                        let (preds, expr_ty, typed_expr) =
-                            infer_expr(unifier, supply, env, adts, known, expr)?;
-                        let (out_ty, typed_expr) =
-                            coerce_typed_to_expected(unifier, &expr_ty, &ann_ty, typed_expr)?;
-                        Ok((preds, out_ty, typed_expr))
-                    }
-                }
+                let ann_ty =
+                    type_from_annotation_expr_vars(adts, aliases, ann, &mut ann_vars, supply)?;
+                let (preds, expr_ty, typed_expr) = infer_expr_typed_with_hint(
+                    unifier,
+                    supply,
+                    env,
+                    adts,
+                    aliases,
+                    known,
+                    HintedExpr {
+                        expected: Some(ann_ty.clone()),
+                        expr,
+                    },
+                )?;
+                let (out_ty, typed_expr) =
+                    coerce_typed_to_expected(unifier, &expr_ty, &ann_ty, typed_expr)?;
+                Ok((preds, out_ty, typed_expr))
             }
         })()
     });
@@ -2349,6 +2462,17 @@ fn resolve_projection(
     known_variant: Option<KnownVariant>,
     field: &Symbol,
 ) -> Result<Type, TypeError> {
+    if let TypeKind::Record(fields) = base_ty.as_ref() {
+        return fields
+            .iter()
+            .find(|(name, _)| name == field)
+            .map(|(_, typ)| unifier.apply_type(typ))
+            .ok_or_else(|| TypeError::UnknownField {
+                field: field.clone(),
+                typ: base_ty.to_string(),
+            });
+    }
+
     if let Ok(index) = field.as_ref().parse::<usize>() {
         let elem_ty = match base_ty.as_ref() {
             TypeKind::Tuple(elems) => {
