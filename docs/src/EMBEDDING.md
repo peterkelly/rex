@@ -234,7 +234,7 @@ impl Importer for MapImporter {
     }
 }
 
-builder.add_importer("host-map", Arc::new(MapImporter { modules }));
+builder.add_importer(Arc::new(MapImporter { modules }));
 let compiler = builder.build_compiler();
 let parsed = parse("import acme.main (main);\nmain").map_err(|errs| format!("{errs:?}"))?;
 let (program, evaluator) = compiler
@@ -507,7 +507,7 @@ impl Importer for ToolImporter {
 
 let mut builder = Builder::with_prelude(())?;
 let tools_id = ModuleId::parse("workflow.tools")?;
-builder.add_importer("lazy-tools", Arc::new(ToolImporter { tools_id }));
+builder.add_importer(Arc::new(ToolImporter { tools_id }));
 
 let compiler = builder.build_compiler();
 let parsed = parse("import workflow.tools (inc);\ninc 41")

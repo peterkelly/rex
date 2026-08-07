@@ -158,12 +158,9 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
 async fn importer_rust_module_preserves_module_scoped_adts() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut builder: Builder<()> = Builder::with_prelude(()).unwrap();
-    builder.add_importer(
-        "lazy-sample",
-        Arc::new(LazySampleImporter {
-            calls: Arc::clone(&calls),
-        }),
-    );
+    builder.add_importer(Arc::new(LazySampleImporter {
+        calls: Arc::clone(&calls),
+    }));
     let compiler = builder.build_compiler();
     let parsed = parse_rex(
         r#"

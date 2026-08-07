@@ -166,11 +166,7 @@ impl<State> ModuleSystem<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn append_importer(
-        &mut self,
-        _name: impl Into<String>,
-        importer: Arc<dyn Importer<State>>,
-    ) {
+    pub(crate) fn append_importer(&mut self, importer: Arc<dyn Importer<State>>) {
         self.import_chain.entries.push(ImporterEntry { importer });
     }
 

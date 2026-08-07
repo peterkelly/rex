@@ -172,7 +172,7 @@ fn init_builder(import_root: Option<PathBuf>) -> Result<(Builder, Arc<dyn Import
         .map(FilesystemImporter::with_root)
         .unwrap_or_default();
     let importer: Arc<dyn Importer> = Arc::new(filesystem_importer);
-    builder.add_importer("filesystem", Arc::clone(&importer));
+    builder.add_importer(Arc::clone(&importer));
     Ok((builder, importer))
 }
 

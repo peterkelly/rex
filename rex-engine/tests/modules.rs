@@ -332,10 +332,10 @@ async fn engine_options_can_disable_prelude() {
 async fn importer_can_return_lazy_rust_module() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut builder = builder_with_prelude();
-    builder.add_importer(
-        "lazy",
-        Arc::new(LazyRustImporter::new(Arc::clone(&calls), "lazy.math")),
-    );
+    builder.add_importer(Arc::new(LazyRustImporter::new(
+        Arc::clone(&calls),
+        "lazy.math",
+    )));
 
     let (value, typ) = run_snippet(
         builder,
@@ -357,13 +357,10 @@ async fn lazy_rust_importer_only_builds_requested_module() {
     let used_calls = Arc::new(AtomicUsize::new(0));
     let unused_calls = Arc::new(AtomicUsize::new(0));
     let mut builder = builder_with_prelude();
-    builder.add_importer(
-        "lazy",
-        Arc::new(SelectiveLazyRustImporter::new(
-            Arc::clone(&used_calls),
-            Arc::clone(&unused_calls),
-        )),
-    );
+    builder.add_importer(Arc::new(SelectiveLazyRustImporter::new(
+        Arc::clone(&used_calls),
+        Arc::clone(&unused_calls),
+    )));
 
     let (value, _) = run_snippet(
         builder,
@@ -384,10 +381,10 @@ async fn lazy_rust_importer_only_builds_requested_module() {
 async fn duplicate_lazy_rust_import_uses_resolved_module_cache() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut builder = builder_with_prelude();
-    builder.add_importer(
-        "lazy",
-        Arc::new(LazyRustImporter::new(Arc::clone(&calls), "lazy.math")),
-    );
+    builder.add_importer(Arc::new(LazyRustImporter::new(
+        Arc::clone(&calls),
+        "lazy.math",
+    )));
 
     let (value, _) = run_snippet(
         builder,
@@ -412,14 +409,11 @@ async fn duplicate_lazy_rust_import_uses_resolved_module_cache() {
 async fn lazy_rust_module_rejects_name_mismatch() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut builder = builder_with_prelude();
-    builder.add_importer(
-        "lazy",
-        Arc::new(LazyRustImporter::with_returned_name(
-            Arc::clone(&calls),
-            "lazy.math",
-            "lazy.other",
-        )),
-    );
+    builder.add_importer(Arc::new(LazyRustImporter::with_returned_name(
+        Arc::clone(&calls),
+        "lazy.math",
+        "lazy.other",
+    )));
 
     let err = run_snippet(
         builder,
@@ -442,14 +436,11 @@ async fn lazy_rust_module_rejects_name_mismatch() {
 async fn lazy_rust_module_rejects_root_module() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut builder = builder_with_prelude();
-    builder.add_importer(
-        "lazy",
-        Arc::new(LazyRustImporter::with_returned_name(
-            Arc::clone(&calls),
-            "lazy.math",
-            "__root__",
-        )),
-    );
+    builder.add_importer(Arc::new(LazyRustImporter::with_returned_name(
+        Arc::clone(&calls),
+        "lazy.math",
+        "__root__",
+    )));
 
     let err = run_snippet(
         builder,
@@ -488,7 +479,7 @@ async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
         EngineError::Internal(format!("failed to read {}: {err}", path.display()))
     })?;
     let mut builder = builder;
-    builder.add_importer("test-fs", importer);
+    builder.add_importer(importer);
     let compiler = builder.build_compiler();
     let parsed = parse_rex(&source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
     let options = CompileOptions::new(module_id_for_path(path)?);
@@ -522,7 +513,7 @@ async fn run_snippet_at<State: Clone + Send + Sync + 'static>(
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    builder.add_importer("test-fs", Arc::new(TestFilesystemImporter::new(root)));
+    builder.add_importer(Arc::new(TestFilesystemImporter::new(root)));
     let compiler = builder.build_compiler();
     let parsed = parse_rex(source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
     let options = CompileOptions::new(module_id_for_path(importer_path)?);
@@ -590,7 +581,7 @@ async fn snippet_import_observes_local_module_changes_with_new_compiler() {
 
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
     let mut builder = builder_with_prelude();
-    builder.add_importer("test-fs", Arc::new(TestFilesystemImporter::new(&dir)));
+    builder.add_importer(Arc::new(TestFilesystemImporter::new(&dir)));
 
     let compiler = builder.build_compiler();
 
@@ -606,7 +597,7 @@ async fn snippet_import_observes_local_module_changes_with_new_compiler() {
     // observed without relying on stale cache invalidation.
     write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
     let mut builder = builder_with_prelude();
-    builder.add_importer("test-fs", Arc::new(TestFilesystemImporter::new(&dir)));
+    builder.add_importer(Arc::new(TestFilesystemImporter::new(&dir)));
     let compiler = builder.build_compiler();
     let (program, evaluator) = compiler.compile_program(&parsed, options).await.unwrap();
     let ty = program.result_type().clone();
@@ -623,10 +614,10 @@ async fn duplicate_import_request_uses_resolved_module_cache() {
     let calls = Arc::new(AtomicUsize::new(0));
     let module_id = ModuleId::parse("foo").unwrap();
     let mut builder = builder_with_prelude();
-    builder.add_importer(
-        "counting",
-        Arc::new(CountingImporter::new(Arc::clone(&calls), module_id)),
-    );
+    builder.add_importer(Arc::new(CountingImporter::new(
+        Arc::clone(&calls),
+        module_id,
+    )));
 
     let (value_ptr, ty) = run_snippet(
         builder,

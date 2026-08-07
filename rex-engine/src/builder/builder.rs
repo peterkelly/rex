@@ -356,8 +356,8 @@ where
         self.type_system.register_instance(class, inst);
     }
 
-    pub fn add_importer(&mut self, name: impl Into<String>, importer: Arc<dyn Importer<State>>) {
-        self.module_loader.system.append_importer(name, importer);
+    pub fn add_importer(&mut self, importer: Arc<dyn Importer<State>>) {
+        self.module_loader.system.append_importer(importer);
     }
 
     pub fn type_system(&self) -> &TypeSystem {

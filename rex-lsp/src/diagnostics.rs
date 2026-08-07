@@ -152,7 +152,7 @@ pub(crate) fn push_type_diagnostics(
         let Some(module_id) = crate::shared::module_id_from_path(path.as_path()) else {
             return;
         };
-        builder.add_importer("lsp-modules", Arc::new(session.module_service_for_uri(uri)));
+        builder.add_importer(Arc::new(session.module_service_for_uri(uri)));
         let compiler = builder.build_compiler();
         futures::executor::block_on(compiler.infer_snippet(text, module_id))
     } else {
