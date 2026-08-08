@@ -154,7 +154,7 @@ impl Importer for LazyRustImporter {
                 return Ok(None);
             }
             self.calls.fetch_add(1, Ordering::SeqCst);
-            let mut module = Module::new(self.returned_name.clone());
+            let mut module = Module::new(self.returned_name.clone(), None);
             module
                 .export("inc", |_state: &(), value: i32| {
                     Ok::<i32, EngineError>(value + 1)
@@ -201,7 +201,7 @@ impl Importer for SelectiveLazyRustImporter {
                 return Ok(None);
             };
             calls.fetch_add(1, Ordering::SeqCst);
-            let mut module = Module::new(module_name);
+            let mut module = Module::new(module_name, None);
             module
                 .export("value", |_state: &()| Ok::<i32, EngineError>(42))
                 .unwrap();
@@ -276,7 +276,7 @@ impl RexAdt for LocalRunSpec {
     fn rex_adt_decl() -> Result<AdtDecl, TypeError> {
         let mut supply = TypeVarSupply::new();
         let mut adt = AdtDecl::new(&Symbol::intern("RunSpec"), &[], &mut supply);
-        adt.add_variant(Symbol::intern("Pending"), vec![]);
+        adt.add_variant(Symbol::intern("Pending"), vec![], None);
         Ok(adt)
     }
 }
@@ -876,7 +876,7 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
 async fn module_injected_from_rust_sync_and_async_exports() {
     let mut builder = builder_with_prelude();
 
-    let mut module = Module::new("host.math");
+    let mut module = Module::new("host.math", None);
     module
         .export("inc", |_state: &(), x: i32| Ok(x + 1))
         .unwrap();
@@ -909,7 +909,7 @@ async fn module_injected_from_rust_sync_and_async_exports() {
 async fn module_injected_from_rust_native_value_exports_sync() {
     let mut builder = Builder::with_prelude(true).unwrap();
 
-    let mut module = Module::new("host.ptrsync");
+    let mut module = Module::new("host.ptrsync", None);
     module
         .export_native(
             "pick",
@@ -996,7 +996,7 @@ async fn module_injected_from_rust_native_value_exports_sync() {
 async fn module_injected_from_rust_allows_overloaded_export_names() {
     let mut builder = builder_with_prelude();
 
-    let mut module = Module::new("host.over");
+    let mut module = Module::new("host.over", None);
     module.export("id", |_state: &(), x: i32| Ok(x)).unwrap();
     module.export("id", |_state: &(), x: String| Ok(x)).unwrap();
     builder.inject_module(module).unwrap();
@@ -1040,7 +1040,7 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
 async fn module_injected_from_rust_exposes_module_local_embedder_types() {
     let mut builder = builder_with_prelude();
 
-    let mut module = Module::new("host.delay");
+    let mut module = Module::new("host.delay", None);
     module.add_rex_adt::<LocalRunSpec>().unwrap();
     module
         .export_value("default_run_spec", LocalRunSpec)
@@ -1078,7 +1078,7 @@ async fn module_injected_from_rust_exposes_module_local_embedder_types() {
 async fn module_injected_from_rust_native_value_exports_async() {
     let mut builder = Builder::with_prelude(true).unwrap();
 
-    let mut module = Module::new("host.ptrasync");
+    let mut module = Module::new("host.ptrasync", None);
     module
         .export_native_async(
             "pick_async",
@@ -1166,7 +1166,7 @@ async fn module_injected_from_rust_native_value_exports_async() {
 
 #[test]
 fn module_native_value_export_rejects_invalid_arity_scheme_pair() {
-    let mut module = Module::new("host.invalid");
+    let mut module = Module::new("host.invalid", None);
     let unary_scheme = Scheme::new(vec![], vec![], Type::fun(i32_type(), i32_type()));
 
     let err = module
@@ -1188,7 +1188,7 @@ fn module_native_value_export_rejects_invalid_arity_scheme_pair() {
 
 #[test]
 fn module_native_async_value_export_rejects_invalid_arity_scheme_pair() {
-    let mut module = Module::new("host.invalid.async");
+    let mut module = Module::new("host.invalid.async", None);
     let unary_scheme = Scheme::new(vec![], vec![], Type::fun(i32_type(), i32_type()));
 
     let err = module
@@ -1210,7 +1210,7 @@ fn module_native_async_value_export_rejects_invalid_arity_scheme_pair() {
 
 #[test]
 fn module_native_value_exports_reject_static_function_values() {
-    let mut module = Module::new("host.invalid.function");
+    let mut module = Module::new("host.invalid.function", None);
     let callback_type = Type::fun(i32_type(), i32_type());
 
     let argument_error = module
@@ -1238,7 +1238,7 @@ fn module_native_value_exports_reject_static_function_values() {
 async fn module_injected_from_rust_wildcard_import() {
     let mut builder = builder_with_prelude();
 
-    let mut module = Module::new("host.ops");
+    let mut module = Module::new("host.ops", None);
     module
         .export("triple", |_state: &(), x: i32| Ok(x * 3))
         .unwrap();
@@ -1268,11 +1268,11 @@ async fn module_injected_from_rust_wildcard_import() {
 async fn module_injected_from_rust_rejects_duplicate_module_name() {
     let mut builder = builder_with_prelude();
 
-    let mut one = Module::new("host.dupe");
+    let mut one = Module::new("host.dupe", None);
     one.export("x", |_state: &(), x: i32| Ok(x)).unwrap();
     builder.inject_module(one).unwrap();
 
-    let mut two = Module::new("host.dupe");
+    let mut two = Module::new("host.dupe", None);
     two.export("y", |_state: &(), x: i32| Ok(x)).unwrap();
     let err = builder.inject_module(two).unwrap_err();
     assert!(err.to_string().contains("already injected"));
@@ -1722,7 +1722,7 @@ async fn module_import_selected_clause_class_name_does_not_create_type_facet() {
 async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_imports() {
     let mut builder = builder_with_prelude();
 
-    let mut module = Module::new("host.types");
+    let mut module = Module::new("host.types", None);
     module
         .add_adt_decls_from_types(&mut builder, vec![LocalRunSpec::rex_type()])
         .unwrap();
@@ -1784,10 +1784,10 @@ async fn module_import_missing_class_export_in_instance_header() {
 async fn module_injected_from_rust_can_add_typeclass_instances() {
     let mut builder = builder_with_prelude();
 
-    let mut module = Module::new("host.defaults");
+    let mut module = Module::new("host.defaults", None);
     let mut supply = TypeVarSupply::new();
     let mut token = AdtDecl::new(&Symbol::intern("Token"), &[], &mut supply);
-    token.add_variant(Symbol::intern("Token"), vec![]);
+    token.add_variant(Symbol::intern("Token"), vec![], None);
     module.add_adt_decl(token).unwrap();
     module
         .export_native(

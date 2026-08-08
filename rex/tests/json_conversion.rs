@@ -6,7 +6,7 @@ use rex::{
     engine::{Builder, CompileOptions, IntoRex, Value, standard_type_system},
     json::{json_to_rex, rex_to_json},
     parser::parse as parse_rex,
-    typesystem::{AdtDecl, BuiltinTypeId, RexType, Type, TypeSystem, TypeVarSupply},
+    typesystem::{AdtArgument, AdtDecl, BuiltinTypeId, RexType, Type, TypeSystem, TypeVarSupply},
 };
 use serde::Serialize;
 use serde_json::json;
@@ -20,7 +20,7 @@ fn mk_unit_enum(name: &str, variants: &[&str]) -> AdtDecl {
     let mut supply = TypeVarSupply::new();
     let mut adt = AdtDecl::new(&Symbol::intern(name), &[], &mut supply);
     for variant in variants {
-        adt.add_variant(Symbol::intern(variant), vec![]);
+        adt.add_variant(Symbol::intern(variant), vec![], None);
     }
     adt
 }
@@ -188,12 +188,13 @@ fn struct_like_single_variant_adt_roundtrip() {
     let mut foo = AdtDecl::new(&Symbol::intern("Foo"), &[], &mut supply);
     foo.add_variant(
         Symbol::intern("Foo"),
-        vec![Type::record(vec![
+        vec![AdtArgument::positional(Type::record(vec![
             (Symbol::intern("a"), Type::builtin(BuiltinTypeId::U64)),
             (Symbol::intern("b"), Type::builtin(BuiltinTypeId::String)),
-        ])],
+        ]))],
+        None,
     );
-    ts.register_adt(&foo);
+    ts.register_adt(&foo).unwrap();
 
     let foo_ty = Type::con("Foo", 0);
     let foo_json = json!({ "a": 42, "b": "Hello" });
@@ -211,7 +212,7 @@ fn struct_like_single_variant_adt_roundtrip() {
 fn unit_enum_string_roundtrip() {
     let mut ts = mk_type_system();
     let color = mk_unit_enum("Color", &["Red", "Green", "Blue"]);
-    ts.register_adt(&color);
+    ts.register_adt(&color).unwrap();
     let color_ty = Type::con("Color", 0);
 
     for v in [json!("Red"), json!("Green"), json!("Blue")] {
@@ -225,7 +226,7 @@ fn unit_enum_string_roundtrip() {
 fn rex_to_json_rejects_qualified_foreign_constructor() {
     let mut ts = mk_type_system();
     let color = mk_unit_enum("Color", &["Red"]);
-    ts.register_adt(&color);
+    ts.register_adt(&color).unwrap();
     let color_ty = Type::con("Color", 0);
     let value = Value::Adt(Symbol::intern("another.module.Red"), vec![]);
 

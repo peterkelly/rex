@@ -300,6 +300,7 @@ pub fn interface_declarations_from_declarations(decls: &Declarations) -> Declara
                 params: fd.params.clone(),
                 ret: fd.ret.clone(),
                 constraints: fd.constraints.clone(),
+                docs: fd.docs.clone(),
             });
         }
     }

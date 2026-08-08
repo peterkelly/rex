@@ -64,7 +64,7 @@ impl Importer for LazySampleImporter {
                 return Ok(None);
             }
             self.calls.fetch_add(1, Ordering::SeqCst);
-            let mut module = Module::new("sample");
+            let mut module = Module::new("sample", None);
             module.add_rex_adt::<Side>().unwrap();
             module.add_rex_adt::<Correctness>().unwrap();
             module.add_rex_adt::<Label>().unwrap();
@@ -85,7 +85,7 @@ impl Importer for LazySampleImporter {
 async fn module_render_label_with_module_scoped_adts_left_and_right() {
     let mut builder: Builder<()> = Builder::with_prelude(()).unwrap();
 
-    let mut module = Module::new("sample");
+    let mut module = Module::new("sample", None);
     module.add_rex_adt::<Side>().unwrap();
     module.add_rex_adt::<Correctness>().unwrap();
     module.add_rex_adt::<Label>().unwrap();
@@ -203,7 +203,7 @@ async fn importer_rust_module_preserves_module_scoped_adts() {
 async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
     let mut builder: Builder<()> = Builder::with_prelude(()).unwrap();
 
-    let mut module = Module::new("sample");
+    let mut module = Module::new("sample", None);
     module.add_rex_adt::<Label>().unwrap();
     module
         .export("render_label", |_: &(), label: Label| {
@@ -241,7 +241,7 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
     // we keep surfacing that ambiguity instead of silently picking one constructor.
     let mut builder: Builder<()> = Builder::with_prelude(()).unwrap();
 
-    let mut module = Module::new("sample");
+    let mut module = Module::new("sample", None);
     module.add_rex_adt::<Side>().unwrap();
     module.add_rex_adt::<Correctness>().unwrap();
     builder.inject_module(module).unwrap();

@@ -278,7 +278,7 @@ pub enum TypeExpr {
     App(Span, Box<TypeExpr>, Box<TypeExpr>),
     Fun(Span, Box<TypeExpr>, Box<TypeExpr>),
     Tuple(Span, Vec<TypeExpr>),
-    Record(Span, Vec<(Symbol, TypeExpr)>),
+    Record(Span, Vec<TypeField>),
 }
 
 impl TypeExpr {
@@ -313,7 +313,11 @@ impl TypeExpr {
                 Span::default(),
                 fields
                     .iter()
-                    .map(|(name, ty)| (name.clone(), ty.reset_spans()))
+                    .map(|field| TypeField {
+                        name: field.name.clone(),
+                        typ: field.typ.reset_spans(),
+                        docs: field.docs.clone(),
+                    })
                     .collect(),
             ),
         }
@@ -370,10 +374,10 @@ impl Display for TypeExpr {
             }
             TypeExpr::Record(_, fields) => {
                 '{'.fmt(f)?;
-                for (i, (name, ty)) in fields.iter().enumerate() {
-                    name.fmt(f)?;
+                for (i, field) in fields.iter().enumerate() {
+                    field.name.fmt(f)?;
                     ": ".fmt(f)?;
-                    ty.fmt(f)?;
+                    field.typ.fmt(f)?;
                     if i + 1 < fields.len() {
                         ", ".fmt(f)?;
                     }
@@ -382,6 +386,14 @@ impl Display for TypeExpr {
             }
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct TypeField {
+    pub name: Symbol,
+    pub typ: TypeExpr,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -399,7 +411,16 @@ impl TypeConstraint {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TypeVariant {
     pub name: Symbol,
-    pub args: Vec<TypeExpr>,
+    pub args: Vec<TypeVariantArg>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct TypeVariantArg {
+    pub typ: TypeExpr,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -410,13 +431,26 @@ pub enum TypeDeclKind {
     Adt(Vec<TypeVariant>),
 }
 
+/// A named generic parameter on a type declaration.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct TypeParam {
+    /// The parameter name used in the declaration body.
+    pub name: Symbol,
+    /// Markdown API documentation for this type parameter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TypeDecl {
     pub span: Span,
     pub is_pub: bool,
     pub name: Symbol,
-    pub params: Vec<Symbol>,
+    /// The declaration's generic parameters and their optional API documentation.
+    pub params: Vec<TypeParam>,
     pub kind: TypeDeclKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -429,6 +463,8 @@ pub struct FnDecl {
     pub ret: TypeExpr,
     pub constraints: Vec<TypeConstraint>,
     pub body: Arc<Expr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -440,6 +476,8 @@ pub struct DeclareFnDecl {
     pub params: Vec<(Var, TypeExpr)>,
     pub ret: TypeExpr,
     pub constraints: Vec<TypeConstraint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -447,6 +485,8 @@ pub struct ClassMethodSig {
     pub name: Symbol,
     pub type_params: Vec<Symbol>,
     pub typ: TypeExpr,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -457,6 +497,8 @@ pub struct ClassDecl {
     pub params: Vec<Symbol>,
     pub supers: Vec<TypeConstraint>,
     pub methods: Vec<ClassMethodSig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -476,6 +518,8 @@ pub struct InstanceDecl {
     pub head: TypeExpr,
     pub context: Vec<TypeConstraint>,
     pub methods: Vec<InstanceMethodImpl>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]

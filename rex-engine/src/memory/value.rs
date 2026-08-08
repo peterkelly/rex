@@ -965,7 +965,7 @@ fn resolve_adt_variant<'a>(
     let field_types = variant
         .args
         .iter()
-        .map(|field| instantiate_type(field, &substitutions))
+        .map(|field| instantiate_type(&field.typ(), &substitutions))
         .collect();
     Ok((adt, variant, field_types))
 }
@@ -1042,7 +1042,10 @@ fn conversion_error(
 mod tests {
     use super::*;
     use crate::{memory::heap::Heap, prelude::standard_type_system};
-    use rex_typesystem::{types::BuiltinTypeId, typesystem::TypeVarSupply};
+    use rex_typesystem::{
+        types::{AdtArgument, BuiltinTypeId},
+        typesystem::TypeVarSupply,
+    };
     use static_assertions::assert_impl_all;
 
     assert_impl_all!(Value: Send, Sync);
@@ -1220,10 +1223,14 @@ mod tests {
         let expected = Type::con(name.clone(), 0);
         let mut supply = TypeVarSupply::new();
         let mut declaration = AdtDecl::new(&name, &[], &mut supply);
-        declaration.add_variant(Symbol::intern("End"), vec![]);
-        declaration.add_variant(Symbol::intern("Next"), vec![expected.clone()]);
+        declaration.add_variant(Symbol::intern("End"), vec![], None);
+        declaration.add_variant(
+            Symbol::intern("Next"),
+            vec![AdtArgument::positional(expected.clone())],
+            None,
+        );
         let mut types = standard_type_system().unwrap();
-        types.register_adt(&declaration);
+        types.register_adt(&declaration).unwrap();
 
         let mut input = Value::Adt(Symbol::intern("End"), vec![]);
         for _ in 0..DEPTH {

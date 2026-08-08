@@ -263,7 +263,7 @@ where
 
         self.type_system.register_instance(
             "Default",
-            Instance::new(vec![], Predicate::new(class.clone(), head_ty.clone())),
+            Instance::new(vec![], Predicate::new(class.clone(), head_ty.clone()), None),
         );
 
         let mut methods: BTreeMap<Symbol, Arc<TypedExpr>> = BTreeMap::new();
@@ -568,6 +568,7 @@ where
     let mut package = CompilationPackage {
         decls: module.declarations(),
         body: None,
+        docs: module.docs.clone(),
     };
     package
         .decls
@@ -632,6 +633,7 @@ where
             name,
             interface: _,
             payload,
+            required_adts: _,
         } = export;
         let qualified_name = module_export_symbol(module_name, &name);
         let previous_context = self.module_loader.registration_module_context.clone();
@@ -801,7 +803,7 @@ where
         if schemes.len() != 1 {
             return Err(EngineError::AmbiguousOverload { name: name.clone() });
         }
-        Ok(schemes[0].clone())
+        Ok(schemes[0].scheme.clone())
     }
 
     pub(crate) fn ensure_cycle_interfaces_published(
@@ -871,6 +873,7 @@ where
             name,
             interface: _,
             payload,
+            required_adts: _,
         } = export;
         let qualified_name = module_export_symbol(module_name, &name);
         let previous_context = self.module_loader.registration_module_context.clone();
@@ -1051,8 +1054,8 @@ fn inject_adt_parts<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let register_type = match type_system.adts.get(&adt.name) {
-        Some(existing) if adt_shape_eq(existing, &adt) => false,
+    match type_system.adts.get(&adt.name) {
+        Some(existing) if adt_shape_eq(existing, &adt) => {}
         Some(existing) => {
             return Err(EngineError::Custom(format!(
                 "conflicting ADT registration for `{}`: existing={} new={}",
@@ -1061,12 +1064,9 @@ where
                 adt_shape(&adt)
             )));
         }
-        None => true,
-    };
-
-    if register_type {
-        type_system.register_adt(&adt);
+        None => {}
     }
+    type_system.register_adt(&adt)?;
     for (ctor, scheme) in adt.constructor_schemes() {
         if runtime.natives.contains_scheme(&ctor, &scheme) {
             continue;
@@ -1302,10 +1302,10 @@ fn register_type_scheme_parts(
         Some(schemes) => {
             let has_poly = schemes
                 .iter()
-                .any(|s| !s.vars.is_empty() || !s.preds.is_empty());
+                .any(|value| !value.scheme.vars.is_empty() || !value.scheme.preds.is_empty());
             if has_poly {
                 for existing in schemes {
-                    if scheme_accepts(type_system, existing, &injected.typ)? {
+                    if scheme_accepts(type_system, &existing.scheme, &injected.typ)? {
                         return Ok(());
                     }
                 }
@@ -1314,7 +1314,7 @@ fn register_type_scheme_parts(
                     typ: injected.typ.to_string(),
                 })
             } else {
-                if schemes.iter().any(|s| s == injected) {
+                if schemes.iter().any(|s| &s.scheme == injected) {
                     return Ok(());
                 }
                 type_system.add_overload(name.as_ref(), injected.clone());

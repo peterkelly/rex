@@ -24,6 +24,12 @@ pub use rex_typesystem::inference::infer_typed;
 /// Structured declaration for a Rex algebraic data type.
 pub use rex_typesystem::types::AdtDecl;
 
+/// A constructor argument in an algebraic data type declaration.
+pub use rex_typesystem::types::AdtArgument;
+
+/// A named field in an algebraic data type record payload.
+pub use rex_typesystem::types::AdtField;
+
 /// A named type parameter in an algebraic data type declaration.
 pub use rex_typesystem::types::AdtParam;
 
@@ -44,6 +50,9 @@ pub use rex_typesystem::types::RexAdt;
 
 /// Trait for Rust types that have a corresponding Rex type.
 pub use rex_typesystem::types::RexType;
+
+/// A registered value or function overload with its type, parameter names, and API documentation.
+pub use rex_typesystem::types::RegisteredValue;
 
 /// A polymorphic type scheme with quantified variables and constraints.
 pub use rex_typesystem::types::Scheme;
@@ -72,17 +81,26 @@ pub use rex_typesystem::typesystem::TypeSystem;
 /// Generator for fresh type variables during inference.
 pub use rex_typesystem::typesystem::TypeVarSupply;
 
-/// Current schema version for JSON-facing type bundles.
-pub use rex_typesystem::wire::TYPE_BUNDLE_SCHEMA_VERSION;
-
-/// Self-contained JSON-facing set of Rex types plus referenced ADT declarations.
+/// Persistable JSON-facing values, API documentation, and referenced ADT declarations.
 pub use rex_typesystem::wire::TypeBundle;
+
+/// A decoded type bundle containing semantic ADTs, values, and documentation.
+pub use rex_typesystem::wire::DecodedTypeBundle;
+
+/// A decoded type bundle after its ADTs have been registered.
+pub use rex_typesystem::wire::RegisteredTypeBundle;
+
+/// JSON-facing constructor argument in an ADT declaration.
+pub use rex_typesystem::wire::WireAdtArg;
 
 /// JSON-facing ADT declaration.
 pub use rex_typesystem::wire::WireAdtDecl;
 
 /// JSON-facing ADT variant declaration.
 pub use rex_typesystem::wire::WireAdtVariant;
+
+/// JSON-facing ADT type parameter.
+pub use rex_typesystem::wire::WireAdtParam;
 
 /// JSON-facing record field type.
 pub use rex_typesystem::wire::WireField;
@@ -98,3 +116,6 @@ pub use rex_typesystem::wire::WireType;
 
 /// JSON-facing type variable.
 pub use rex_typesystem::wire::WireTypeVar;
+
+/// JSON-facing registered function or value declaration with parameter names and documentation.
+pub use rex_typesystem::wire::WireValueDecl;

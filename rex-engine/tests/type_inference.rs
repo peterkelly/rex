@@ -99,14 +99,14 @@ fn prelude_injects_functions() {
     assert_eq!(length.len(), 1);
     let minus = &minus[0];
     let div = &div[0];
-    assert_eq!(minus.preds.len(), 1);
-    assert_eq!(minus.vars.len(), 1);
-    assert_eq!(div.preds.len(), 1);
-    assert_eq!(div.vars.len(), 1);
-    assert_eq!(minus.preds[0].class.as_ref(), "Subtractive");
-    assert_eq!(div.preds[0].class.as_ref(), "Divisive");
-    assert_eq!(length[0].preds.len(), 1);
-    assert_eq!(length[0].preds[0].class.as_ref(), "Length");
+    assert_eq!(minus.scheme.preds.len(), 1);
+    assert_eq!(minus.scheme.vars.len(), 1);
+    assert_eq!(div.scheme.preds.len(), 1);
+    assert_eq!(div.scheme.vars.len(), 1);
+    assert_eq!(minus.scheme.preds[0].class.as_ref(), "Subtractive");
+    assert_eq!(div.scheme.preds[0].class.as_ref(), "Divisive");
+    assert_eq!(length[0].scheme.preds.len(), 1);
+    assert_eq!(length[0].scheme.preds[0].class.as_ref(), "Length");
 }
 
 #[test]

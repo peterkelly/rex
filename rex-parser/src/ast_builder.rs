@@ -6,7 +6,8 @@ use std::{
 use rex_ast::{
     ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause,
     ImportDecl, ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, LetRecBinding, NameRef,
-    Pattern, Scope, Symbol, TypeConstraint, TypeDecl, TypeDeclKind, TypeExpr, TypeVariant, Var,
+    Pattern, Scope, Symbol, TypeConstraint, TypeDecl, TypeDeclKind, TypeExpr, TypeField,
+    TypeVariant, TypeVariantArg, Var,
 };
 use rex_ast::{Position, Span, Spanned};
 
@@ -255,7 +256,10 @@ impl AstBuilder {
             .map(|param| {
                 expect_token(param, TokenKind::Ident)
                     .and_then(ident_text)
-                    .map(|name| Symbol::intern(&name))
+                    .map(|name| rex_ast::TypeParam {
+                        name: Symbol::intern(&name),
+                        docs: None,
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let kind = if let Some(record) = first_rule(node, RexRule::TypeRecord) {
@@ -273,15 +277,23 @@ impl AstBuilder {
             name,
             params,
             kind,
+            docs: None,
         })
     }
 
     fn type_variant(&mut self, node: &CstNode<RexRule>) -> Result<TypeVariant, ParseError> {
         let name = Symbol::intern(&ident_text(expect_token(node, TokenKind::Ident)?)?);
         let args = child_rules(node, RexRule::TypeAtom)
-            .map(|atom| self.type_atom(atom))
+            .map(|atom| {
+                self.type_atom(atom)
+                    .map(|typ| TypeVariantArg { typ, docs: None })
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(TypeVariant { name, args })
+        Ok(TypeVariant {
+            name,
+            args,
+            docs: None,
+        })
     }
 
     fn fn_decl(&mut self, node: &CstNode<RexRule>, is_pub: bool) -> Result<FnDecl, ParseError> {
@@ -313,6 +325,7 @@ impl AstBuilder {
                 ret,
                 constraints,
                 body,
+                docs: None,
             });
         }
 
@@ -333,6 +346,7 @@ impl AstBuilder {
             ret,
             constraints,
             body,
+            docs: None,
         })
     }
 
@@ -374,6 +388,7 @@ impl AstBuilder {
             params,
             ret,
             constraints,
+            docs: None,
         })
     }
 
@@ -402,6 +417,7 @@ impl AstBuilder {
                             name: self.value_name(expect_rule(method, RexRule::ValueName)?)?,
                             type_params: self.generic_params_opt(method)?,
                             typ: self.type_expr(expect_rule(method, RexRule::TypeExpr)?)?,
+                            docs: None,
                         })
                     })
                     .collect::<Result<Vec<_>, ParseError>>()
@@ -415,6 +431,7 @@ impl AstBuilder {
             params,
             supers,
             methods,
+            docs: None,
         })
     }
 
@@ -457,6 +474,7 @@ impl AstBuilder {
             head,
             context,
             methods,
+            docs: None,
         })
     }
 
@@ -588,10 +606,11 @@ impl AstBuilder {
     fn type_record(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParseError> {
         let fields = child_rules(node, RexRule::TypeField)
             .map(|field| {
-                Ok((
-                    Symbol::intern(&ident_text(expect_token(field, TokenKind::Ident)?)?),
-                    self.type_expr(expect_rule(field, RexRule::TypeExpr)?)?,
-                ))
+                Ok(TypeField {
+                    name: Symbol::intern(&ident_text(expect_token(field, TokenKind::Ident)?)?),
+                    typ: self.type_expr(expect_rule(field, RexRule::TypeExpr)?)?,
+                    docs: None,
+                })
             })
             .collect::<Result<Vec<_>, ParseError>>()?;
         Ok(TypeExpr::Record(node.span, fields))

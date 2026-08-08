@@ -5,7 +5,7 @@ use rex_engine::{Builder, CompileOptions, EngineError, Module, Value};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
-    types::{BuiltinTypeId, Type, TypeVar},
+    types::{AdtArgument, BuiltinTypeId, Type, TypeVar},
 };
 
 fn parse(code: &str) -> Arc<Expr> {
@@ -186,7 +186,7 @@ async fn evaluator_rejects_missing_or_extra_main_inputs() {
 #[test]
 fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
     let mut builder = Builder::with_prelude(()).unwrap();
-    let mut module = Module::new("acme.types");
+    let mut module = Module::new("acme.types", None);
     let a = Type::var(TypeVar::new(0, Some(Symbol::intern("a"))));
     let types = vec![
         Type::fun(
@@ -220,7 +220,7 @@ fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
 #[test]
 fn module_add_adt_decls_from_types_rejects_conflicting_adts() {
     let mut builder = Builder::with_prelude(()).unwrap();
-    let mut module = Module::new("acme.types");
+    let mut module = Module::new("acme.types", None);
     let types = vec![Type::user_con("Thing", 1), Type::user_con("Thing", 2)];
 
     let err = module
@@ -238,9 +238,17 @@ fn module_add_adt_decls_from_types_rejects_conflicting_adts() {
 fn inject_adt_family_rejects_cycles() {
     let mut builder = Builder::with_prelude(()).unwrap();
     let mut a = builder.adt_decl("A", &[]);
-    a.add_variant(Symbol::intern("A"), vec![Type::con("B", 0)]);
+    a.add_variant(
+        Symbol::intern("A"),
+        vec![AdtArgument::positional(Type::con("B", 0))],
+        None,
+    );
     let mut b = builder.adt_decl("B", &[]);
-    b.add_variant(Symbol::intern("B"), vec![Type::con("A", 0)]);
+    b.add_variant(
+        Symbol::intern("B"),
+        vec![AdtArgument::positional(Type::con("A", 0))],
+        None,
+    );
 
     let mut module = Module::<()>::global();
     let err = module.add_adt_family(vec![a, b]).unwrap_err();
@@ -252,12 +260,15 @@ fn inject_adt_family_rejects_cycles() {
 async fn injected_module_can_define_pub_adt_declarations() {
     let mut builder = Builder::with_prelude(()).unwrap();
 
-    let mut module = Module::new("acme.status");
+    let mut module = Module::new("acme.status", None);
     let mut status = builder.adt_decl("Status", &[]);
-    status.add_variant(Symbol::intern("Ready"), vec![]);
+    status.add_variant(Symbol::intern("Ready"), vec![], None);
     status.add_variant(
         Symbol::intern("Failed"),
-        vec![Type::builtin(BuiltinTypeId::String)],
+        vec![AdtArgument::positional(Type::builtin(
+            BuiltinTypeId::String,
+        ))],
+        None,
     );
     module.add_adt_decl(status).unwrap();
     builder.inject_module(module).unwrap();

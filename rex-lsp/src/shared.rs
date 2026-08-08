@@ -168,7 +168,11 @@ pub(crate) fn semantic_candidate_values(
             break;
         }
         let remaining = MAX_SEMANTIC_ENV_SCHEMES_SCAN - scanned;
-        let kept = schemes.into_iter().take(remaining).collect::<Vec<_>>();
+        let kept = schemes
+            .into_iter()
+            .take(remaining)
+            .map(|value| value.scheme)
+            .collect::<Vec<_>>();
         if kept.is_empty() {
             continue;
         }
@@ -451,7 +455,7 @@ pub(crate) fn prelude_completion_values() -> &'static Vec<(String, CompletionIte
             }
             let is_fun = schemes
                 .iter()
-                .any(|scheme| matches!(scheme.typ.as_ref(), TypeKind::Fun(..)));
+                .any(|value| matches!(value.scheme.typ.as_ref(), TypeKind::Fun(..)));
             let kind = if is_fun {
                 CompletionItemKind::FUNCTION
             } else {

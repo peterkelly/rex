@@ -19,6 +19,9 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - `infer_typed(&mut ts, expr)` / `infer(&mut ts, expr)` for type inference.
   - The inference implementation itself lives in `rex-typesystem/src/inference.rs`; `typesystem.rs` now holds the shared core types, environments, and registration logic.
   - For untrusted code, set `rex_typesystem::TypeSystemLimits::safe_defaults()` before inference.
+  - `RegisteredValue` carries a scheme, Rex-visible parameter names, and optional Markdown docs.
+    `TypeBundle` is the JSON-facing persistence format for those registrations and their referenced,
+    documented ADTs.
 - `rex-engine`: host environment builder, compiler, and runtime evaluator. Entry points:
   - `Builder::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
   - `standard_type_system()?` to create a typing environment with the `rex-engine` standard prelude.
@@ -38,8 +41,9 @@ The crates are designed so you can use them independently (e.g. parser-only tool
     points that cross phases return `ExecutionError`.
   - Host module injection API: `Module` + `Export` + `Builder::inject_module` for eager
     registration, or `Importer<State>` returning `ResolvedModuleContent::module(...)` for lazy
-    Rust-backed modules.
-- `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
+    Rust-backed modules. Named modules accept optional Markdown docs in `Module::new`.
+- `rex-proc-macro`: `#[derive(Rex)]`, `#[rex::export]`, and `#[rex::module]` bridge documented Rust
+  types, functions, and modules into Rex registrations.
 - `rex`: CLI front-end around the pipeline.
 - `rex-lsp` / `rex-vscode`: editor tooling.
 

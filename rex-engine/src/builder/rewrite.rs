@@ -23,7 +23,7 @@ use futures::future::BoxFuture;
 use rex_ast::{
     ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl,
     InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Symbol, TypeConstraint, TypeDecl,
-    TypeDeclKind, TypeExpr, TypeVariant, Var,
+    TypeDeclKind, TypeExpr, TypeField, TypeVariant, TypeVariantArg, Var,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -421,8 +421,8 @@ fn validate_import_uses_type_expr(
             Ok(())
         }
         TypeExpr::Record(_, fields) => {
-            for (_, t) in fields {
-                validate_import_uses_type_expr(t, bound, aliases, shadowed_values)?;
+            for field in fields {
+                validate_import_uses_type_expr(&field.typ, bound, aliases, shadowed_values)?;
             }
             Ok(())
         }
@@ -529,7 +529,7 @@ fn validate_import_uses_decls_and_body(
                     for v in variants {
                         for t in &v.args {
                             validate_import_uses_type_expr(
-                                t,
+                                &t.typ,
                                 &BTreeSet::new(),
                                 aliases,
                                 shadowed_values,
@@ -661,7 +661,7 @@ fn validate_import_uses_declarations_and_body(
                 for v in variants {
                     for t in &v.args {
                         validate_import_uses_type_expr(
-                            t,
+                            &t.typ,
                             &BTreeSet::new(),
                             aliases,
                             shadowed_values,
@@ -779,7 +779,11 @@ pub fn rewrite_import_uses_package(
     };
     let (decls, body) =
         rewrite_import_uses_declarations_and_body(&package.decls, package.body.as_deref(), &scope);
-    CompilationPackage { decls, body }
+    CompilationPackage {
+        decls,
+        body,
+        docs: package.docs.clone(),
+    }
 }
 
 fn rewrite_import_uses_declarations_and_body(
@@ -904,6 +908,7 @@ fn rewrite_import_uses_decls_and_body(
                         })
                         .collect(),
                     body,
+                    docs: fd.docs.clone(),
                 })
             }
             Decl::DeclareFn(df) => Decl::DeclareFn(DeclareFnDecl {
@@ -958,6 +963,7 @@ fn rewrite_import_uses_decls_and_body(
                         ),
                     })
                     .collect(),
+                docs: df.docs.clone(),
             }),
             Decl::Type(td) => Decl::Type(TypeDecl {
                 span: td.span,
@@ -983,21 +989,24 @@ fn rewrite_import_uses_decls_and_body(
                                 args: v
                                     .args
                                     .iter()
-                                    .map(|t| {
-                                        rewrite_import_uses_type_expr(
-                                            t,
+                                    .map(|arg| TypeVariantArg {
+                                        typ: rewrite_import_uses_type_expr(
+                                            &arg.typ,
                                             &decl_bound,
                                             aliases,
                                             imported_types,
                                             shadowed_types,
                                             shadowed_values,
-                                        )
+                                        ),
+                                        docs: arg.docs.clone(),
                                     })
                                     .collect(),
+                                docs: v.docs.clone(),
                             })
                             .collect(),
                     ),
                 },
+                docs: td.docs.clone(),
             }),
             Decl::Class(cd) => Decl::Class(ClassDecl {
                 span: cd.span,
@@ -1026,6 +1035,7 @@ fn rewrite_import_uses_decls_and_body(
                         ),
                     })
                     .collect(),
+                docs: cd.docs.clone(),
                 methods: cd
                     .methods
                     .iter()
@@ -1040,6 +1050,7 @@ fn rewrite_import_uses_decls_and_body(
                             shadowed_types,
                             shadowed_values,
                         ),
+                        docs: m.docs.clone(),
                     })
                     .collect(),
             }),
@@ -1112,6 +1123,7 @@ fn rewrite_import_uses_decls_and_body(
                         })
                         .collect(),
                     methods,
+                    docs: inst.docs.clone(),
                 })
             }
             other => other.clone(),
@@ -1518,18 +1530,17 @@ fn rewrite_import_uses_type_expr(
             *span,
             fields
                 .iter()
-                .map(|(name, ty)| {
-                    (
-                        name.clone(),
-                        rewrite_import_uses_type_expr(
-                            ty,
-                            bound,
-                            aliases,
-                            imported_types,
-                            shadowed_types,
-                            shadowed_values,
-                        ),
-                    )
+                .map(|field| TypeField {
+                    name: field.name.clone(),
+                    typ: rewrite_import_uses_type_expr(
+                        &field.typ,
+                        bound,
+                        aliases,
+                        imported_types,
+                        shadowed_types,
+                        shadowed_values,
+                    ),
+                    docs: field.docs.clone(),
                 })
                 .collect(),
         ),

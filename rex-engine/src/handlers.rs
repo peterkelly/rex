@@ -91,6 +91,7 @@ pub(crate) fn declare_fn_decl_from_scheme(export_name: &str, scheme: &Scheme) ->
                 typ: type_expr_from_type(&pred.typ),
             })
             .collect(),
+        docs: None,
     }
 }
 
@@ -112,6 +113,12 @@ macro_rules! define_handler_impl {
             F: for<'a> Fn(&'a State) -> Result<R, EngineError> + Send + Sync + 'static,
             R: IntoRex + RexType,
         {
+            fn collect_required_adts(
+                out: &mut Vec<rex_typesystem::types::AdtDecl>,
+            ) -> Result<(), rex_typesystem::error::TypeError> {
+                R::collect_rex_family(out)
+            }
+
             fn interface_decl(export_name: &str) -> DeclareFnDecl {
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
                 declare_fn_decl_from_scheme(export_name, &scheme)
@@ -154,6 +161,13 @@ macro_rules! define_handler_impl {
             R: IntoRex + RexType,
             $($arg_ty: FromRex + RexType),+
         {
+            fn collect_required_adts(
+                out: &mut Vec<rex_typesystem::types::AdtDecl>,
+            ) -> Result<(), rex_typesystem::error::TypeError> {
+                $(<$arg_ty as RexType>::collect_rex_family(out)?;)+
+                R::collect_rex_family(out)
+            }
+
             fn interface_decl(export_name: &str) -> DeclareFnDecl {
                 let typ = native_fn_type!($($arg_ty),+ ; R);
                 let scheme = Scheme::new(vec![], vec![], typ);
@@ -202,6 +216,12 @@ impl<State> HostFnSync<State, NativeCallableSig> for (Scheme, usize, SyncNativeC
 where
     State: Clone + Send + Sync + 'static,
 {
+    fn collect_required_adts(
+        _out: &mut Vec<rex_typesystem::types::AdtDecl>,
+    ) -> Result<(), rex_typesystem::error::TypeError> {
+        Ok(())
+    }
+
     fn interface_decl(_export_name: &str) -> DeclareFnDecl {
         unreachable!("native callable handlers use interface_decl_for")
     }
@@ -236,6 +256,12 @@ macro_rules! define_async_handler_impl {
             Fut: Future<Output = Result<R, EngineError>> + Send + 'static,
             R: IntoRex + RexType,
         {
+            fn collect_required_adts(
+                out: &mut Vec<rex_typesystem::types::AdtDecl>,
+            ) -> Result<(), rex_typesystem::error::TypeError> {
+                R::collect_rex_family(out)
+            }
+
             fn interface_decl(export_name: &str) -> DeclareFnDecl {
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
                 declare_fn_decl_from_scheme(export_name, &scheme)
@@ -285,6 +311,13 @@ macro_rules! define_async_handler_impl {
             R: IntoRex + RexType,
             $($arg_ty: FromRex + RexType),+
         {
+            fn collect_required_adts(
+                out: &mut Vec<rex_typesystem::types::AdtDecl>,
+            ) -> Result<(), rex_typesystem::error::TypeError> {
+                $(<$arg_ty as RexType>::collect_rex_family(out)?;)+
+                R::collect_rex_family(out)
+            }
+
             fn interface_decl(export_name: &str) -> DeclareFnDecl {
                 let typ = native_fn_type!($($arg_ty),+ ; R);
                 let scheme = Scheme::new(vec![], vec![], typ);
@@ -345,6 +378,12 @@ impl<State> HostFnAsync<State, AsyncNativeCallableSig>
 where
     State: Clone + Send + Sync + 'static,
 {
+    fn collect_required_adts(
+        _out: &mut Vec<rex_typesystem::types::AdtDecl>,
+    ) -> Result<(), rex_typesystem::error::TypeError> {
+        Ok(())
+    }
+
     fn interface_decl(_export_name: &str) -> DeclareFnDecl {
         unreachable!("native async callable handlers use interface_decl_for")
     }

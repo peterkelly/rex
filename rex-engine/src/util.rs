@@ -1,5 +1,5 @@
 use crate::error::EngineError;
-use rex_ast::{NameRef, Span, Symbol, TypeExpr};
+use rex_ast::{NameRef, Span, Symbol, TypeExpr, TypeField};
 use rex_typesystem::{
     error::{CollectAdtsError, TypeError},
     types::{BuiltinTypeId, Scheme, Type, TypeKind},
@@ -46,7 +46,11 @@ pub(crate) fn type_expr_from_type(typ: &Type) -> TypeExpr {
             Span::default(),
             fields
                 .iter()
-                .map(|(name, ty)| (name.clone(), type_expr_from_type(ty)))
+                .map(|(name, ty)| TypeField {
+                    name: name.clone(),
+                    typ: type_expr_from_type(ty),
+                    docs: None,
+                })
                 .collect(),
         ),
     }

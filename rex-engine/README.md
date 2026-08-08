@@ -67,7 +67,8 @@ live beside those phase directories.
 
 - Build staged host APIs with `Module`.
 - Use `Module::global()` for root-scope values/functions.
-- Use `Module::new("acme.math")` for importable modules.
+- Use `Module::new("acme.math", docs)` for importable modules, where `docs` is an
+  `Option<String>` containing module-level Markdown documentation.
 - Add typed exports with `export` / `export_async`.
 - Add value-based exports with runtime-defined signatures using `export_native` /
   `export_native_async`.
@@ -80,6 +81,13 @@ live beside those phase directories.
 `Module::add_rex_adt::<T>()` collects `T`'s Rex family via `RexType::collect_rex_family` and
 stages the reachable acyclic ADT family automatically. Ordinary leaf types inherit the default
 no-op implementation, so they participate in Rex type mapping without pretending to be ADTs.
+
+When embedding through the top-level `rex` crate, `#[rex::module]` and `#[rex::export]` capture
+Rust doc comments and Rust function parameter names automatically. Manual modules pass their docs
+to `Module::new`; manually constructed ADTs pass variant docs to `AdtDecl::add_variant` together
+with a `Vec<AdtArgument>`. `Module::global()` still takes no arguments and creates an undocumented
+root module. Rust parameters cannot carry individual doc comments, so their descriptions belong in
+the function-level docs.
 
 Operator names can be injected with parentheses (e.g., `"(+)"`); the engine normalizes to `+`.
 

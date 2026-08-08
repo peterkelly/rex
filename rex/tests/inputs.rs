@@ -63,7 +63,7 @@ async fn json_input_error(source: &str, input_json: Value) -> (EngineError, Valu
 
 fn assert_manifest(manifest: &Value, inputs: &[(&str, &str)], result: &str) {
     let types = manifest
-        .pointer("/typeBundle/types")
+        .pointer("/typeBundle/values")
         .and_then(Value::as_object)
         .unwrap();
     let mut actual_names = types.keys().map(String::as_str).collect::<Vec<_>>();
@@ -84,8 +84,14 @@ fn assert_manifest(manifest: &Value, inputs: &[(&str, &str)], result: &str) {
 }
 
 fn assert_manifest_builtin_type(scheme: &Value, expected: &str) {
-    assert_eq!(scheme.pointer("/type/kind"), Some(&json!("builtin")));
-    assert_eq!(scheme.pointer("/type/name"), Some(&json!(expected)));
+    assert_eq!(
+        scheme.pointer("/0/scheme/type/kind"),
+        Some(&json!("builtin"))
+    );
+    assert_eq!(
+        scheme.pointer("/0/scheme/type/name"),
+        Some(&json!(expected))
+    );
 }
 
 fn assert_main_input_mismatch(err: EngineError, mut missing: Vec<&str>, mut extra: Vec<&str>) {

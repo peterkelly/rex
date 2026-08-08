@@ -3,13 +3,106 @@ mod common;
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{Builder, EngineError, FromRex, IntoRex, Module, Value},
+    engine::{Builder, EngineError, FromRex, IntoRex, Module, Value, virtual_export_name},
     json::rex_to_json,
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, RexType, Type},
 };
 use serde::Serialize;
 use std::collections::HashMap;
+
+/// A documented generic API type.
+#[derive(Rex, Debug, PartialEq)]
+enum Documented<
+    #[allow(unused_doc_comments)]
+    /// The payload type stored by this API value.
+    T,
+> {
+    /// No payload is available.
+    Missing,
+    /// A tuple-shaped payload.
+    Present(
+        /// The stored payload.
+        T,
+        /// A human-readable label.
+        String,
+    ),
+    /// A record-shaped payload.
+    Record {
+        /// The numeric value exposed under its Rex name.
+        #[serde(rename = "renamed")]
+        value: i32,
+    },
+}
+
+#[test]
+fn derive_preserves_rust_docs_for_adts_variants_and_fields() {
+    let adt = Documented::<i32>::rex_adt_decl().unwrap();
+    assert_eq!(adt.docs.as_deref(), Some("A documented generic API type."));
+    assert_eq!(
+        adt.params[0].docs.as_deref(),
+        Some("The payload type stored by this API value.")
+    );
+
+    let missing = adt
+        .variants
+        .iter()
+        .find(|variant| variant.name.as_ref() == "Missing")
+        .unwrap();
+    assert_eq!(missing.docs.as_deref(), Some("No payload is available."));
+
+    let present = adt
+        .variants
+        .iter()
+        .find(|variant| variant.name.as_ref() == "Present")
+        .unwrap();
+    assert_eq!(present.docs.as_deref(), Some("A tuple-shaped payload."));
+    assert_eq!(present.args[0].docs(), Some("The stored payload."));
+    assert_eq!(present.args[1].docs(), Some("A human-readable label."));
+
+    let record = adt
+        .variants
+        .iter()
+        .find(|variant| variant.name.as_ref() == "Record")
+        .unwrap();
+    let rex::typesystem::AdtArgument::Record { fields, .. } = &record.args[0] else {
+        panic!("expected structured record argument");
+    };
+    assert_eq!(fields[0].name.as_ref(), "renamed");
+    assert_eq!(
+        fields[0].docs.as_deref(),
+        Some("The numeric value exposed under its Rex name.")
+    );
+}
+
+#[test]
+fn named_module_preserves_derived_generic_parameter_docs() {
+    let adt = Documented::<i32>::rex_adt_decl().unwrap();
+    let mut module = Module::new("host.documented_generic", None);
+    module.add_adt_decl(adt).unwrap();
+
+    let staged = module.declarations();
+    assert_eq!(
+        staged.types[0].params[0].docs.as_deref(),
+        Some("The payload type stored by this API value.")
+    );
+
+    let mut builder = Builder::with_prelude(()).unwrap();
+    builder.inject_module(module).unwrap();
+    let qualified_name = Symbol::intern(&virtual_export_name(
+        "host.documented_generic",
+        "Documented",
+    ));
+    let registered = builder
+        .type_system()
+        .adts
+        .get(&qualified_name)
+        .expect("registered generic ADT");
+    assert_eq!(
+        registered.params[0].docs.as_deref(),
+        Some("The payload type stored by this API value.")
+    );
+}
 
 async fn eval(code: &str) -> Result<((), Value, Type), EngineError> {
     let mut builder = Builder::with_prelude(())?;
@@ -267,7 +360,10 @@ async fn derive_generic_worked_example_polymorphic_adt() {
         .iter()
         .find(|v| v.name.as_ref() == "Just")
         .expect("expected `Just` variant");
-    assert_eq!(just.args, vec![t.clone()]);
+    assert_eq!(
+        just.args.iter().map(|arg| arg.typ()).collect::<Vec<_>>(),
+        vec![t.clone()]
+    );
 
     let nothing = adt
         .variants
@@ -526,7 +622,11 @@ fn derive_vec_fields_serialize_and_deserialize_as_lists() {
     fn assert_values(values: Vec<i32>, expected: &[i32]) {
         let adt = VecFieldSnapshot::rex_adt_decl().unwrap();
         assert_eq!(
-            adt.variants[0].args,
+            adt.variants[0]
+                .args
+                .iter()
+                .map(|arg| arg.typ())
+                .collect::<Vec<_>>(),
             vec![Type::record(vec![(
                 Symbol::intern("values"),
                 Type::list(Type::builtin(BuiltinTypeId::I32)),

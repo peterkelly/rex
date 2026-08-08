@@ -29,7 +29,7 @@
 //!
 //! let mut builder = Builder::with_prelude(())?;
 //!
-//! let mut math = Module::new("host.math");
+//! let mut math = Module::new("host.math", None);
 //! math.export("inc", |_state: &(), x: i32| {
 //!     Ok::<i32, EngineError>(x + 1)
 //! })?;
@@ -85,6 +85,21 @@ pub mod typesystem;
 /// [`RexDefault`](engine::RexDefault); use `inject_rex_with_default` only for
 /// types that already provide that trait.
 pub use rex_proc_macro::Rex;
+
+/// Register a Rust function as a documented Rex export.
+///
+/// The macro preserves Rust doc comments and Rust parameter names in the
+/// generated [`engine::Export`]. It also creates a `<function>_rex_export`
+/// helper used by [`module`]. Rust does not support documentation attributes on
+/// individual function parameters, so parameter descriptions belong in the
+/// function-level documentation.
+pub use rex_proc_macro::export;
+
+/// Register an inline Rust module and generate its documented Rex module factory.
+///
+/// Functions marked with [`export`] and ADTs marked `#[rex(export)]` are added
+/// to the generated `rex_module()` function.
+pub use rex_proc_macro::module;
 
 /// Parse, typecheck, evaluate, and JSON-encode a Rex snippet.
 ///

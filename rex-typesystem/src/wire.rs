@@ -8,8 +8,9 @@
 use crate::{
     error::{CollectAdtsError, TypeError},
     types::{
-        AdtDecl, AdtParam, AdtVariant, BuiltinTypeId, Predicate, Scheme, Type, TypeConst, TypeKind,
-        TypeVar, TypeVarId, Types, collect_adts_in_types, order_adt_family,
+        AdtArgument, AdtDecl, AdtField, AdtParam, AdtVariant, BuiltinTypeId, Predicate,
+        RegisteredValue, Scheme, Type, TypeConst, TypeKind, TypeVar, TypeVarId, Types,
+        collect_adts_in_types, order_adt_family,
     },
     typesystem::{TypeSystem, TypeVarSupply},
 };
@@ -17,16 +18,63 @@ use rex_ast::Symbol;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-pub const TYPE_BUNDLE_SCHEMA_VERSION: u32 = 1;
-
+/// A persistable collection of registered values and the ADTs referenced by their types.
+///
+/// Documentation is stored alongside the declaration it describes. The format intentionally has
+/// no schema-version field.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TypeBundle {
-    pub schema_version: u32,
+    /// Optional Markdown documentation for the bundle as a whole.
+    ///
+    /// A bundle used to persist a virtual module can store that module's documentation here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
+    /// Registered values and function overloads, grouped by Rex name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub types: BTreeMap<String, WireScheme>,
+    pub values: BTreeMap<String, Vec<WireValueDecl>>,
+    /// Documented declarations for the user-defined ADTs referenced by `values`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adts: Vec<WireAdtDecl>,
+}
+
+/// A JSON-facing registered value or function overload.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireValueDecl {
+    /// The overload's polymorphic type scheme.
+    pub scheme: WireScheme,
+    /// Rex-visible function parameter names, in application order.
+    ///
+    /// Parameters have names only; per-parameter documentation is not represented.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<String>,
+    /// Markdown API documentation for this overload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
+}
+
+/// Registered value overloads grouped by Rex name.
+pub type RegisteredValueMap = BTreeMap<String, Vec<RegisteredValue>>;
+
+/// A decoded bundle containing semantic declarations and their API documentation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecodedTypeBundle {
+    /// Optional Markdown documentation for the bundle as a whole.
+    pub docs: Option<String>,
+    /// Dependency-ordered ADT declarations referenced by the bundle's values.
+    pub adts: Vec<AdtDecl>,
+    /// Registered values and function overloads, grouped by Rex name.
+    pub values: RegisteredValueMap,
+}
+
+/// A decoded bundle after its ADTs have been installed in a type system.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegisteredTypeBundle {
+    /// Optional Markdown documentation for the bundle as a whole.
+    pub docs: Option<String>,
+    /// Registered values and function overloads, grouped by Rex name.
+    pub values: RegisteredValueMap,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,28 +137,85 @@ pub enum WireType {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// A named record field in the wire type model.
 pub struct WireField {
+    /// The Rex-visible field name.
     pub name: String,
+    /// The field's Rex type.
     #[serde(rename = "type")]
     pub typ: WireType,
+    /// Markdown API documentation for this field.
+    ///
+    /// Documentation is valid when this field belongs directly to a
+    /// [`WireAdtArg::Record`]. A structural [`WireType::Record`] cannot preserve field
+    /// documentation when decoded into the semantic [`Type`] representation and rejects it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// A JSON-facing algebraic data type declaration.
 pub struct WireAdtDecl {
+    /// The Rex-visible type constructor name.
     pub name: String,
+    /// The declaration's documented type parameters.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub params: Vec<String>,
+    pub params: Vec<WireAdtParam>,
+    /// The declaration's documented constructor variants.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<WireAdtVariant>,
+    /// Markdown API documentation for this ADT.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WireAdtVariant {
+/// A JSON-facing ADT type parameter.
+pub struct WireAdtParam {
+    /// The Rex-visible parameter name.
     pub name: String,
+    /// Markdown API documentation for this parameter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// A JSON-facing ADT constructor variant.
+pub struct WireAdtVariant {
+    /// The Rex-visible constructor name.
+    pub name: String,
+    /// The constructor arguments, in application order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub args: Vec<WireType>,
+    pub args: Vec<WireAdtArg>,
+    /// Markdown API documentation for this variant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+/// A JSON-facing ADT constructor argument.
+pub enum WireAdtArg {
+    /// One positional constructor argument.
+    Positional {
+        /// The argument's Rex type.
+        #[serde(rename = "type")]
+        typ: WireType,
+        /// Markdown API documentation for this argument.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        docs: Option<String>,
+    },
+    /// One record-shaped constructor argument.
+    Record {
+        /// The record's documented fields.
+        fields: Vec<WireField>,
+        /// Markdown API documentation for the record argument as a whole.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        docs: Option<String>,
+    },
 }
 
 impl From<&Type> for WireType {
@@ -184,71 +289,162 @@ impl TryFrom<&WireAdtDecl> for AdtDecl {
 }
 
 impl TypeBundle {
+    /// Build a bundle from schemes without value documentation or source parameter names.
+    ///
+    /// Function parameters receive generated names such as `arg0`. Bundle-level docs remain
+    /// unset; attach them with [`TypeBundle::with_docs`].
     pub fn from_schemes<I, K>(schemes: I, type_system: &TypeSystem) -> Result<Self, TypeError>
     where
         I: IntoIterator<Item = (K, Scheme)>,
         K: Into<String>,
     {
-        let mut wire_schemes = BTreeMap::new();
+        Self::from_registered_values(
+            schemes.into_iter().map(|(name, scheme)| {
+                let params = decompose_fun_type(&scheme.typ)
+                    .0
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| Symbol::intern(&format!("arg{index}")))
+                    .collect();
+                (
+                    name,
+                    vec![RegisteredValue {
+                        scheme,
+                        params,
+                        docs: None,
+                    }],
+                )
+            }),
+            type_system,
+        )
+    }
+
+    /// Build a bundle while preserving each registered value's docs and parameter names.
+    ///
+    /// Bundle-level docs remain unset; attach them with [`TypeBundle::with_docs`]. Referenced ADT
+    /// documentation is copied from `type_system`.
+    pub fn from_registered_values<I, K>(
+        values: I,
+        type_system: &TypeSystem,
+    ) -> Result<Self, TypeError>
+    where
+        I: IntoIterator<Item = (K, Vec<RegisteredValue>)>,
+        K: Into<String>,
+    {
+        let mut wire_values = BTreeMap::new();
         let mut referenced_types = Vec::new();
-
-        for (name, scheme) in schemes {
-            referenced_types.push(scheme.typ.clone());
-            referenced_types.extend(scheme.preds.iter().map(|pred| pred.typ.clone()));
-
+        for (name, declarations) in values {
             let name = name.into();
-            let wire_scheme = WireScheme::try_from_scheme(&scheme)?;
-            if wire_schemes.insert(name.clone(), wire_scheme).is_some() {
-                return Err(wire_error(format!("duplicate exported type name `{name}`")));
+            if declarations.is_empty() {
+                return Err(wire_error(format!(
+                    "exported value `{name}` has no declarations"
+                )));
+            }
+            let mut wire_declarations = Vec::with_capacity(declarations.len());
+            for declaration in declarations {
+                referenced_types.push(declaration.scheme.typ.clone());
+                referenced_types.extend(
+                    declaration
+                        .scheme
+                        .preds
+                        .iter()
+                        .map(|predicate| predicate.typ.clone()),
+                );
+                wire_declarations.push(WireValueDecl {
+                    scheme: WireScheme::try_from_scheme(&declaration.scheme)?,
+                    params: declaration
+                        .params
+                        .into_iter()
+                        .map(|param| param.to_string())
+                        .collect(),
+                    docs: declaration.docs,
+                });
+            }
+            if wire_values
+                .insert(name.clone(), wire_declarations)
+                .is_some()
+            {
+                return Err(wire_error(format!(
+                    "duplicate exported value name `{name}`"
+                )));
             }
         }
 
         let adts = collect_wire_adts_for_types(&referenced_types, type_system)?;
         Ok(Self {
-            schema_version: TYPE_BUNDLE_SCHEMA_VERSION,
-            types: wire_schemes,
+            docs: None,
+            values: wire_values,
             adts,
         })
     }
 
-    pub fn into_parts(self) -> Result<(Vec<AdtDecl>, BTreeMap<String, Scheme>), TypeError> {
-        if self.schema_version != TYPE_BUNDLE_SCHEMA_VERSION {
-            return Err(wire_error(format!(
-                "unsupported type bundle schema version {}; expected {}",
-                self.schema_version, TYPE_BUNDLE_SCHEMA_VERSION
-            )));
-        }
+    /// Attach Markdown documentation to this bundle.
+    pub fn with_docs(mut self, docs: impl Into<String>) -> Self {
+        self.docs = Some(docs.into());
+        self
+    }
 
+    /// Decode the bundle into its semantic ADTs and registered values.
+    pub fn into_parts(self) -> Result<DecodedTypeBundle, TypeError> {
+        let TypeBundle {
+            docs,
+            values: wire_values,
+            adts: wire_adts,
+        } = self;
         let mut supply = TypeVarSupply::new();
-        let adts = self
-            .adts
+        let adts = wire_adts
             .iter()
             .map(|adt| adt.to_adt_decl_with_supply(&mut supply))
             .collect::<Result<Vec<_>, _>>()?;
         let adts = order_adt_family(adts)?;
 
-        let mut schemes = BTreeMap::new();
-        for (name, scheme) in self.types {
-            if schemes
-                .insert(name.clone(), scheme.to_scheme_with_supply(&mut supply)?)
-                .is_some()
-            {
-                return Err(wire_error(format!("duplicate exported type name `{name}`")));
+        let mut values = BTreeMap::new();
+        for (name, declarations) in wire_values {
+            if declarations.is_empty() {
+                return Err(wire_error(format!(
+                    "exported value `{name}` has no declarations"
+                )));
             }
+            let mut decoded = Vec::with_capacity(declarations.len());
+            for declaration in declarations {
+                let scheme = declaration.scheme.to_scheme_with_supply(&mut supply)?;
+                let expected_params = decompose_fun_type(&scheme.typ).0.len();
+                if !declaration.params.is_empty() && declaration.params.len() != expected_params {
+                    return Err(wire_error(format!(
+                        "exported value `{name}` has {} parameters but its type has {expected_params}",
+                        declaration.params.len()
+                    )));
+                }
+                let params = declaration
+                    .params
+                    .into_iter()
+                    .map(|param| {
+                        validate_name("value parameter", &param)?;
+                        Ok(Symbol::intern(&param))
+                    })
+                    .collect::<Result<Vec<_>, TypeError>>()?;
+                decoded.push(RegisteredValue {
+                    scheme,
+                    params,
+                    docs: declaration.docs,
+                });
+            }
+            values.insert(name, decoded);
         }
 
-        Ok((adts, schemes))
+        Ok(DecodedTypeBundle { docs, adts, values })
     }
 
+    /// Decode the bundle, register its ADTs, and return its docs and values.
     pub fn register_into(
         self,
         type_system: &mut TypeSystem,
-    ) -> Result<BTreeMap<String, Scheme>, TypeError> {
-        let (adts, schemes) = self.into_parts()?;
+    ) -> Result<RegisteredTypeBundle, TypeError> {
+        let DecodedTypeBundle { docs, adts, values } = self.into_parts()?;
         for adt in adts {
-            type_system.register_adt(&adt);
+            type_system.register_adt(&adt)?;
         }
-        Ok(schemes)
+        Ok(RegisteredTypeBundle { docs, values })
     }
 }
 
@@ -398,6 +594,7 @@ impl WireType {
                     .map(|(name, typ)| WireField {
                         name: name.to_string(),
                         typ: WireType::from_type_with_namer(typ, namer),
+                        docs: None,
                     })
                     .collect(),
             },
@@ -434,6 +631,12 @@ impl WireType {
                 let mut seen = BTreeSet::new();
                 let mut out = Vec::new();
                 for field in fields {
+                    if field.docs.is_some() {
+                        return Err(wire_error(format!(
+                            "structural record field `{}` cannot carry documentation",
+                            field.name
+                        )));
+                    }
                     validate_name("record field", &field.name)?;
                     if !seen.insert(field.name.clone()) {
                         return Err(wire_error(format!(
@@ -462,7 +665,7 @@ impl WireAdtDecl {
         let mut free = BTreeSet::new();
         for variant in &adt.variants {
             for arg in &variant.args {
-                free.extend(arg.ftv());
+                free.extend(arg.typ().ftv());
             }
         }
         let unbound = free.difference(&bound).copied().collect::<Vec<TypeVarId>>();
@@ -485,25 +688,45 @@ impl WireAdtDecl {
                 )));
             }
             namer.bind_exact(&param.var, &name)?;
-            params.push(name);
+            params.push(WireAdtParam {
+                name,
+                docs: param.docs.clone(),
+            });
         }
-        let variants = adt
-            .variants
-            .iter()
-            .map(|variant| WireAdtVariant {
+        let mut variants = Vec::with_capacity(adt.variants.len());
+        for variant in &adt.variants {
+            let mut args = Vec::with_capacity(variant.args.len());
+            for arg in &variant.args {
+                args.push(match arg {
+                    AdtArgument::Positional { typ, docs } => WireAdtArg::Positional {
+                        typ: WireType::from_type_with_namer(typ, &mut namer),
+                        docs: docs.clone(),
+                    },
+                    AdtArgument::Record { fields, docs } => WireAdtArg::Record {
+                        fields: fields
+                            .iter()
+                            .map(|field| WireField {
+                                name: field.name.to_string(),
+                                typ: WireType::from_type_with_namer(&field.typ, &mut namer),
+                                docs: field.docs.clone(),
+                            })
+                            .collect(),
+                        docs: docs.clone(),
+                    },
+                });
+            }
+            variants.push(WireAdtVariant {
                 name: variant.name.to_string(),
-                args: variant
-                    .args
-                    .iter()
-                    .map(|arg| WireType::from_type_with_namer(arg, &mut namer))
-                    .collect(),
-            })
-            .collect();
+                args,
+                docs: variant.docs.clone(),
+            });
+        }
 
         Ok(Self {
             name: adt.name.to_string(),
             params,
             variants,
+            docs: adt.docs.clone(),
         })
     }
 
@@ -521,18 +744,19 @@ impl WireAdtDecl {
         let mut vars_by_name = BTreeMap::new();
         let mut params = Vec::new();
         for param in &self.params {
-            validate_name("ADT parameter", param)?;
-            if vars_by_name.contains_key(param) {
+            validate_name("ADT parameter", &param.name)?;
+            if vars_by_name.contains_key(&param.name) {
                 return Err(wire_error(format!(
-                    "duplicate type parameter `{param}` in ADT `{}`",
-                    self.name
+                    "duplicate type parameter `{}` in ADT `{}`",
+                    param.name, self.name
                 )));
             }
-            let var = supply.fresh(Some(Symbol::intern(param)));
-            vars_by_name.insert(param.clone(), var.clone());
+            let var = supply.fresh(Some(Symbol::intern(&param.name)));
+            vars_by_name.insert(param.name.clone(), var.clone());
             params.push(AdtParam {
-                name: Symbol::intern(param),
+                name: Symbol::intern(&param.name),
                 var,
+                docs: param.docs.clone(),
             });
         }
 
@@ -554,11 +778,12 @@ impl WireAdtDecl {
             let args = variant
                 .args
                 .iter()
-                .map(|arg| arg.to_type_with_ctx(&mut ctx))
+                .map(|arg| arg.to_adt_argument_with_ctx(&mut ctx))
                 .collect::<Result<Vec<_>, _>>()?;
             variants.push(AdtVariant {
                 name: Symbol::intern(&variant.name),
                 args,
+                docs: variant.docs.clone(),
             });
         }
 
@@ -566,7 +791,44 @@ impl WireAdtDecl {
             name: Symbol::intern(&self.name),
             params,
             variants,
+            docs: self.docs.clone(),
         })
+    }
+}
+
+impl WireAdtArg {
+    fn to_adt_argument_with_ctx(
+        &self,
+        ctx: &mut TypeDecodeCtx<'_>,
+    ) -> Result<AdtArgument, TypeError> {
+        match self {
+            Self::Positional { typ, docs } => Ok(AdtArgument::Positional {
+                typ: typ.to_type_with_ctx(ctx)?,
+                docs: docs.clone(),
+            }),
+            Self::Record { fields, docs } => {
+                let mut decoded = Vec::with_capacity(fields.len());
+                let mut seen = BTreeSet::new();
+                for field in fields {
+                    validate_name("record field", &field.name)?;
+                    if !seen.insert(field.name.clone()) {
+                        return Err(wire_error(format!(
+                            "duplicate record field `{}`",
+                            field.name
+                        )));
+                    }
+                    decoded.push(AdtField {
+                        name: Symbol::intern(&field.name),
+                        typ: field.typ.to_type_with_ctx(ctx)?,
+                        docs: field.docs.clone(),
+                    });
+                }
+                Ok(AdtArgument::Record {
+                    fields: decoded,
+                    docs: docs.clone(),
+                })
+            }
+        }
     }
 }
 
@@ -686,7 +948,7 @@ fn collect_adt_decls_for_types(
         let field_types = adt
             .variants
             .iter()
-            .flat_map(|variant| variant.args.iter().cloned())
+            .flat_map(|variant| variant.args.iter().map(AdtArgument::typ))
             .collect::<Vec<_>>();
         for dep in collect_adts_in_types(field_types).map_err(collect_adts_error_to_type)? {
             if let TypeKind::Con(con) = dep.as_ref()

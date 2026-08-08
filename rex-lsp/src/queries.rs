@@ -1924,7 +1924,7 @@ pub(crate) fn hover_type_in_expr(
                     return;
                 };
 
-                let (_preds, ctor_ty) = instantiate(scheme, &mut ts.supply);
+                let (_preds, ctor_ty) = instantiate(&scheme.scheme, &mut ts.supply);
                 let (arg_tys, result_ty) = peel_fun(&ctor_ty);
                 let Ok(s) = unify(&result_ty, scrutinee_ty) else {
                     return;

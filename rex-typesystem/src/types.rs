@@ -936,9 +936,48 @@ pub enum TypedExprKind {
     },
 }
 
+/// A registered value or function overload and its Rex-facing API metadata.
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
+pub struct RegisteredValue {
+    /// The overload's inferred or declared type scheme.
+    pub scheme: Scheme,
+    /// Rex-visible function parameter names, in application order.
+    ///
+    /// This is empty for values, zero-argument functions, and registrations that do not provide
+    /// parameter-name metadata. Individual parameters do not carry documentation.
+    pub params: Vec<Symbol>,
+    /// Markdown API documentation for this overload.
+    pub docs: Option<String>,
+}
+
+impl RegisteredValue {
+    /// Register a scheme without parameter-name or documentation metadata.
+    pub fn new(scheme: Scheme) -> Self {
+        Self {
+            scheme,
+            params: Vec::new(),
+            docs: None,
+        }
+    }
+}
+
+impl Types for RegisteredValue {
+    fn apply(&self, s: &Subst) -> Self {
+        Self {
+            scheme: self.scheme.apply(s),
+            params: self.params.clone(),
+            docs: self.docs.clone(),
+        }
+    }
+
+    fn ftv(&self) -> BTreeSet<TypeVarId> {
+        self.scheme.ftv()
+    }
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct TypeEnv {
-    pub values: HashTrieMapSync<Symbol, Vec<Scheme>>,
+    pub values: HashTrieMapSync<Symbol, Vec<RegisteredValue>>,
     pub type_vars: BTreeMap<Symbol, TypeVar>,
 }
 
@@ -951,12 +990,20 @@ impl TypeEnv {
     }
 
     pub fn extend(&mut self, name: Symbol, scheme: Scheme) {
-        self.values = self.values.insert(name, vec![scheme]);
+        self.extend_registered(name, RegisteredValue::new(scheme));
     }
 
     pub fn extend_overload(&mut self, name: Symbol, scheme: Scheme) {
+        self.extend_registered_overload(name, RegisteredValue::new(scheme));
+    }
+
+    pub fn extend_registered(&mut self, name: Symbol, value: RegisteredValue) {
+        self.values = self.values.insert(name, vec![value]);
+    }
+
+    pub fn extend_registered_overload(&mut self, name: Symbol, value: RegisteredValue) {
         let mut schemes = self.values.get(&name).cloned().unwrap_or_default();
-        schemes.push(scheme);
+        schemes.push(value);
         self.values = self.values.insert(name, schemes);
     }
 
@@ -964,7 +1011,7 @@ impl TypeEnv {
         self.values = self.values.remove(name);
     }
 
-    pub fn lookup(&self, name: &Symbol) -> Option<&[Scheme]> {
+    pub fn lookup(&self, name: &Symbol) -> Option<&[RegisteredValue]> {
         self.values.get(name).map(|schemes| schemes.as_slice())
     }
 }
@@ -975,13 +1022,13 @@ impl Types for TypeEnv {
         for (k, v) in self.values.iter() {
             let updated = v
                 .iter()
-                .map(|scheme| {
+                .map(|value| {
                     // Most schemes in environments are monomorphic. Don't walk
                     // and rebuild trees unless we actually have work to do.
-                    if scheme.vars.is_empty() && !subst_is_empty(s) {
-                        scheme.apply(s)
+                    if value.scheme.vars.is_empty() && !subst_is_empty(s) {
+                        value.apply(s)
                     } else {
-                        scheme.clone()
+                        value.clone()
                     }
                 })
                 .collect();
@@ -1004,8 +1051,12 @@ impl Types for TypeEnv {
 /// A named type parameter for an ADT (e.g. `a` in `List a`).
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct AdtParam {
+    /// The Rex-visible parameter name.
     pub name: Symbol,
+    /// The type variable used for this parameter within the declaration.
     pub var: TypeVar,
+    /// Markdown API documentation for this type parameter.
+    pub docs: Option<String>,
 }
 
 /// A transparent type alias.
@@ -1015,24 +1066,92 @@ pub struct AdtParam {
 /// batch of mutually visible type declaration headers is being registered.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) struct TypeAlias {
-    pub name: Symbol,
-    pub params: Vec<AdtParam>,
-    pub typ: Option<Type>,
+    /// The Rex-visible alias name.
+    pub(crate) name: Symbol,
+    /// The alias's documented type parameters.
+    pub(crate) params: Vec<AdtParam>,
+    /// The aliased type, or `None` while a registration batch is being assembled.
+    pub(crate) typ: Option<Type>,
+    /// Markdown API documentation for this alias.
+    pub(crate) docs: Option<String>,
 }
 
 impl TypeAlias {
-    pub(crate) fn new(name: &Symbol, param_names: &[Symbol], supply: &mut TypeVarSupply) -> Self {
+    pub(crate) fn new(
+        name: &Symbol,
+        param_names: &[Symbol],
+        docs: Option<String>,
+        supply: &mut TypeVarSupply,
+    ) -> Self {
         let params = param_names
             .iter()
             .map(|p| AdtParam {
                 name: p.clone(),
                 var: supply.fresh(Some(p.clone())),
+                docs: None,
             })
             .collect();
         Self {
             name: name.clone(),
             params,
             typ: None,
+            docs,
+        }
+    }
+}
+
+/// A named field in an ADT record constructor argument.
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
+pub struct AdtField {
+    /// The Rex-visible record field name.
+    pub name: Symbol,
+    /// The field's Rex type.
+    pub typ: Type,
+    /// Markdown API documentation for this field.
+    pub docs: Option<String>,
+}
+
+/// One constructor argument in an ADT declaration.
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
+pub enum AdtArgument {
+    /// One positional constructor argument.
+    Positional {
+        /// The argument's Rex type.
+        typ: Type,
+        /// Markdown API documentation for this argument.
+        docs: Option<String>,
+    },
+    /// One record-shaped constructor argument.
+    Record {
+        /// The record's documented fields.
+        fields: Vec<AdtField>,
+        /// Markdown API documentation for the record argument as a whole.
+        docs: Option<String>,
+    },
+}
+
+impl AdtArgument {
+    /// Create an undocumented positional argument.
+    pub fn positional(typ: Type) -> Self {
+        Self::Positional { typ, docs: None }
+    }
+
+    /// Return the Rex type accepted by this constructor argument.
+    pub fn typ(&self) -> Type {
+        match self {
+            Self::Positional { typ, .. } => typ.clone(),
+            Self::Record { fields, .. } => Type::record(
+                fields
+                    .iter()
+                    .map(|field| (field.name.clone(), field.typ.clone())),
+            ),
+        }
+    }
+
+    /// Return this argument's Markdown API documentation.
+    pub fn docs(&self) -> Option<&str> {
+        match self {
+            Self::Positional { docs, .. } | Self::Record { docs, .. } => docs.as_deref(),
         }
     }
 }
@@ -1040,8 +1159,12 @@ impl TypeAlias {
 /// A single ADT variant with zero or more constructor arguments.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct AdtVariant {
+    /// The Rex-visible constructor name.
     pub name: Symbol,
-    pub args: Vec<Type>,
+    /// The constructor arguments, in application order.
+    pub args: Vec<AdtArgument>,
+    /// Markdown API documentation for this variant.
+    pub docs: Option<String>,
 }
 
 /// A type declaration for an algebraic data type.
@@ -1051,9 +1174,14 @@ pub struct AdtVariant {
 /// injecting constructor schemes into the environment (see `inject_adt`).
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct AdtDecl {
+    /// The Rex-visible type constructor name.
     pub name: Symbol,
+    /// The declaration's documented type parameters.
     pub params: Vec<AdtParam>,
+    /// The declaration's documented constructor variants.
     pub variants: Vec<AdtVariant>,
+    /// Markdown API documentation for this ADT.
+    pub docs: Option<String>,
 }
 
 impl AdtDecl {
@@ -1063,12 +1191,14 @@ impl AdtDecl {
             .map(|p| AdtParam {
                 name: p.clone(),
                 var: supply.fresh(Some(p.clone())),
+                docs: None,
             })
             .collect();
         Self {
             name: name.clone(),
             params,
             variants: Vec::new(),
+            docs: None,
         }
     }
 
@@ -1079,8 +1209,9 @@ impl AdtDecl {
             .map(|p| Type::var(p.var.clone()))
     }
 
-    pub fn add_variant(&mut self, name: Symbol, args: Vec<Type>) {
-        self.variants.push(AdtVariant { name, args });
+    /// Add a constructor variant with its arguments and optional Markdown API documentation.
+    pub fn add_variant(&mut self, name: Symbol, args: Vec<AdtArgument>, docs: Option<String>) {
+        self.variants.push(AdtVariant { name, args, docs });
     }
 
     pub fn result_type(&self) -> Type {
@@ -1100,7 +1231,7 @@ impl AdtDecl {
         for variant in &self.variants {
             let mut typ = result_ty.clone();
             for arg in variant.args.iter().rev() {
-                typ = Type::fun(arg.clone(), typ);
+                typ = Type::fun(arg.typ(), typ);
             }
             out.push((variant.name.clone(), Scheme::new(vars.clone(), vec![], typ)));
         }
@@ -1277,11 +1408,19 @@ impl<T: RexType> RexType for Vec<T> {
     fn rex_type() -> Type {
         Type::app(Type::builtin(BuiltinTypeId::List), T::rex_type())
     }
+
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), TypeError> {
+        T::collect_rex_family(out)
+    }
 }
 
 impl<T: RexType> RexType for BTreeMap<String, T> {
     fn rex_type() -> Type {
         Type::dict(T::rex_type())
+    }
+
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), TypeError> {
+        T::collect_rex_family(out)
     }
 }
 
@@ -1289,11 +1428,19 @@ impl<T: RexType> RexType for HashMap<String, T> {
     fn rex_type() -> Type {
         Type::dict(T::rex_type())
     }
+
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), TypeError> {
+        T::collect_rex_family(out)
+    }
 }
 
 impl<T: RexType> RexType for Option<T> {
     fn rex_type() -> Type {
         Type::app(Type::builtin(BuiltinTypeId::Option), T::rex_type())
+    }
+
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), TypeError> {
+        T::collect_rex_family(out)
     }
 }
 
@@ -1303,6 +1450,11 @@ impl<T: RexType, E: RexType> RexType for Result<T, E> {
             Type::app(Type::builtin(BuiltinTypeId::Result), E::rex_type()),
             T::rex_type(),
         )
+    }
+
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), TypeError> {
+        E::collect_rex_family(out)?;
+        T::collect_rex_family(out)
     }
 }
 
@@ -1317,6 +1469,11 @@ macro_rules! impl_tuple_rex_type {
         impl<$($name: RexType),+> RexType for ($($name,)+) {
             fn rex_type() -> Type {
                 Type::tuple(vec![$($name::rex_type()),+])
+            }
+
+            fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), TypeError> {
+                $($name::collect_rex_family(out)?;)+
+                Ok(())
             }
         }
     };
@@ -1344,13 +1501,22 @@ impl Class {
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Instance {
+    /// Constraints that must hold before this instance can be selected.
     pub context: Vec<Predicate>,
+    /// The class and type implemented by this instance.
     pub head: Predicate,
+    /// Markdown API documentation for this instance.
+    pub docs: Option<String>,
 }
 
 impl Instance {
-    pub fn new(context: Vec<Predicate>, head: Predicate) -> Self {
-        Self { context, head }
+    /// Create a typeclass instance with optional Markdown API documentation.
+    pub fn new(context: Vec<Predicate>, head: Predicate, docs: Option<String>) -> Self {
+        Self {
+            context,
+            head,
+            docs,
+        }
     }
 }
 
@@ -1519,7 +1685,7 @@ pub fn adt_shape(adt: &AdtDecl) -> String {
             let args = variant
                 .args
                 .iter()
-                .map(|arg| normalize_type_for_shape(arg, &param_names))
+                .map(|arg| normalize_type_for_shape(&arg.typ(), &param_names))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{}({args})", variant.name)
@@ -1572,11 +1738,165 @@ pub fn adt_shape_eq(left: &AdtDecl, right: &AdtDecl) -> bool {
     adt_shape(left) == adt_shape(right)
 }
 
+fn merge_docs(
+    target: &mut Option<String>,
+    source: &Option<String>,
+    subject: &str,
+) -> Result<(), TypeError> {
+    match (target.as_ref(), source.as_ref()) {
+        (Some(current), Some(incoming)) if current != incoming => Err(TypeError::Internal(
+            format!("conflicting documentation for {subject}"),
+        )),
+        (None, Some(incoming)) => {
+            *target = Some(incoming.clone());
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Merge documentation from two declarations of the same ADT shape.
+///
+/// Missing documentation is filled from `source`. Two different non-empty
+/// documentation strings for the same item are rejected, so registration
+/// order cannot silently choose which API description survives. If merging
+/// fails, `target` is left unchanged.
+pub fn merge_adt_docs(target: &mut AdtDecl, source: &AdtDecl) -> Result<(), TypeError> {
+    let mut merged = target.clone();
+    merge_adt_docs_in_place(&mut merged, source)?;
+    *target = merged;
+    Ok(())
+}
+
+fn merge_adt_docs_in_place(target: &mut AdtDecl, source: &AdtDecl) -> Result<(), TypeError> {
+    if !adt_shape_eq(target, source) {
+        return Err(TypeError::Internal(format!(
+            "cannot merge documentation for different ADT shapes: {} vs {}",
+            adt_shape(target),
+            adt_shape(source)
+        )));
+    }
+    if target.params.len() != source.params.len() {
+        return Err(TypeError::Internal(format!(
+            "cannot merge documentation for ADT `{}` with different parameter counts",
+            target.name
+        )));
+    }
+
+    merge_docs(
+        &mut target.docs,
+        &source.docs,
+        &format!("ADT `{}`", target.name),
+    )?;
+    for (index, (target_param, source_param)) in
+        target.params.iter_mut().zip(&source.params).enumerate()
+    {
+        if target_param.name != source_param.name {
+            return Err(TypeError::Internal(format!(
+                "conflicting name for parameter {index} of ADT `{}`: `{}` vs `{}`",
+                target.name, target_param.name, source_param.name
+            )));
+        }
+        merge_docs(
+            &mut target_param.docs,
+            &source_param.docs,
+            &format!("parameter `{}` of ADT `{}`", target_param.name, target.name),
+        )?;
+    }
+
+    for target_variant in &mut target.variants {
+        let source_variant = source
+            .variants
+            .iter()
+            .find(|variant| variant.name == target_variant.name)
+            .ok_or_else(|| {
+                TypeError::Internal(format!(
+                    "missing variant `{}` while merging documentation for ADT `{}`",
+                    target_variant.name, target.name
+                ))
+            })?;
+        merge_docs(
+            &mut target_variant.docs,
+            &source_variant.docs,
+            &format!("variant `{}` of ADT `{}`", target_variant.name, target.name),
+        )?;
+
+        for (index, (target_arg, source_arg)) in target_variant
+            .args
+            .iter_mut()
+            .zip(&source_variant.args)
+            .enumerate()
+        {
+            let subject = format!(
+                "argument {index} of variant `{}` in ADT `{}`",
+                target_variant.name, target.name
+            );
+            match (target_arg, source_arg) {
+                (
+                    AdtArgument::Positional { docs, .. },
+                    AdtArgument::Positional {
+                        docs: source_docs, ..
+                    },
+                ) => merge_docs(docs, source_docs, &subject)?,
+                (
+                    AdtArgument::Record { fields, docs },
+                    AdtArgument::Record {
+                        fields: source_fields,
+                        docs: source_docs,
+                    },
+                ) => {
+                    merge_docs(docs, source_docs, &subject)?;
+                    for target_field in fields {
+                        let source_field = source_fields
+                            .iter()
+                            .find(|source_field| source_field.name == target_field.name)
+                            .ok_or_else(|| {
+                                TypeError::Internal(format!(
+                                    "missing field `{}` while merging documentation for variant `{}` in ADT `{}`",
+                                    target_field.name, target_variant.name, target.name
+                                ))
+                            })?;
+                        merge_docs(
+                            &mut target_field.docs,
+                            &source_field.docs,
+                            &format!(
+                                "field `{}` of variant `{}` in ADT `{}`",
+                                target_field.name, target_variant.name, target.name
+                            ),
+                        )?;
+                    }
+                }
+                (
+                    target @ AdtArgument::Positional { .. },
+                    AdtArgument::Record {
+                        fields,
+                        docs: source_docs,
+                    },
+                ) => {
+                    let mut docs = target.docs().map(str::to_owned);
+                    merge_docs(&mut docs, source_docs, &subject)?;
+                    *target = AdtArgument::Record {
+                        fields: fields.clone(),
+                        docs,
+                    };
+                }
+                (
+                    AdtArgument::Record { docs, .. },
+                    AdtArgument::Positional {
+                        docs: source_docs, ..
+                    },
+                ) => merge_docs(docs, source_docs, &subject)?,
+            }
+        }
+    }
+    Ok(())
+}
+
 fn adt_direct_dependencies(adt: &AdtDecl) -> Result<Vec<Type>, TypeError> {
     let types = adt
         .variants
         .iter()
-        .flat_map(|variant| variant.args.iter().cloned())
+        .flat_map(|variant| variant.args.iter().map(AdtArgument::typ))
         .collect::<Vec<_>>();
     let deps = collect_adts_in_types(types).map_err(collect_adts_error_to_type)?;
     deps.into_iter()
@@ -1597,10 +1917,10 @@ fn adt_direct_dependencies(adt: &AdtDecl) -> Result<Vec<Type>, TypeError> {
 /// the declarations in dependency order so nested ADTs are registered before
 /// the ADTs that refer to them.
 pub fn order_adt_family(adts: Vec<AdtDecl>) -> Result<Vec<AdtDecl>, TypeError> {
-    let mut unique = BTreeMap::new();
+    let mut unique: BTreeMap<Symbol, AdtDecl> = BTreeMap::new();
     for adt in adts {
-        match unique.get(&adt.name) {
-            Some(existing) if adt_shape_eq(existing, &adt) => {}
+        match unique.get_mut(&adt.name) {
+            Some(existing) if adt_shape_eq(existing, &adt) => merge_adt_docs(existing, &adt)?,
             Some(existing) => {
                 return Err(TypeError::Internal(format!(
                     "conflicting ADT family definitions for `{}`: {} vs {}",

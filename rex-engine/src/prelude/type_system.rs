@@ -1,7 +1,7 @@
 use rex_ast::{Decl, Symbol};
 use rex_typesystem::{
     error::TypeError,
-    types::{AdtDecl, BuiltinTypeId, Predicate, Scheme, Type},
+    types::{AdtArgument, AdtDecl, BuiltinTypeId, Predicate, Scheme, Type},
     typesystem::TypeSystem,
 };
 
@@ -756,17 +756,24 @@ pub(super) fn inject_standard_prelude(
             TypeError::Internal("prelude: List is missing type parameter `a`".into())
         })?;
         let list_a = list_adt.result_type();
-        list_adt.add_variant(Symbol::intern("Empty"), vec![]);
-        list_adt.add_variant(Symbol::intern("Cons"), vec![a.clone(), list_a.clone()]);
-        ts.register_adt(&list_adt);
+        list_adt.add_variant(Symbol::intern("Empty"), vec![], None);
+        list_adt.add_variant(
+            Symbol::intern("Cons"),
+            vec![
+                AdtArgument::positional(a.clone()),
+                AdtArgument::positional(list_a.clone()),
+            ],
+            None,
+        );
+        ts.register_adt(&list_adt)?;
     }
     {
         let ordering_name = Symbol::intern("Ordering");
         let mut ordering_adt = AdtDecl::new(&ordering_name, &[], &mut ts.supply);
-        ordering_adt.add_variant(Symbol::intern("Less"), vec![]);
-        ordering_adt.add_variant(Symbol::intern("Equal"), vec![]);
-        ordering_adt.add_variant(Symbol::intern("Greater"), vec![]);
-        ts.register_adt(&ordering_adt);
+        ordering_adt.add_variant(Symbol::intern("Less"), vec![], None);
+        ordering_adt.add_variant(Symbol::intern("Equal"), vec![], None);
+        ordering_adt.add_variant(Symbol::intern("Greater"), vec![], None);
+        ts.register_adt(&ordering_adt)?;
     }
     {
         let option_name = Symbol::intern("Option");
@@ -776,9 +783,13 @@ pub(super) fn inject_standard_prelude(
         let t = option_adt.param_type(&t_name).ok_or_else(|| {
             TypeError::Internal("prelude: Option is missing type parameter `t`".into())
         })?;
-        option_adt.add_variant(Symbol::intern("Some"), vec![t]);
-        option_adt.add_variant(Symbol::intern("None"), vec![]);
-        ts.register_adt(&option_adt);
+        option_adt.add_variant(
+            Symbol::intern("Some"),
+            vec![AdtArgument::positional(t)],
+            None,
+        );
+        option_adt.add_variant(Symbol::intern("None"), vec![], None);
+        ts.register_adt(&option_adt)?;
     }
     {
         let result_name = Symbol::intern("Result");
@@ -792,9 +803,13 @@ pub(super) fn inject_standard_prelude(
         let t = result_adt.param_type(&t_name).ok_or_else(|| {
             TypeError::Internal("prelude: Result is missing type parameter `t`".into())
         })?;
-        result_adt.add_variant(Symbol::intern("Err"), vec![e]);
-        result_adt.add_variant(Symbol::intern("Ok"), vec![t]);
-        ts.register_adt(&result_adt);
+        result_adt.add_variant(
+            Symbol::intern("Err"),
+            vec![AdtArgument::positional(e)],
+            None,
+        );
+        result_adt.add_variant(Symbol::intern("Ok"), vec![AdtArgument::positional(t)], None);
+        ts.register_adt(&result_adt)?;
     }
 
     inject_prelude_primops(ts);

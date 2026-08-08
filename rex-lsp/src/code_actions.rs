@@ -387,10 +387,10 @@ pub(crate) fn type_decl_has_record_field(
             TypeDeclKind::Alias(_) => false,
             TypeDeclKind::Adt(variants) => variants.iter().any(|variant| {
                 variant.args.iter().any(|arg| {
-                    let TypeExpr::Record(_, fields) = arg else {
+                    let TypeExpr::Record(_, fields) = &arg.typ else {
                         return false;
                     };
-                    fields.iter().any(|(name, _)| name.as_ref() == field)
+                    fields.iter().any(|entry| entry.name.as_ref() == field)
                 })
             }),
         }

@@ -66,7 +66,7 @@ use rex_ast::{CompilationUnit, Decl, Symbol};
 use rex_parser::parse;
 use rex_typesystem::{
     error::TypeError,
-    types::{BuiltinTypeId, Scheme, Type, TypeKind, Types},
+    types::{AdtArgument, BuiltinTypeId, Scheme, Type, TypeKind, Types},
     typesystem::TypeSystem,
     unification::unify,
 };
@@ -624,9 +624,13 @@ fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
         .param_type(&a_name)
         .ok_or_else(|| EngineError::UnknownType(Symbol::intern("List")))?;
     let list_a = list_adt.result_type();
-    list_adt.add_variant(Symbol::intern("Empty"), vec![]);
-    list_adt.add_variant(Symbol::intern("Cons"), vec![a, list_a]);
-    engine.type_system.register_adt(&list_adt);
+    list_adt.add_variant(Symbol::intern("Empty"), vec![], None);
+    list_adt.add_variant(
+        Symbol::intern("Cons"),
+        vec![AdtArgument::positional(a), AdtArgument::positional(list_a)],
+        None,
+    );
+    engine.type_system.register_adt(&list_adt)?;
     for (ctor, scheme) in list_adt.constructor_schemes() {
         match ctor.as_ref() {
             "Empty" => {
@@ -654,9 +658,9 @@ fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
     }
 
     let mut ordering_adt = engine.adt_decl("Ordering", &[]);
-    ordering_adt.add_variant(Symbol::intern("Less"), vec![]);
-    ordering_adt.add_variant(Symbol::intern("Equal"), vec![]);
-    ordering_adt.add_variant(Symbol::intern("Greater"), vec![]);
+    ordering_adt.add_variant(Symbol::intern("Less"), vec![], None);
+    ordering_adt.add_variant(Symbol::intern("Equal"), vec![], None);
+    ordering_adt.add_variant(Symbol::intern("Greater"), vec![], None);
     engine.inject_adt(ordering_adt)?;
 
     let mut option_adt = engine.adt_decl("Option", &["t"]);
@@ -664,8 +668,12 @@ fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
     let t = option_adt
         .param_type(&t_name)
         .ok_or_else(|| EngineError::UnknownType(Symbol::intern("Option")))?;
-    option_adt.add_variant(Symbol::intern("Some"), vec![t]);
-    option_adt.add_variant(Symbol::intern("None"), vec![]);
+    option_adt.add_variant(
+        Symbol::intern("Some"),
+        vec![AdtArgument::positional(t)],
+        None,
+    );
+    option_adt.add_variant(Symbol::intern("None"), vec![], None);
     engine.inject_adt(option_adt)?;
 
     let mut result_adt = engine.adt_decl("Result", &["e", "t"]);
@@ -677,8 +685,12 @@ fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
     let t = result_adt
         .param_type(&t_name)
         .ok_or_else(|| EngineError::UnknownType(Symbol::intern("Result")))?;
-    result_adt.add_variant(Symbol::intern("Err"), vec![e]);
-    result_adt.add_variant(Symbol::intern("Ok"), vec![t]);
+    result_adt.add_variant(
+        Symbol::intern("Err"),
+        vec![AdtArgument::positional(e)],
+        None,
+    );
+    result_adt.add_variant(Symbol::intern("Ok"), vec![AdtArgument::positional(t)], None);
     engine.inject_adt(result_adt)?;
     Ok(())
 }
@@ -2736,7 +2748,7 @@ fn inject_option_result_builtins<State: Clone + Send + Sync + 'static>(
         .ok_or_else(|| EngineError::UnknownVar(unwrap.clone()))?
         .to_vec();
     for scheme in unwrap_schemes {
-        let typ = scheme.typ.clone();
+        let typ = scheme.scheme.typ.clone();
         match typ.as_ref() {
             TypeKind::Fun(arg_ty, _)
                 if matches!(
@@ -2748,11 +2760,11 @@ fn inject_option_result_builtins<State: Clone + Send + Sync + 'static>(
                         )
                 ) =>
             {
-                engine.export_native("unwrap", scheme, 1, |scope, _, args| match option_value(
-                    scope, args[0],
-                )? {
-                    Some(value) => Ok(value),
-                    None => Err(EngineError::Custom("called unwrap on None".into())),
+                engine.export_native("unwrap", scheme.scheme, 1, |scope, _, args| {
+                    match option_value(scope, args[0])? {
+                        Some(value) => Ok(value),
+                        None => Err(EngineError::Custom("called unwrap on None".into())),
+                    }
                 })?;
             }
             TypeKind::Fun(arg_ty, _)
@@ -2769,11 +2781,11 @@ fn inject_option_result_builtins<State: Clone + Send + Sync + 'static>(
                         )
                 ) =>
             {
-                engine.export_native("unwrap", scheme, 1, |scope, _, args| match result_value(
-                    scope, args[0],
-                )? {
-                    Ok(value) => Ok(value),
-                    Err(_) => Err(EngineError::Custom("called unwrap on Err".into())),
+                engine.export_native("unwrap", scheme.scheme, 1, |scope, _, args| {
+                    match result_value(scope, args[0])? {
+                        Ok(value) => Ok(value),
+                        Err(_) => Err(EngineError::Custom("called unwrap on Err".into())),
+                    }
                 })?;
             }
             _ => {}
@@ -2934,7 +2946,12 @@ mod tests {
             .values
             .iter()
             .filter(|(name, _)| is_primitive_name(name))
-            .map(|(name, schemes)| (name.clone(), schemes.clone()))
+            .map(|(name, values)| {
+                (
+                    name.clone(),
+                    values.iter().map(|value| value.scheme.clone()).collect(),
+                )
+            })
             .collect()
     }
 

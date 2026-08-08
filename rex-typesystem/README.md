@@ -91,4 +91,16 @@ cargo test -p rex-typesystem
 
 ## Extending
 
-You can register new ADTs with `AdtDecl` + `TypeSystem::register_adt`. The `TypeSystem` also exposes `register_instance` for low-level instance-head injection and a `supply` for generating fresh type variables when building new schemes.
+You can register new ADTs with `AdtDecl` + `TypeSystem::register_adt`. Add each constructor with
+`AdtDecl::add_variant(name, args, docs)`, where `args` is a `Vec<AdtArgument>` and `docs` is
+optional Markdown documentation. The `TypeSystem` also exposes `register_instance` for low-level
+instance-head injection; construct instances with `Instance::new(context, head, docs)`.
+
+Registered functions and values use `RegisteredValue`. Its `params` field is a `Vec<Symbol>` of
+parameter names; per-parameter documentation is not represented. The underlying type scheme is
+accessed explicitly through its `scheme` field. `TypeBundle` is the explicit JSON-facing
+representation for persisting registered values, their documentation, parameter names, and
+referenced documented ADTs. Bundle-level documentation is set explicitly with
+`TypeBundle::with_docs`; it is not inferred by `from_schemes` or `from_registered_values`.
+Decoding returns `DecodedTypeBundle { docs, adts, values }`; registering a bundle returns
+`RegisteredTypeBundle { docs, values }` after installing its ADTs in the supplied type system.

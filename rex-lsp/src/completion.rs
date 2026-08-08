@@ -543,8 +543,8 @@ pub(crate) fn collect_constructors(compilation_unit: &CompilationUnit) -> BTreeS
 pub(crate) fn collect_fields_type_expr(typ: &TypeExpr, fields: &mut BTreeSet<String>) {
     match typ {
         TypeExpr::Record(_, entries) => {
-            for (name, _ty) in entries {
-                fields.insert(name.to_string());
+            for entry in entries {
+                fields.insert(entry.name.to_string());
             }
         }
         TypeExpr::App(_, fun, arg) => {
@@ -606,7 +606,7 @@ pub(crate) fn type_fields_map(
             let mut fields = BTreeSet::new();
             for variant in variants {
                 for arg in &variant.args {
-                    collect_fields_type_expr(arg, &mut fields);
+                    collect_fields_type_expr(&arg.typ, &mut fields);
                 }
             }
             if !fields.is_empty() {
@@ -811,7 +811,7 @@ pub(crate) fn fields_from_type_expr(
     match typ {
         TypeExpr::Record(_, entries) => {
             let fields: BTreeSet<String> =
-                entries.iter().map(|(name, _)| name.to_string()).collect();
+                entries.iter().map(|entry| entry.name.to_string()).collect();
             if fields.is_empty() {
                 None
             } else {

@@ -7,7 +7,9 @@ use rex::{
     ast::Symbol,
     engine::{Builder, EngineError, FromRex, IntoRex, Module, Value},
     parser::parse as parse_rex,
-    typesystem::{AdtDecl, BuiltinTypeId, RexAdt, RexType, Type, TypeError, TypeVarSupply},
+    typesystem::{
+        AdtArgument, AdtDecl, BuiltinTypeId, RexAdt, RexType, Type, TypeError, TypeVarSupply,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -162,7 +164,11 @@ impl RexAdt for ManualRecord {
             (Symbol::intern("enabled"), bool::rex_type()),
             (Symbol::intern("count"), i32::rex_type()),
         ]);
-        adt.add_variant(Symbol::intern("ManualRecord"), vec![record]);
+        adt.add_variant(
+            Symbol::intern("ManualRecord"),
+            vec![AdtArgument::positional(record)],
+            None,
+        );
         Ok(adt)
     }
 }
@@ -171,8 +177,16 @@ impl RexAdt for ManualEnum {
     fn rex_adt_decl() -> Result<AdtDecl, TypeError> {
         let mut supply = TypeVarSupply::new();
         let mut adt = AdtDecl::new(&Symbol::intern("ManualEnum"), &[], &mut supply);
-        adt.add_variant(Symbol::intern("Flag"), vec![bool::rex_type()]);
-        adt.add_variant(Symbol::intern("Count"), vec![i32::rex_type()]);
+        adt.add_variant(
+            Symbol::intern("Flag"),
+            vec![AdtArgument::positional(bool::rex_type())],
+            None,
+        );
+        adt.add_variant(
+            Symbol::intern("Count"),
+            vec![AdtArgument::positional(i32::rex_type())],
+            None,
+        );
         Ok(adt)
     }
 }
@@ -329,7 +343,11 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
         .adt_decl_from_type_with_params(&Type::con("Wrap", 1), &["T"])
         .unwrap();
     let t = adt.param_type(&Symbol::intern("T")).unwrap();
-    adt.add_variant(Symbol::intern("Wrap"), vec![t]);
+    adt.add_variant(
+        Symbol::intern("Wrap"),
+        vec![AdtArgument::positional(t)],
+        None,
+    );
     let mut module = Module::global();
     module.add_adt_decl(adt).unwrap();
     builder.inject_module(module).unwrap();
@@ -354,7 +372,11 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
         .adt_decl_from_type_with_params(&DerivedBox::<i32>::rex_type(), &["T"])
         .unwrap();
     let t = adt.param_type(&Symbol::intern("T")).unwrap();
-    adt.add_variant(Symbol::intern("Boxed"), vec![t]);
+    adt.add_variant(
+        Symbol::intern("Boxed"),
+        vec![AdtArgument::positional(t)],
+        None,
+    );
     let mut module = Module::global();
     module.add_adt_decl(adt).unwrap();
     builder.inject_module(module).unwrap();

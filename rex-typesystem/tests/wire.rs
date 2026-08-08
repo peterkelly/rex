@@ -1,10 +1,12 @@
 use rex_ast::Symbol;
 use rex_typesystem::{
-    types::{AdtDecl, BuiltinTypeId, Predicate, Scheme, Type, TypeKind, TypeVar},
+    types::{
+        AdtArgument, AdtDecl, AdtField, BuiltinTypeId, Predicate, Scheme, Type, TypeKind, TypeVar,
+    },
     typesystem::{TypeSystem, TypeVarSupply},
     wire::{
-        TYPE_BUNDLE_SCHEMA_VERSION, TypeBundle, WireAdtDecl, WireAdtVariant, WireField, WireScheme,
-        WireType, WireTypeVar,
+        TypeBundle, WireAdtArg, WireAdtDecl, WireAdtVariant, WireField, WireScheme, WireType,
+        WireTypeVar, WireValueDecl,
     },
 };
 use serde::de::DeserializeOwned;
@@ -328,6 +330,7 @@ fn records_deserialized_from_unsorted_json_decode_to_sorted_internal_fields() {
                     name: "Bool".to_string(),
                     args: vec![],
                 },
+                docs: None,
             },
             WireField {
                 name: "a".to_string(),
@@ -335,6 +338,7 @@ fn records_deserialized_from_unsorted_json_decode_to_sorted_internal_fields() {
                     name: "i32".to_string(),
                     args: vec![],
                 },
+                docs: None,
             },
         ],
     };
@@ -365,6 +369,29 @@ fn records_deserialized_from_unsorted_json_decode_to_sorted_internal_fields() {
             .map(|(name, _)| name.as_ref())
             .collect::<Vec<_>>(),
         vec!["a", "z"]
+    );
+}
+
+#[test]
+fn structural_record_type_rejects_field_documentation_instead_of_dropping_it() {
+    let wire = WireType::Record {
+        fields: vec![WireField {
+            name: "value".to_string(),
+            typ: WireType::Builtin {
+                name: "i32".to_string(),
+                args: vec![],
+            },
+            docs: Some("A documented field.".to_string()),
+        }],
+    };
+
+    let error = wire
+        .to_type()
+        .expect_err("structural record field docs cannot be represented semantically");
+    assert!(
+        error
+            .to_string()
+            .contains("structural record field `value` cannot carry documentation")
     );
 }
 
@@ -590,10 +617,15 @@ fn adt_decl_with_type_params_serializes_params_and_variants() {
         &mut supply,
     );
     let a = maybe.param_type(&Symbol::intern("a")).expect("param type");
-    maybe.add_variant(Symbol::intern("Missing"), vec![]);
+    maybe.params[0].docs = Some("The stored value type.".to_string());
+    maybe.add_variant(Symbol::intern("Missing"), vec![], None);
     maybe.add_variant(
         Symbol::intern("Present"),
-        vec![a, Type::builtin(BuiltinTypeId::String)],
+        vec![
+            AdtArgument::positional(a),
+            AdtArgument::positional(Type::builtin(BuiltinTypeId::String)),
+        ],
+        None,
     );
 
     let wire = WireAdtDecl::try_from_adt_decl(&maybe).expect("encode ADT");
@@ -601,14 +633,23 @@ fn adt_decl_with_type_params_serializes_params_and_variants() {
         &wire,
         json!({
             "name": "MaybeTagged",
-            "params": ["a"],
+            "params": [{
+                "name": "a",
+                "docs": "The stored value type."
+            }],
             "variants": [
                 { "name": "Missing" },
                 {
                     "name": "Present",
                     "args": [
-                        { "kind": "var", "name": "a" },
-                        { "kind": "builtin", "name": "String" }
+                        {
+                            "kind": "positional",
+                            "type": { "kind": "var", "name": "a" }
+                        },
+                        {
+                            "kind": "positional",
+                            "type": { "kind": "builtin", "name": "String" }
+                        }
                     ]
                 }
             ]
@@ -620,6 +661,10 @@ fn adt_decl_with_type_params_serializes_params_and_variants() {
         .expect("decode ADT");
     assert_eq!(decoded.name.as_ref(), "MaybeTagged");
     assert_eq!(decoded.params[0].name.as_ref(), "a");
+    assert_eq!(
+        decoded.params[0].docs.as_deref(),
+        Some("The stored value type.")
+    );
 }
 
 #[test]
@@ -629,19 +674,20 @@ fn adt_decl_with_record_tuple_and_result_fields_serializes_nested_types() {
     event.add_variant(
         Symbol::intern("Event"),
         vec![
-            Type::record(vec![
+            AdtArgument::positional(Type::record(vec![
                 (Symbol::intern("id"), Type::builtin(BuiltinTypeId::Uuid)),
                 (Symbol::intern("ok"), Type::builtin(BuiltinTypeId::Bool)),
-            ]),
-            Type::tuple(vec![
+            ])),
+            AdtArgument::positional(Type::tuple(vec![
                 Type::builtin(BuiltinTypeId::I32),
                 Type::builtin(BuiltinTypeId::String),
-            ]),
-            Type::result(
+            ])),
+            AdtArgument::positional(Type::result(
                 Type::builtin(BuiltinTypeId::String),
                 Type::builtin(BuiltinTypeId::I32),
-            ),
+            )),
         ],
+        None,
     );
     let wire = WireAdtDecl::try_from_adt_decl(&event).expect("encode ADT");
 
@@ -653,32 +699,41 @@ fn adt_decl_with_record_tuple_and_result_fields_serializes_nested_types() {
                 "name": "Event",
                 "args": [
                     {
-                        "kind": "record",
-                        "fields": [
-                            {
-                                "name": "id",
-                                "type": { "kind": "builtin", "name": "UUID" }
-                            },
-                            {
-                                "name": "ok",
-                                "type": { "kind": "builtin", "name": "Bool" }
-                            }
-                        ]
+                        "kind": "positional",
+                        "type": {
+                            "kind": "record",
+                            "fields": [
+                                {
+                                    "name": "id",
+                                    "type": { "kind": "builtin", "name": "UUID" }
+                                },
+                                {
+                                    "name": "ok",
+                                    "type": { "kind": "builtin", "name": "Bool" }
+                                }
+                            ]
+                        }
                     },
                     {
-                        "kind": "tuple",
-                        "items": [
-                            { "kind": "builtin", "name": "i32" },
-                            { "kind": "builtin", "name": "String" }
-                        ]
+                        "kind": "positional",
+                        "type": {
+                            "kind": "tuple",
+                            "items": [
+                                { "kind": "builtin", "name": "i32" },
+                                { "kind": "builtin", "name": "String" }
+                            ]
+                        }
                     },
                     {
-                        "kind": "builtin",
-                        "name": "Result",
-                        "args": [
-                            { "kind": "builtin", "name": "String" },
-                            { "kind": "builtin", "name": "i32" }
-                        ]
+                        "kind": "positional",
+                        "type": {
+                            "kind": "builtin",
+                            "name": "Result",
+                            "args": [
+                                { "kind": "builtin", "name": "String" },
+                                { "kind": "builtin", "name": "i32" }
+                            ]
+                        }
                     }
                 ]
             }]
@@ -687,11 +742,53 @@ fn adt_decl_with_record_tuple_and_result_fields_serializes_nested_types() {
 }
 
 #[test]
+fn adt_documentation_and_structured_record_fields_roundtrip() {
+    let mut supply = TypeVarSupply::new();
+    let mut event = AdtDecl::new(&Symbol::intern("DocumentedEvent"), &[], &mut supply);
+    event.docs = Some("An event exposed by the host.".to_string());
+    event.add_variant(
+        Symbol::intern("Created"),
+        vec![AdtArgument::Record {
+            fields: vec![AdtField {
+                name: Symbol::intern("id"),
+                typ: Type::builtin(BuiltinTypeId::Uuid),
+                docs: Some("The stable event identifier.".to_string()),
+            }],
+            docs: Some("Fields supplied when creating an event.".to_string()),
+        }],
+        Some("A newly created event.".to_string()),
+    );
+
+    let wire = WireAdtDecl::try_from_adt_decl(&event).expect("encode documented ADT");
+    let json = serde_json::to_value(&wire).expect("serialize documented ADT");
+    assert_eq!(json["docs"], "An event exposed by the host.");
+    assert_eq!(json["variants"][0]["docs"], "A newly created event.");
+    assert_eq!(
+        json["variants"][0]["args"][0]["docs"],
+        "Fields supplied when creating an event."
+    );
+    assert_eq!(
+        json["variants"][0]["args"][0]["fields"][0]["docs"],
+        "The stable event identifier."
+    );
+
+    let decoded = serde_json::from_value::<WireAdtDecl>(json)
+        .expect("deserialize documented ADT")
+        .to_adt_decl()
+        .expect("decode documented ADT");
+    assert_eq!(decoded, event);
+}
+
+#[test]
 fn adt_decl_rejects_unbound_field_var_after_serializing_field_type_shape() {
     let mut supply = TypeVarSupply::new();
     let mut bad = AdtDecl::new(&Symbol::intern("Bad"), &[], &mut supply);
     let dangling = Type::var(TypeVar::new(99, Some(Symbol::intern("dangling"))));
-    bad.add_variant(Symbol::intern("Bad"), vec![dangling.clone()]);
+    bad.add_variant(
+        Symbol::intern("Bad"),
+        vec![AdtArgument::positional(dangling.clone())],
+        None,
+    );
 
     assert_serialized(
         &WireType::from_type(&dangling),
@@ -705,20 +802,21 @@ fn adt_decl_rejects_unbound_field_var_after_serializing_field_type_shape() {
 }
 
 #[test]
-fn empty_type_bundle_serializes_only_schema_version() {
+fn empty_type_bundle_serializes_as_an_empty_object() {
     let bundle = TypeBundle {
-        schema_version: TYPE_BUNDLE_SCHEMA_VERSION,
-        types: Default::default(),
+        docs: None,
+        values: Default::default(),
         adts: vec![],
     };
 
-    let json = assert_serialized(&bundle, json!({ "schemaVersion": 1 }));
+    let json = assert_serialized(&bundle, json!({}));
     let decoded = serde_json::from_value::<TypeBundle>(json)
         .expect("deserialize bundle")
         .into_parts()
         .expect("decode bundle");
-    assert!(decoded.0.is_empty());
-    assert!(decoded.1.is_empty());
+    assert!(decoded.docs.is_none());
+    assert!(decoded.adts.is_empty());
+    assert!(decoded.values.is_empty());
 }
 
 #[test]
@@ -742,14 +840,17 @@ fn bundle_with_monomorphic_types_serializes_type_map_without_adts() {
     assert_serialized(
         &bundle,
         json!({
-            "schemaVersion": 1,
-            "types": {
-                "answer": {
-                    "type": { "kind": "builtin", "name": "i32" }
-                },
-                "flag": {
-                    "type": { "kind": "builtin", "name": "Bool" }
-                }
+            "values": {
+                "answer": [{
+                    "scheme": {
+                        "type": { "kind": "builtin", "name": "i32" }
+                    }
+                }],
+                "flag": [{
+                    "scheme": {
+                        "type": { "kind": "builtin", "name": "Bool" }
+                    }
+                }]
             }
         }),
     );
@@ -763,13 +864,18 @@ fn bundle_includes_transitive_adt_declarations() {
     let mut inner = AdtDecl::new(&Symbol::intern("Inner"), &[], &mut supply);
     inner.add_variant(
         Symbol::intern("Inner"),
-        vec![Type::builtin(BuiltinTypeId::I32)],
+        vec![AdtArgument::positional(Type::builtin(BuiltinTypeId::I32))],
+        None,
     );
-    type_system.register_adt(&inner);
+    type_system.register_adt(&inner).expect("register Inner");
 
     let mut outer = AdtDecl::new(&Symbol::intern("Outer"), &[], &mut supply);
-    outer.add_variant(Symbol::intern("Outer"), vec![Type::user_con("Inner", 0)]);
-    type_system.register_adt(&outer);
+    outer.add_variant(
+        Symbol::intern("Outer"),
+        vec![AdtArgument::positional(Type::user_con("Inner", 0))],
+        None,
+    );
+    type_system.register_adt(&outer).expect("register Outer");
 
     let main_scheme = Scheme::new(
         vec![],
@@ -782,7 +888,6 @@ fn bundle_includes_transitive_adt_declarations() {
     let bundle = TypeBundle::from_schemes([("main", main_scheme.clone())], &type_system)
         .expect("build type bundle");
 
-    assert_eq!(bundle.schema_version, TYPE_BUNDLE_SCHEMA_VERSION);
     assert_eq!(
         bundle
             .adts
@@ -795,33 +900,41 @@ fn bundle_includes_transitive_adt_declarations() {
     let json = assert_serialized(
         &bundle,
         json!({
-            "schemaVersion": 1,
-            "types": {
-                "main": {
-                    "type": {
-                        "kind": "fun",
-                        "params": [{
-                            "kind": "named",
-                            "name": "Outer",
-                            "arity": 0
-                        }],
-                        "ret": { "kind": "builtin", "name": "String" }
-                    }
-                }
+            "values": {
+                "main": [{
+                    "scheme": {
+                        "type": {
+                            "kind": "fun",
+                            "params": [{
+                                "kind": "named",
+                                "name": "Outer",
+                                "arity": 0
+                            }],
+                            "ret": { "kind": "builtin", "name": "String" }
+                        }
+                    },
+                    "params": ["arg0"]
+                }]
             },
             "adts": [
                 {
                     "name": "Inner",
                     "variants": [{
                         "name": "Inner",
-                        "args": [{ "kind": "builtin", "name": "i32" }]
+                        "args": [{
+                            "kind": "positional",
+                            "type": { "kind": "builtin", "name": "i32" }
+                        }]
                     }]
                 },
                 {
                     "name": "Outer",
                     "variants": [{
                         "name": "Outer",
-                        "args": [{ "kind": "named", "name": "Inner", "arity": 0 }]
+                        "args": [{
+                            "kind": "positional",
+                            "type": { "kind": "named", "name": "Inner", "arity": 0 }
+                        }]
                     }]
                 }
             ]
@@ -832,32 +945,42 @@ fn bundle_includes_transitive_adt_declarations() {
         .expect("deserialize bundle")
         .into_parts()
         .expect("decode bundle");
-    let (adts, schemes) = decoded;
+    assert!(decoded.docs.is_none());
     assert_eq!(
-        adts.iter().map(|adt| adt.name.as_ref()).collect::<Vec<_>>(),
+        decoded
+            .adts
+            .iter()
+            .map(|adt| adt.name.as_ref())
+            .collect::<Vec<_>>(),
         vec!["Inner", "Outer"]
     );
     assert_eq!(
-        schemes.get("main").expect("main scheme").typ,
+        decoded.values.get("main").expect("main value")[0]
+            .scheme
+            .typ,
         main_scheme.typ
     );
 }
 
 #[test]
-fn bundle_register_into_installs_adts_and_returns_schemes() {
+fn bundle_register_into_installs_adts_and_returns_values() {
     let bundle = TypeBundle {
-        schema_version: TYPE_BUNDLE_SCHEMA_VERSION,
-        types: [(
+        docs: Some("Runnable APIs.".to_string()),
+        values: [(
             "run".to_string(),
-            WireScheme {
-                vars: vec![],
-                constraints: vec![],
-                typ: WireType::Named {
-                    name: "RunSpec".to_string(),
-                    arity: 0,
-                    args: vec![],
+            vec![WireValueDecl {
+                scheme: WireScheme {
+                    vars: vec![],
+                    constraints: vec![],
+                    typ: WireType::Named {
+                        name: "RunSpec".to_string(),
+                        arity: 0,
+                        args: vec![],
+                    },
                 },
-            },
+                params: vec![],
+                docs: Some("Run a specification.".to_string()),
+            }],
         )]
         .into_iter()
         .collect(),
@@ -866,46 +989,69 @@ fn bundle_register_into_installs_adts_and_returns_schemes() {
             params: vec![],
             variants: vec![WireAdtVariant {
                 name: "RunSpec".to_string(),
-                args: vec![WireType::Builtin {
-                    name: "String".to_string(),
-                    args: vec![],
+                args: vec![WireAdtArg::Positional {
+                    typ: WireType::Builtin {
+                        name: "String".to_string(),
+                        args: vec![],
+                    },
+                    docs: Some("The source text.".to_string()),
                 }],
+                docs: Some("Construct a run specification.".to_string()),
             }],
+            docs: Some("A run specification.".to_string()),
         }],
     };
 
     let json = assert_serialized(
         &bundle,
         json!({
-            "schemaVersion": 1,
-            "types": {
-                "run": {
-                    "type": {
-                        "kind": "named",
-                        "name": "RunSpec",
-                        "arity": 0
-                    }
-                }
+            "docs": "Runnable APIs.",
+            "values": {
+                "run": [{
+                    "scheme": {
+                        "type": {
+                            "kind": "named",
+                            "name": "RunSpec",
+                            "arity": 0
+                        }
+                    },
+                    "docs": "Run a specification."
+                }]
             },
             "adts": [{
                 "name": "RunSpec",
                 "variants": [{
                     "name": "RunSpec",
-                    "args": [{ "kind": "builtin", "name": "String" }]
-                }]
+                    "args": [{
+                        "kind": "positional",
+                        "type": { "kind": "builtin", "name": "String" },
+                        "docs": "The source text."
+                    }],
+                    "docs": "Construct a run specification."
+                }],
+                "docs": "A run specification."
             }]
         }),
     );
 
     let mut type_system = TypeSystem::new();
-    let schemes = serde_json::from_value::<TypeBundle>(json)
+    let registered = serde_json::from_value::<TypeBundle>(json)
         .expect("deserialize bundle")
         .register_into(&mut type_system)
         .expect("register bundle");
     assert!(type_system.adts.contains_key(&Symbol::intern("RunSpec")));
+    assert_eq!(registered.docs.as_deref(), Some("Runnable APIs."));
     assert_eq!(
-        schemes.get("run").expect("run scheme").typ,
+        registered.values.get("run").expect("run value")[0]
+            .scheme
+            .typ,
         Type::user_con("RunSpec", 0)
+    );
+    assert_eq!(
+        registered.values.get("run").expect("run value")[0]
+            .docs
+            .as_deref(),
+        Some("Run a specification.")
     );
 }
 
@@ -928,22 +1074,6 @@ fn bundle_rejects_missing_referenced_adt() {
     let err = TypeBundle::from_schemes([("main", scheme)], &type_system)
         .expect_err("missing ADT should fail");
     assert!(err.to_string().contains("unknown type Missing"));
-}
-
-#[test]
-fn unsupported_bundle_schema_version_is_rejected_after_serialization() {
-    let bundle = TypeBundle {
-        schema_version: TYPE_BUNDLE_SCHEMA_VERSION + 1,
-        types: Default::default(),
-        adts: vec![],
-    };
-
-    assert_serialized(&bundle, json!({ "schemaVersion": 2 }));
-    let err = bundle.into_parts().expect_err("unsupported version");
-    assert!(
-        err.to_string()
-            .contains("unsupported type bundle schema version 2")
-    );
 }
 
 #[test]

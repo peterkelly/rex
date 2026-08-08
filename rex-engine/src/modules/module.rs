@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use rex_ast::{
     ClassDecl, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, InstanceDecl, Span,
-    TypeDecl, TypeDeclKind, TypeVariant,
+    TypeDecl, TypeDeclKind, TypeExpr, TypeField, TypeParam, TypeVariant as AstTypeVariant,
+    TypeVariantArg,
 };
 use rex_typesystem::{
-    types::{AdtDecl, RexType, Scheme, Type},
-    types::{collect_adts_in_types, order_adt_family},
+    types::{AdtArgument, AdtDecl, AdtField, AdtVariant, RexType, Scheme, Type},
+    types::{collect_adts_in_types, merge_adt_docs, order_adt_family},
 };
 
 use crate::{
@@ -71,10 +72,15 @@ impl From<&[Decl]> for Declarations {
     }
 }
 
+/// Parsed or synthesized module contents carried through compilation.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CompilationPackage {
+    /// The module's structured declarations.
     pub decls: Declarations,
+    /// Optional module body expression.
     pub body: Option<Arc<Expr>>,
+    /// Optional Markdown API documentation for the module.
+    pub docs: Option<String>,
 }
 
 impl CompilationPackage {
@@ -82,6 +88,7 @@ impl CompilationPackage {
         Self {
             decls: Declarations::from(unit.decls),
             body: unit.body,
+            docs: None,
         }
     }
 }
@@ -97,6 +104,7 @@ impl From<&CompilationUnit> for CompilationPackage {
         Self {
             decls: Declarations::from(unit.decls.as_slice()),
             body: unit.body.clone(),
+            docs: None,
         }
     }
 }
@@ -121,8 +129,8 @@ pub struct StagedAdtDecl {
 /// from Rex code.
 ///
 /// This type is intentionally mutable and staged: you can build it incrementally, inspect its
-/// staged declarations plus [`Module::exports`], transform them, and only inject it once you
-/// are satisfied with the final module shape.
+/// staged declarations and exports, continue adding to it, and only inject it once you are
+/// satisfied with the final module shape.
 ///
 /// # Examples
 ///
@@ -131,7 +139,7 @@ pub struct StagedAdtDecl {
 ///
 /// let mut builder = Builder::with_prelude(()).unwrap();
 ///
-/// let mut math = Module::new("acme.math");
+/// let mut math = Module::new("acme.math", None);
 /// math.export("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
 ///
 /// builder.inject_module(math).unwrap();
@@ -149,10 +157,13 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     /// ```rust,ignore
     /// use rex_engine::Module;
     ///
-    /// let module = Module::<()>::new("acme.math");
+    /// let module = Module::<()>::new("acme.math", None);
     /// assert_eq!(module.name(), "acme.math");
     /// ```
     pub(crate) name: String,
+
+    /// Markdown API documentation for this module.
+    pub(crate) docs: Option<String>,
 
     /// ADT declarations staged for runtime constructor injection.
     ///
@@ -179,9 +190,9 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     /// ```rust,ignore
     /// use rex_engine::{Export, Module};
     ///
-    /// let mut module = Module::<()>::new("acme.math");
+    /// let mut module = Module::<()>::new("acme.math", None);
     /// let export = Export::from_handler("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
-    /// module.add_export(export);
+    /// module.add_export(export)?;
     ///
     /// assert_eq!(module.exports().len(), 1);
     /// ```
@@ -197,10 +208,11 @@ where
     /// Injecting a global module installs its declarations and exports directly
     /// into the engine rather than making them importable as a named module.
     pub fn global() -> Self {
-        Self::new(ROOT_MODULE_NAME)
+        Self::new(ROOT_MODULE_NAME, None)
     }
 
-    /// Create an empty staged module with the given import name.
+    /// Create an empty staged module with the given import name and optional Markdown API
+    /// documentation.
     ///
     /// The returned module contains no declarations and no exports yet. Add those with the
     /// helper methods on `Module`, then pass it to [`Builder::inject_module`].
@@ -210,14 +222,19 @@ where
     /// ```rust,ignore
     /// use rex_engine::Module;
     ///
-    /// let module = Module::<()>::new("acme.math");
+    /// let module = Module::<()>::new(
+    ///     "acme.math",
+    ///     Some("Arithmetic APIs.".to_owned()),
+    /// );
     /// assert_eq!(module.name(), "acme.math");
+    /// assert_eq!(module.docs(), Some("Arithmetic APIs."));
     /// assert!(module.declarations().is_empty());
     /// assert!(module.exports().is_empty());
     /// ```
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(name: impl Into<String>, docs: Option<String>) -> Self {
         Self {
             name: name.into(),
+            docs,
             adts: Vec::new(),
             instances: Vec::new(),
             exports: Vec::new(),
@@ -227,6 +244,11 @@ where
     /// Return the module name Rex code will import.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Return this module's Markdown API documentation.
+    pub fn docs(&self) -> Option<&str> {
+        self.docs.as_deref()
     }
 
     /// Return the staged ADTs for this module.
@@ -277,7 +299,7 @@ where
     /// use rex_engine::{Builder, Module};
     ///
     /// let mut builder = Builder::with_prelude(()).unwrap();
-    /// let mut module = Module::new("acme.types");
+    /// let mut module = Module::new("acme.types", None);
     /// let adt = builder.adt_decl_from_type(&rex_typesystem::Type::user_con("Thing", 0)).unwrap();
     ///
     /// module.add_adt_decl(adt).unwrap();
@@ -292,20 +314,16 @@ where
     /// dependency order, and cycles are rejected.
     pub fn add_adt_family(&mut self, adts: Vec<AdtDecl>) -> Result<(), EngineError> {
         for adt in order_adt_family(adts).map_err(adt_family_error_to_engine)? {
-            let candidate = type_decl_from_adt(&adt);
-            let already_staged = self
+            if let Some(existing) = self
                 .adts
-                .iter()
-                .find(|staged| staged.type_decl.name == adt.name);
-            if let Some(existing) = already_staged {
-                if existing.type_decl != candidate {
-                    return Err(EngineError::Custom(format!(
-                        "conflicting staged ADT registration for `{}`: existing declaration differs from new ADT declaration",
-                        adt.name,
-                    )));
-                }
+                .iter_mut()
+                .find(|staged| staged.type_decl.name == adt.name)
+            {
+                merge_adt_docs(&mut existing.adt, &adt)?;
+                existing.type_decl = type_decl_from_adt(&existing.adt);
                 continue;
             }
+            let candidate = type_decl_from_adt(&adt);
             self.adts.push(StagedAdtDecl {
                 adt,
                 type_decl: candidate,
@@ -336,7 +354,7 @@ where
     /// use rex_typesystem::{BuiltinTypeId, Type};
     ///
     /// let mut builder = Builder::with_prelude(()).unwrap();
-    /// let mut module = Module::new("acme.types");
+    /// let mut module = Module::new("acme.types", None);
     /// let types = vec![
     ///     Type::app(Type::user_con("Foo", 1), Type::builtin(BuiltinTypeId::I32)),
     ///     Type::user_con("Bar", 0),
@@ -377,7 +395,7 @@ where
     /// }
     ///
     /// let mut builder = Builder::with_prelude(()).unwrap();
-    /// let mut module = Module::new("sample");
+    /// let mut module = Module::new("sample", None);
     /// module.add_rex_adt::<Label>().unwrap();
     /// ```
     pub fn add_rex_adt<T>(&mut self) -> Result<(), EngineError>
@@ -399,12 +417,14 @@ where
     /// ```rust,ignore
     /// use rex_engine::{Export, Module};
     ///
-    /// let mut module = Module::<()>::new("acme.math");
+    /// let mut module = Module::<()>::new("acme.math", None);
     /// let export = Export::from_handler("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
-    /// module.add_export(export);
+    /// module.add_export(export)?;
     /// ```
-    pub fn add_export(&mut self, export: Export<State>) {
+    pub fn add_export(&mut self, mut export: Export<State>) -> Result<(), EngineError> {
+        self.add_adt_family(std::mem::take(&mut export.required_adts))?;
         self.exports.push(export);
+        Ok(())
     }
 
     /// Stage a typed synchronous Rust handler as a module export.
@@ -419,15 +439,14 @@ where
     /// ```rust,ignore
     /// use rex_engine::Module;
     ///
-    /// let mut module = Module::<()>::new("acme.math");
+    /// let mut module = Module::<()>::new("acme.math", None);
     /// module.export("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
     /// ```
     pub fn export<Sig, H>(&mut self, name: impl Into<String>, handler: H) -> Result<(), EngineError>
     where
         H: HostFnSync<State, Sig>,
     {
-        self.exports.push(Export::from_handler(name, handler)?);
-        Ok(())
+        self.add_export(Export::from_handler(name, handler)?)
     }
 
     /// Stage a typed asynchronous Rust handler as a module export.
@@ -440,7 +459,7 @@ where
     /// ```rust,ignore
     /// use rex_engine::Module;
     ///
-    /// let mut module = Module::<()>::new("acme.math");
+    /// let mut module = Module::<()>::new("acme.math", None);
     /// module
     ///     .export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })
     ///     .unwrap();
@@ -453,9 +472,7 @@ where
     where
         H: HostFnAsync<State, Sig>,
     {
-        self.exports
-            .push(Export::from_async_handler(name, handler)?);
-        Ok(())
+        self.add_export(Export::from_async_handler(name, handler)?)
     }
 
     /// Stage a value-based synchronous native export with an explicit Rex type scheme.
@@ -479,7 +496,7 @@ where
     /// use rex_engine::{Context, Module, Value};
     /// use rex_typesystem::{BuiltinTypeId, Scheme, Type};
     ///
-    /// let mut module = Module::<()>::new("acme.dynamic");
+    /// let mut module = Module::<()>::new("acme.dynamic", None);
     /// let scheme = Scheme::new(
     ///     vec![],
     ///     vec![],
@@ -505,9 +522,7 @@ where
             + Sync
             + 'static,
     {
-        self.exports
-            .push(Export::from_native(name, scheme, arity, handler)?);
-        Ok(())
+        self.add_export(Export::from_native(name, scheme, arity, handler)?)
     }
 
     /// Stage a value-based asynchronous native export with an explicit Rex type scheme.
@@ -523,7 +538,7 @@ where
     /// use rex_engine::{Context, Module, Value};
     /// use rex_typesystem::{BuiltinTypeId, Scheme, Type};
     ///
-    /// let mut module = Module::<()>::new("acme.dynamic");
+    /// let mut module = Module::<()>::new("acme.dynamic", None);
     /// let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
     ///
     /// module
@@ -547,17 +562,14 @@ where
     where
         F: Fn(Context<State>, Type, Vec<Value>) -> NativeFuture + Send + Sync + 'static,
     {
-        self.exports
-            .push(Export::from_native_async(name, scheme, arity, handler)?);
-        Ok(())
+        self.add_export(Export::from_native_async(name, scheme, arity, handler)?)
     }
 
     pub fn export_value<V>(&mut self, name: impl Into<String>, value: V) -> Result<(), EngineError>
     where
         V: IntoRex + RexType + Send + Sync + 'static,
     {
-        self.exports.push(Export::<State>::from_value(name, value)?);
-        Ok(())
+        self.add_export(Export::<State>::from_value(name, value)?)
     }
 }
 
@@ -566,15 +578,47 @@ fn type_decl_from_adt(adt: &AdtDecl) -> TypeDecl {
         span: Span::default(),
         is_pub: true,
         name: adt.name.clone(),
-        params: adt.params.iter().map(|p| p.name.clone()).collect(),
-        kind: TypeDeclKind::Adt(
-            adt.variants
-                .iter()
-                .map(|variant| TypeVariant {
-                    name: variant.name.clone(),
-                    args: variant.args.iter().map(type_expr_from_type).collect(),
-                })
-                .collect(),
-        ),
+        params: adt
+            .params
+            .iter()
+            .map(|param| TypeParam {
+                name: param.name.clone(),
+                docs: param.docs.clone(),
+            })
+            .collect(),
+        kind: TypeDeclKind::Adt(adt.variants.iter().map(type_variant_from_adt).collect()),
+        docs: adt.docs.clone(),
+    }
+}
+
+fn type_variant_from_adt(variant: &AdtVariant) -> AstTypeVariant {
+    AstTypeVariant {
+        name: variant.name.clone(),
+        args: variant.args.iter().map(type_variant_arg_from_adt).collect(),
+        docs: variant.docs.clone(),
+    }
+}
+
+fn type_variant_arg_from_adt(arg: &AdtArgument) -> TypeVariantArg {
+    match arg {
+        AdtArgument::Positional { typ, docs } => TypeVariantArg {
+            typ: type_expr_from_type(typ),
+            docs: docs.clone(),
+        },
+        AdtArgument::Record { fields, docs } => TypeVariantArg {
+            typ: TypeExpr::Record(
+                Span::default(),
+                fields.iter().map(type_field_from_adt).collect(),
+            ),
+            docs: docs.clone(),
+        },
+    }
+}
+
+fn type_field_from_adt(field: &AdtField) -> TypeField {
+    TypeField {
+        name: field.name.clone(),
+        typ: type_expr_from_type(&field.typ),
+        docs: field.docs.clone(),
     }
 }

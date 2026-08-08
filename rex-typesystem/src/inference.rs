@@ -277,8 +277,8 @@ fn scheme_ftv_with_unifier(scheme: &Scheme, unifier: &mut Unifier) -> BTreeSet<T
 fn env_ftv_with_unifier(env: &TypeEnv, unifier: &mut Unifier) -> BTreeSet<TypeVarId> {
     let mut out = BTreeSet::new();
     for (_name, schemes) in env.values.iter() {
-        for scheme in schemes {
-            out.extend(scheme_ftv_with_unifier(scheme, unifier));
+        for value in schemes {
+            out.extend(scheme_ftv_with_unifier(&value.scheme, unifier));
         }
     }
     out
@@ -1228,12 +1228,12 @@ fn infer_expr_type_inner(
                 .lookup(&var.name)
                 .ok_or_else(|| TypeError::UnknownVar(var.name.clone()))?;
             if schemes.len() == 1 {
-                let scheme = apply_scheme_with_unifier(&schemes[0], unifier);
+                let scheme = apply_scheme_with_unifier(&schemes[0].scheme, unifier);
                 let (preds, t) = instantiate(&scheme, supply);
                 Ok((preds, t))
             } else {
-                for scheme in schemes {
-                    if !scheme.vars.is_empty() || !scheme.preds.is_empty() {
+                for value in schemes {
+                    if !value.scheme.vars.is_empty() || !value.scheme.preds.is_empty() {
                         return Err(TypeError::AmbiguousOverload(var.name.clone()));
                     }
                 }
@@ -1285,11 +1285,11 @@ fn infer_expr_type_inner(
                         None
                     } else {
                         let mut candidates = Vec::new();
-                        for scheme in schemes {
-                            if !scheme.vars.is_empty() || !scheme.preds.is_empty() {
+                        for value in schemes {
+                            if !value.scheme.vars.is_empty() || !value.scheme.preds.is_empty() {
                                 return Err(TypeError::AmbiguousOverload(var.name.clone()));
                             }
-                            let scheme = apply_scheme_with_unifier(scheme, unifier);
+                            let scheme = apply_scheme_with_unifier(&value.scheme, unifier);
                             let (p, typ) = instantiate(&scheme, supply);
                             if !p.is_empty() {
                                 return Err(TypeError::AmbiguousOverload(var.name.clone()));
@@ -1750,7 +1750,7 @@ fn infer_expr(
                     .lookup(&var.name)
                     .ok_or_else(|| TypeError::UnknownVar(var.name.clone()))?;
                 if schemes.len() == 1 {
-                    let scheme = apply_scheme_with_unifier(&schemes[0], unifier);
+                    let scheme = apply_scheme_with_unifier(&schemes[0].scheme, unifier);
                     let (preds, t) = instantiate(&scheme, supply);
                     let typed = TypedExpr::new(
                         t.clone(),
@@ -1762,12 +1762,12 @@ fn infer_expr(
                     Ok((preds, t, typed))
                 } else {
                     let mut overloads = Vec::new();
-                    for scheme in schemes {
-                        if !scheme.preds.is_empty() {
+                    for value in schemes {
+                        if !value.scheme.preds.is_empty() {
                             return Err(TypeError::AmbiguousOverload(var.name.clone()));
                         }
 
-                        let scheme = apply_scheme_with_unifier(scheme, unifier);
+                        let scheme = apply_scheme_with_unifier(&value.scheme, unifier);
                         let (preds, typ) = instantiate(&scheme, supply);
                         if !preds.is_empty() {
                             return Err(TypeError::AmbiguousOverload(var.name.clone()));
@@ -2255,13 +2255,21 @@ fn ctor_lookup<'a>(
     found
 }
 
-fn record_fields(variant: &AdtVariant) -> Option<&[(Symbol, Type)]> {
+fn record_fields(variant: &AdtVariant) -> Option<Vec<(Symbol, Type)>> {
     if variant.args.len() != 1 {
         return None;
     }
-    match variant.args[0].as_ref() {
-        TypeKind::Record(fields) => Some(fields),
-        _ => None,
+    match &variant.args[0] {
+        crate::types::AdtArgument::Record { fields, .. } => Some(
+            fields
+                .iter()
+                .map(|field| (field.name.clone(), field.typ.clone()))
+                .collect(),
+        ),
+        crate::types::AdtArgument::Positional { typ, .. } => match typ.as_ref() {
+            TypeKind::Record(fields) => Some(fields.clone()),
+            _ => None,
+        },
     }
 }
 
@@ -2278,7 +2286,7 @@ fn instantiate_variant_fields(
     }
     let result_ty = adt.result_type().apply(&subst);
     let fields = fields
-        .iter()
+        .into_iter()
         .map(|(name, ty)| (name.clone(), ty.apply(&subst)))
         .collect();
     Some((result_ty, fields))
@@ -2379,7 +2387,7 @@ where
             let Some(fields) = record_fields(variant) else {
                 continue;
             };
-            if matches_fields(fields) {
+            if matches_fields(&fields) {
                 candidates.push((adt, variant));
             }
         }
@@ -2565,7 +2573,7 @@ fn infer_pattern(
             if schemes.len() != 1 {
                 return Err(TypeError::AmbiguousOverload(ctor_name));
             }
-            let scheme = apply_scheme_with_unifier(&schemes[0], unifier);
+            let scheme = apply_scheme_with_unifier(&schemes[0].scheme, unifier);
             let (preds, ctor_ty) = instantiate(&scheme, supply);
             let (arg_tys, res_ty) = decompose_fun(&ctor_ty, ps.len())
                 .ok_or(TypeError::UnsupportedExpr("pattern constructor"))?;

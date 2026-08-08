@@ -63,7 +63,7 @@ pub fn inject_cli_prelude_builder(builder: &mut Builder) -> Result<(), EngineErr
 }
 
 fn inject_cli_test_natives(builder: &mut Builder) -> Result<(), EngineError> {
-    let mut module = Module::new("test");
+    let mut module = Module::new("test", None);
     module.export_async("do_something", |_state: &(), n: i32| async move {
         println!("do_something {} begin", n);
         let extra = {
@@ -112,7 +112,7 @@ fn inject_cli_test_natives(builder: &mut Builder) -> Result<(), EngineError> {
 }
 
 fn inject_cli_process_natives(builder: &mut Builder) -> Result<(), EngineError> {
-    let mut module = Module::new("std.process");
+    let mut module = Module::new("std.process", None);
     module.add_rex_adt::<SpawnOptions>()?;
     module.add_rex_adt::<CliSubprocess>()?;
 

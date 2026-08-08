@@ -423,13 +423,17 @@ fn test_parse_type_decl() {
         Decl::Type(decl) => {
             assert_eq!(decl.name, Symbol::intern("MyADT"));
             assert_eq!(
-                decl.params,
+                decl.params
+                    .iter()
+                    .map(|param| param.name.clone())
+                    .collect::<Vec<_>>(),
                 vec![
                     Symbol::intern("a"),
                     Symbol::intern("b"),
                     Symbol::intern("c")
                 ]
             );
+            assert!(decl.params.iter().all(|param| param.docs.is_none()));
             let TypeDeclKind::Adt(variants) = &decl.kind else {
                 panic!("expected ADT declaration");
             };
@@ -439,12 +443,12 @@ fn test_parse_type_decl() {
             assert_eq!(variants[1].name, Symbol::intern("MyCtor2"));
             assert_eq!(variants[1].args.len(), 2);
             assert_eq!(variants[2].name, Symbol::intern("MyCtor3"));
-            match &variants[2].args[0] {
+            match &variants[2].args[0].typ {
                 TypeExpr::Record(_, fields) => {
                     assert_eq!(fields.len(), 1);
-                    assert_eq!(fields[0].0, Symbol::intern("field1"));
+                    assert_eq!(fields[0].name, Symbol::intern("field1"));
                     assert!(matches!(
-                        fields[0].1,
+                        fields[0].typ,
                         TypeExpr::Name(_, ref n) if n.as_ref() == "c"
                     ));
                 }
@@ -467,8 +471,8 @@ fn test_parse_named_record_alias() {
         panic!("expected record alias");
     };
     assert_eq!(fields.len(), 2);
-    assert_eq!(fields[0].0, Symbol::intern("x"));
-    assert_eq!(fields[1].0, Symbol::intern("y"));
+    assert_eq!(fields[0].name, Symbol::intern("x"));
+    assert_eq!(fields[1].name, Symbol::intern("y"));
 }
 
 #[test]

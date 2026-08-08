@@ -4,7 +4,7 @@ use crate::engine::{EngineError, MainSignature, Value as RexValue};
 use blake3::Hash;
 use rex_ast::Symbol;
 use rex_typesystem::{
-    types::{AdtDecl, BuiltinTypeId, Type, TypeKind},
+    types::{AdtArgument, AdtDecl, BuiltinTypeId, Type, TypeKind},
     typesystem::TypeSystem,
 };
 use serde_json::{Map, Number, Value as JsonValue};
@@ -389,7 +389,7 @@ fn json_to_value_for_adt(
         return decode_direct_variant(
             json,
             &variant.name,
-            &instantiate_types(&variant.args, &substitutions),
+            &instantiate_adt_args(&variant.args, &substitutions),
             ts,
         );
     }
@@ -420,7 +420,7 @@ fn json_to_value_for_adt(
         return decode_wrapped_variant(
             payload,
             &variant.name,
-            &instantiate_types(&variant.args, &substitutions),
+            &instantiate_adt_args(&variant.args, &substitutions),
             ts,
         );
     }
@@ -448,7 +448,7 @@ fn value_to_json_for_adt(
         .iter()
         .find(|variant| constructor_matches(tag, &variant.name))
         .ok_or_else(|| error(format!("constructor `{tag}` is not in ADT `{adt_name}`")))?;
-    let field_types = instantiate_types(&variant.args, &substitutions);
+    let field_types = instantiate_adt_args(&variant.args, &substitutions);
     if fields.len() != field_types.len() {
         return Err(error(format!(
             "constructor `{tag}` expected {} args, got {}",
@@ -587,10 +587,10 @@ fn adt_subst(adt: &AdtDecl, args: &[Type]) -> Result<BTreeMap<usize, Type>, Engi
         .collect())
 }
 
-fn instantiate_types(types: &[Type], substitutions: &BTreeMap<usize, Type>) -> Vec<Type> {
-    types
-        .iter()
-        .map(|typ| instantiate_type(typ, substitutions))
+fn instantiate_adt_args(args: &[AdtArgument], substitutions: &BTreeMap<usize, Type>) -> Vec<Type> {
+    args.iter()
+        .map(AdtArgument::typ)
+        .map(|typ| instantiate_type(&typ, substitutions))
         .collect()
 }
 

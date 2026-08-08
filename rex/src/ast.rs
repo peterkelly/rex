@@ -78,8 +78,17 @@ pub use rex_ast::TypeDecl;
 /// A source-level Rex type expression.
 pub use rex_ast::TypeExpr;
 
+/// A named field inside a structural record type expression.
+pub use rex_ast::TypeField;
+
+/// A documented generic parameter on a type declaration.
+pub use rex_ast::TypeParam;
+
 /// A constructor variant inside an algebraic data type declaration.
 pub use rex_ast::TypeVariant;
+
+/// A documented constructor argument inside an algebraic data type declaration.
+pub use rex_ast::TypeVariantArg;
 
 /// A variable occurrence or binder in the source syntax tree.
 pub use rex_ast::Var;

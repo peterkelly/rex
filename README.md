@@ -91,7 +91,8 @@ This repo is a Cargo workspace. The key crates are:
 - `rex-ast`: AST nodes, symbols, and spans
 - `rex-typesystem`: Hindley–Milner type inference + type classes + ADTs
 - `rex-engine`: runtime evaluator + native-function injection, backed by `rex-typesystem`
-- `rex-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
+- `rex-proc-macro`: `#[derive(Rex)]`, `#[rex::export]`, and `#[rex::module]` for bridging
+  documented Rust APIs into Rex
 - `rex-cli`: CLI crate providing the `rex` binary (`cargo run -p rex-cli --bin rex -- ...`)
 - `rex-fuzz`: stdin-driven fuzz harness binaries
 - `rex-util`: small shared helpers (e.g. LSP content hashing, CLI import-path helpers,

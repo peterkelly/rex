@@ -522,11 +522,11 @@ mod tests {
         assert!(manifest.get("parameters").is_none());
         assert!(manifest.get("inputShape").is_none());
         assert!(
-            manifest.pointer("/typeBundle/types/input.box").is_some(),
+            manifest.pointer("/typeBundle/values/input.box").is_some(),
             "manifest should include a round-trippable parameter type"
         );
         assert!(
-            manifest.pointer("/typeBundle/types/result").is_some(),
+            manifest.pointer("/typeBundle/values/result").is_some(),
             "manifest should include a round-trippable result type"
         );
         assert!(
@@ -561,6 +561,6 @@ mod tests {
 
         assert_eq!(actual, serde_json::json!(3));
         assert!(manifest.get("parameters").is_none());
-        assert!(manifest.pointer("/typeBundle/types/result").is_some());
+        assert!(manifest.pointer("/typeBundle/values/result").is_some());
     }
 }

@@ -289,7 +289,10 @@ use rex::{
 
 let mut builder = Builder::with_prelude(())?;
 
-let mut math = Module::new("acme.math");
+let mut math = Module::new(
+    "acme.math",
+    Some("Arithmetic operations provided by the host.".to_owned()),
+);
 math.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
 math.export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })?;
 builder.inject_module(math)?;
@@ -303,21 +306,105 @@ let value = evaluator.run(program, Default::default()).await?;
 println!("{value}");
 ```
 
+For API surfaces primarily consumed by agents, use the registration attributes so Rust doc
+comments become Rex metadata automatically:
+
+```rust,ignore
+/// Arithmetic tools exposed by this host.
+#[rex::module(name = "acme.math")]
+mod math {
+    use rex::engine::EngineError;
+
+    /// A value supplied to arithmetic operations.
+    #[derive(Clone, rex::Rex)]
+    #[rex(export)]
+    pub struct Input {
+        /// The integer to operate on.
+        pub value: i32,
+    }
+
+    /// Increment an input by one.
+    #[rex::export(name = "inc")]
+    pub fn increment(_state: &(), input: Input) -> Result<Input, EngineError> {
+        Ok(Input { value: input.value + 1 })
+    }
+}
+
+let mut builder = rex::engine::Builder::with_prelude(())?;
+builder.inject_module(math::rex_module()?)?;
+```
+
+`#[rex::module]` generates `rex_module()`. It copies the module's Rust doc comments, collects
+functions marked `#[rex::export]`, and stages non-generic derived ADTs marked `#[rex(export)]`.
+`#[rex::export]` supports synchronous and asynchronous functions, preserves the function's Rust
+doc comments and Rex-visible parameter names, and generates a `<function>_rex_export()` helper.
+Every derived ADT reachable through an exported function's argument or result types is staged
+automatically, including ADTs nested inside standard containers.
+
+Rust does not allow `#[doc]` attributes or doc comments on individual function parameters.
+Parameter descriptions therefore belong in the function-level doc comment; Rex metadata stores
+only each parameter's Rust identifier. The host-state parameter is not part of the Rex signature
+or its parameter-name metadata.
+
+The lower-level APIs remain available for dynamic registration. Pass module documentation as the
+second argument to `Module::new`; use `Export::with_docs` and `Export::with_param_names` for an
+export; set `AdtDecl::docs`; and pass variant documentation to `AdtDecl::add_variant`. `AdtParam`,
+`AdtArgument`, and `AdtField` carry documentation for the corresponding parts of an ADT. Repeated
+ADT registrations merge missing documentation and reject contradictory documentation for the
+same declaration. Named modules preserve generic-parameter documentation through their
+intermediate `TypeDecl` using documented `TypeParam` entries. Rustdoc itself does not render
+generic-parameter documentation, so put `#[allow(unused_doc_comments)]` on a documented generic
+parameter when warnings are denied.
+`Module::global()` keeps its no-argument signature and creates the root module without module-level
+documentation.
+
+Before injection, metadata can be inspected through `Module::docs`, `Module::exports` (using each
+export's `docs()` and `params()` methods), and `Module::adts`. After registration, the same function
+and ADT metadata lives on `RegisteredValue` and `AdtDecl` entries in the builder or compiler's
+`TypeSystem`.
+
+Documentation is also preserved in the JSON-facing `TypeBundle` wire format. A bundle can carry
+explicit bundle-level docs, documented overloads and parameter names, and documented ADTs down to
+type parameters, variants, constructor arguments, and record fields.
+`TypeBundle::from_registered_values` preserves the value docs and parameter names in its
+`RegisteredValue` inputs, but leaves the bundle-level `docs` field unset; call
+`TypeBundle::with_docs` when the bundle itself needs docs.
+`TypeBundle::from_schemes` has no value docs to preserve and generates names such as `arg0` for
+function parameters. The manifest builder currently uses this latter path. Wire parameter metadata
+is a list of strings because individual parameters have no documentation of their own. The wire
+format intentionally has no schema-version constant or `schemaVersion` field. When persisting a
+virtual module as a bundle, its module-level docs can be stored in this top-level bundle field.
+`TypeBundle::into_parts` returns a `DecodedTypeBundle` with named `docs`, `adts`, and `values`
+fields. `TypeBundle::register_into` installs those ADTs and returns a `RegisteredTypeBundle` with
+named `docs` and `values` fields.
+
 You can declare ADTs directly inside an injected host module:
 
 ```rust,ignore
 use rex_ast::Symbol;
 use rex_engine::{Builder, Module};
-use rex_typesystem::types::{BuiltinTypeId, Type};
+use rex_typesystem::types::{AdtArgument, BuiltinTypeId, Type};
 
 let mut builder = Builder::with_prelude(())?;
 
-let mut m = Module::new("acme.status");
+let mut m = Module::new(
+    "acme.status",
+    Some("Status values returned by host operations.".to_owned()),
+);
 let mut status = builder.adt_decl("Status", &[]);
-status.add_variant(Symbol::intern("Ready"), vec![]);
+status.docs = Some("The state of a host operation.".to_owned());
+status.add_variant(
+    Symbol::intern("Ready"),
+    vec![],
+    Some("The operation completed successfully.".to_owned()),
+);
 status.add_variant(
     Symbol::intern("Failed"),
-    vec![Type::builtin(BuiltinTypeId::String)],
+    vec![AdtArgument::Positional {
+        typ: Type::builtin(BuiltinTypeId::String),
+        docs: Some("A human-readable failure message.".to_owned()),
+    }],
+    Some("The operation failed.".to_owned()),
 );
 m.add_adt_decl(status)?;
 builder.inject_module(m)?;
@@ -347,8 +434,10 @@ you can use:
 - `Export::from_handler` / `Export::from_async_handler` (typed handlers)
 - `Export::from_native` / `Export::from_native_async` (value-based native handlers)
 
-Then add them via `Module::add_export`, or push them into `Module::exports` directly if you are
-assembling the module programmatically.
+These constructors initially use generated parameter names such as `arg0` and have no docs. Chain
+`Export::with_param_names` and `Export::with_docs` when supplying API metadata, then add the export
+with `Module::add_export`. Adding it also stages any derived ADT family required by the export's
+Rust signature.
 
 This example shows how to use Rust enums and structs as Rex-facing types with ADTs declared inside
 the module itself. The host function accepts a Rust `Label` (containing a Rust `Side` enum), and
@@ -384,7 +473,7 @@ fn render_label(label: Label) -> String {
 
 let mut builder = Builder::with_prelude(())?;
 
-let mut m = Module::new("sample");
+let mut m = Module::new("sample", None);
 m.add_rex_adt::<Label>()?;
 m.export("render_label", |_state: &(), label: Label| {
     Ok::<String, EngineError>(render_label(label))
@@ -445,7 +534,7 @@ use rex::typesystem::{BuiltinTypeId, Scheme, Type};
 
 let mut builder = Builder::with_prelude(())?;
 
-let mut m = Module::new("acme.dynamic");
+let mut m = Module::new("acme.dynamic", None);
 let scheme = Scheme::new(vec![], vec![], Type::fun(Type::builtin(BuiltinTypeId::I32), Type::builtin(BuiltinTypeId::I32)));
 
 m.export_native("id_value", scheme.clone(), 1, |_ctx: Context<()>, _typ: &Type, mut args: Vec<Value>| {
@@ -494,7 +583,7 @@ impl Importer for ToolImporter {
                 return Ok(None);
             }
 
-            let mut tools = Module::new(self.tools_id.to_string());
+            let mut tools = Module::new(self.tools_id.to_string(), None);
             tools.export("inc", |_state: &(), x: i32| Ok(x + 1))?;
 
             Ok(Some(ResolvedModule {
@@ -914,6 +1003,10 @@ The derive:
 The derive does not implement `RexDefault`; `inject_rex_with_default` is available only when the
 type already provides that trait.
 
+Rust doc comments on the derived type, type parameters, enum variants, tuple fields, and named
+fields are copied into the generated `AdtDecl`. For a struct, the type's docs also document its
+single generated constructor variant.
+
 Fields of type `Vec<T>` are exposed as `List T` and convert to/from Rex lists.
 When constructing or updating derived records from Rex code, use list literals
 directly for these fields.
@@ -997,7 +1090,8 @@ If your type metadata is data-driven (for example loaded from JSON), you can bui
 without `#[derive(Rex)]`.
 
 - Use `Builder::adt_decl_from_type(...)` to seed an ADT declaration from a Rex type head.
-- Add variants with `AdtDecl::add_variant(...)`.
+- Add variants with `AdtDecl::add_variant(name, args, docs)`, where `args` is a
+  `Vec<AdtArgument>` and `docs` is an `Option<String>`.
 - Stage it with `Module::add_adt_decl(...)`, then inject that module with `Builder::inject_module(...)`.
 
 `Module::add_adt_decl(...)` is the low-level single-ADT staging primitive. If you are building
@@ -1007,15 +1101,23 @@ several ADTs manually, prefer batching them in one module with `add_adt_family(.
 use rex::{
     ast::Symbol,
     engine::{Builder, Module},
-    typesystem::{RexType, Type},
+    typesystem::{AdtArgument, RexType, Type},
 };
 
 let mut builder = Builder::with_prelude(())?;
 let mut globals = Module::global();
 
 let mut adt = builder.adt_decl_from_type(&Type::con("PrimitiveEither", 0))?;
-adt.add_variant(Symbol::intern("Flag"), vec![bool::rex_type()]);
-adt.add_variant(Symbol::intern("Count"), vec![i32::rex_type()]);
+adt.add_variant(
+    Symbol::intern("Flag"),
+    vec![AdtArgument::positional(bool::rex_type())],
+    None,
+);
+adt.add_variant(
+    Symbol::intern("Count"),
+    vec![AdtArgument::positional(i32::rex_type())],
+    None,
+);
 globals.add_adt_decl(adt)?;
 builder.inject_module(globals)?;
 ```
@@ -1031,7 +1133,7 @@ If the manual Rust type is itself an ADT, override `RexType::collect_rex_family(
 use rex::{
     ast::Symbol,
     engine::Builder,
-    typesystem::{AdtDecl, RexAdt, RexType, Type, TypeError, TypeVarSupply},
+    typesystem::{AdtArgument, AdtDecl, RexAdt, RexType, Type, TypeError, TypeVarSupply},
 };
 
 struct PrimitiveEither;
@@ -1051,8 +1153,16 @@ impl RexAdt for PrimitiveEither {
     fn rex_adt_decl() -> Result<AdtDecl, TypeError> {
         let mut supply = TypeVarSupply::new();
         let mut adt = AdtDecl::new(&Symbol::intern("PrimitiveEither"), &[], &mut supply);
-        adt.add_variant(Symbol::intern("Flag"), vec![bool::rex_type()]);
-        adt.add_variant(Symbol::intern("Count"), vec![i32::rex_type()]);
+        adt.add_variant(
+            Symbol::intern("Flag"),
+            vec![AdtArgument::positional(bool::rex_type())],
+            None,
+        );
+        adt.add_variant(
+            Symbol::intern("Count"),
+            vec![AdtArgument::positional(i32::rex_type())],
+            None,
+        );
         Ok(adt)
     }
 }

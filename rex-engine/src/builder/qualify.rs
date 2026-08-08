@@ -4,7 +4,7 @@ use std::sync::Arc;
 use rex_ast::{
     ClassDecl, ClassMethodSig, CompilationUnit, DeclareFnDecl, Expr, FnDecl, InstanceDecl,
     InstanceMethodImpl, NameRef, Pattern, Symbol, TypeConstraint, TypeDecl, TypeDeclKind, TypeExpr,
-    TypeVariant, Var,
+    TypeField, TypeVariant, TypeVariantArg, Var,
 };
 
 use crate::modules::{CompilationPackage, Declarations, collect_pattern_bindings, types::qualify};
@@ -67,6 +67,7 @@ fn qualify_package_with_renames(
                 .collect(),
         },
         body,
+        docs: package.docs.clone(),
     }
 }
 
@@ -95,8 +96,12 @@ fn qualify_type_decl(
                     args: v
                         .args
                         .iter()
-                        .map(|t| rename_type_expr(t, type_renames, class_renames))
+                        .map(|arg| TypeVariantArg {
+                            typ: rename_type_expr(&arg.typ, type_renames, class_renames),
+                            docs: arg.docs.clone(),
+                        })
                         .collect(),
+                    docs: v.docs.clone(),
                 })
                 .collect(),
         ),
@@ -107,6 +112,7 @@ fn qualify_type_decl(
         name,
         params: td.params.clone(),
         kind,
+        docs: td.docs.clone(),
     }
 }
 
@@ -156,6 +162,7 @@ fn qualify_fn_decl(
         ret,
         constraints,
         body,
+        docs: fd.docs.clone(),
     }
 }
 
@@ -193,6 +200,7 @@ fn qualify_declare_fn_decl(
         params,
         ret,
         constraints,
+        docs: df.docs.clone(),
     }
 }
 
@@ -213,6 +221,7 @@ fn qualify_class_decl(
             name: m.name.clone(),
             type_params: m.type_params.clone(),
             typ: rename_type_expr(&m.typ, type_renames, class_renames),
+            docs: m.docs.clone(),
         })
         .collect();
     ClassDecl {
@@ -222,6 +231,7 @@ fn qualify_class_decl(
         params: cd.params.clone(),
         supers,
         methods,
+        docs: cd.docs.clone(),
     }
 }
 
@@ -265,6 +275,7 @@ fn qualify_instance_decl(
         head,
         context,
         methods,
+        docs: id.docs.clone(),
     }
 }
 
@@ -622,11 +633,10 @@ fn rename_type_expr(
             *span,
             fields
                 .iter()
-                .map(|(name, ty)| {
-                    (
-                        name.clone(),
-                        rename_type_expr(ty, type_renames, class_renames),
-                    )
+                .map(|field| TypeField {
+                    name: field.name.clone(),
+                    typ: rename_type_expr(&field.typ, type_renames, class_renames),
+                    docs: field.docs.clone(),
                 })
                 .collect(),
         ),

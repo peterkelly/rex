@@ -270,7 +270,7 @@ fn collect_primitive_type_names(ts: &TypeSystem) -> BTreeSet<String> {
         if schemes.len() != 1 {
             continue;
         }
-        let scheme = &schemes[0];
+        let scheme = &schemes[0].scheme;
         if !scheme.vars.is_empty() || !scheme.preds.is_empty() {
             continue;
         }
@@ -339,8 +339,8 @@ fn collect_type_ctors_from_scheme(scheme: &Scheme, out: &mut BTreeMap<String, us
 
 fn collect_all_type_constructors(ts: &TypeSystem, out: &mut BTreeMap<String, usize>) {
     for (_, schemes) in ts.env.values.iter() {
-        for scheme in schemes {
-            collect_type_ctors_from_scheme(scheme, out);
+        for value in schemes {
+            collect_type_ctors_from_scheme(&value.scheme, out);
         }
     }
     for class_info in ts.class_info.values() {
@@ -362,7 +362,7 @@ fn collect_all_type_constructors(ts: &TypeSystem, out: &mut BTreeMap<String, usi
             .or_insert(adt.params.len());
         for variant in &adt.variants {
             for arg in &variant.args {
-                collect_type_ctors_from_type(arg, out);
+                collect_type_ctors_from_type(&arg.typ(), out);
             }
         }
     }
@@ -455,7 +455,7 @@ fn build_functions(
             .lookup(&method_sym)
             .unwrap_or_default()
             .iter()
-            .map(format_scheme)
+            .map(|value| format_scheme(&value.scheme))
             .collect::<Vec<_>>();
         let implemented_on = ts
             .classes
@@ -497,7 +497,7 @@ fn build_functions(
             .lookup(&name_sym)
             .unwrap_or_default()
             .iter()
-            .map(format_scheme)
+            .map(|value| format_scheme(&value.scheme))
             .collect::<Vec<_>>();
         out.push(FunctionDoc {
             name,

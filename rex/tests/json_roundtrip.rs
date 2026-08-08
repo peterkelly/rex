@@ -30,7 +30,7 @@ struct EchoRecord {
 async fn injected_echo_module_roundtrips_embedder_types_through_json() {
     let mut builder = builder_with_prelude();
 
-    let mut module = Module::new("echo");
+    let mut module = Module::new("echo", None);
     module.add_rex_adt::<EchoEnum>().unwrap();
     module.add_rex_adt::<EchoRecord>().unwrap();
     module

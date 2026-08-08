@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use rex_ast::{
     ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl,
-    Scope, Span, Symbol, TypeConstraint, TypeDecl, TypeDeclKind, TypeExpr,
+    Scope, Span, Symbol, TypeConstraint, TypeDecl, TypeDeclKind, TypeExpr, TypeParam,
 };
 
 pub use crate::unification::{Subst, compose_subst, unify};
@@ -14,11 +14,23 @@ use crate::{
     error::TypeError,
     inference::infer_typed,
     types::{
-        AdtDecl, BuiltinTypeId, ClassEnv, Instance, Predicate, Scheme, Type, TypeAlias, TypeEnv,
-        TypeKind, TypeVar, TypeVarId, TypedExpr, Types,
+        AdtArgument, AdtDecl, AdtField, AdtParam, BuiltinTypeId, ClassEnv, Instance, Predicate,
+        RegisteredValue, Scheme, Type, TypeAlias, TypeEnv, TypeKind, TypeVar, TypeVarId, TypedExpr,
+        Types, merge_adt_docs,
     },
     unification::scheme_compatible,
 };
+
+fn type_param_names(params: &[TypeParam]) -> Vec<Symbol> {
+    params.iter().map(|param| param.name.clone()).collect()
+}
+
+fn copy_type_param_docs(target: &mut [AdtParam], source: &[TypeParam]) {
+    debug_assert_eq!(target.len(), source.len());
+    for (target, source) in target.iter_mut().zip(source) {
+        target.docs = source.docs.clone();
+    }
+}
 
 fn format_constraints_referencing_vars(preds: &[Predicate], vars: &[TypeVarId]) -> String {
     if vars.is_empty() {
@@ -321,12 +333,14 @@ pub struct ClassInfo {
     pub params: Vec<Symbol>,
     pub supers: Vec<Symbol>,
     pub methods: BTreeMap<Symbol, Scheme>,
+    pub docs: Option<String>,
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ClassMethodInfo {
     pub class: Symbol,
     pub scheme: Scheme,
+    pub docs: Option<String>,
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
@@ -510,6 +524,7 @@ impl TypeSystem {
                 name,
                 type_params,
                 typ,
+                ..
             } in &decl.methods
             {
                 if self.env.lookup(name).is_some() || self.class_methods.contains_key(name) {
@@ -547,12 +562,28 @@ impl TypeSystem {
                 };
                 let scheme = Scheme::new(scheme_vars, vec![class_pred], ty);
 
-                self.env.extend(name.clone(), scheme.clone());
+                self.env.extend_registered(
+                    name.clone(),
+                    RegisteredValue {
+                        scheme: scheme.clone(),
+                        params: Vec::new(),
+                        docs: decl
+                            .methods
+                            .iter()
+                            .find(|method| &method.name == name)
+                            .and_then(|method| method.docs.clone()),
+                    },
+                );
                 self.class_methods.insert(
                     name.clone(),
                     ClassMethodInfo {
                         class: decl.name.clone(),
                         scheme: scheme.clone(),
+                        docs: decl
+                            .methods
+                            .iter()
+                            .find(|method| &method.name == name)
+                            .and_then(|method| method.docs.clone()),
                     },
                 );
                 methods.insert(name.clone(), scheme);
@@ -565,6 +596,7 @@ impl TypeSystem {
                     params,
                     supers,
                     methods,
+                    docs: decl.docs.clone(),
                 },
             );
             Ok(())
@@ -605,6 +637,7 @@ impl TypeSystem {
                     class: decl.class.clone(),
                     typ: head.clone(),
                 },
+                decl.docs.clone(),
             );
 
             // Validate method list against the class declaration if present.
@@ -835,13 +868,24 @@ impl TypeSystem {
 
                 let (info, scheme) = info.map_err(|err| err.with_span(&span))?;
                 infos.push(info);
-                schemes.push((decl.name.name.clone(), scheme));
+                schemes.push((
+                    decl.name.name.clone(),
+                    RegisteredValue {
+                        scheme,
+                        params: decl
+                            .params
+                            .iter()
+                            .map(|(param, _)| param.name.clone())
+                            .collect(),
+                        docs: decl.docs.clone(),
+                    },
+                ));
             }
 
             // Seed environment with all declared signatures first so fn bodies
             // can reference each other recursively (let-rec semantics).
-            for (name, scheme) in schemes {
-                self.env.extend(name, scheme);
+            for (name, value) in schemes {
+                self.env.extend_registered(name, value);
             }
 
             Ok(infos)
@@ -989,20 +1033,68 @@ impl TypeSystem {
 
             let name = &decl.name.name;
 
+            let merge_metadata = |this: &mut TypeSystem| -> Result<bool, TypeError> {
+                let Some(existing) = this.env.lookup(name) else {
+                    return Ok(false);
+                };
+                let mut values = existing.to_vec();
+                let Some(value) = values
+                    .iter_mut()
+                    .find(|value| scheme_compatible(&value.scheme, &scheme))
+                else {
+                    return Ok(false);
+                };
+                if let (Some(current), Some(incoming)) = (&value.docs, &decl.docs)
+                    && current != incoming
+                {
+                    return Err(TypeError::Internal(format!(
+                        "conflicting documentation for value `{name}`"
+                    )));
+                }
+                if value.docs.is_none() {
+                    value.docs = decl.docs.clone();
+                }
+                if value.params.is_empty() {
+                    value.params = decl
+                        .params
+                        .iter()
+                        .map(|(param, _)| param.name.clone())
+                        .collect();
+                }
+                this.env.values = this.env.values.insert(name.clone(), values);
+                Ok(true)
+            };
+
             // If there is already a real definition (prelude/host/`fn`), treat
             // `declare fn` as documentation only and ignore it.
             if self.env.lookup(name).is_some() && !self.declared_values.contains(name) {
+                let _ = merge_metadata(self)?;
                 return Ok(());
             }
 
             if let Some(existing) = self.env.lookup(name) {
-                if existing.iter().any(|s| scheme_compatible(s, &scheme)) {
+                if existing
+                    .iter()
+                    .any(|value| scheme_compatible(&value.scheme, &scheme))
+                {
+                    let _ = merge_metadata(self)?;
                     return Ok(());
                 }
                 return Err(TypeError::DuplicateValue(decl.name.name.clone()));
             }
 
-            self.env.extend(decl.name.name.clone(), scheme);
+            self.env.extend_registered(
+                decl.name.name.clone(),
+                RegisteredValue {
+                    scheme,
+                    params: decl
+                        .params
+                        .iter()
+                        .map(|(param, _)| param.name.clone())
+                        .collect(),
+                    docs: decl.docs.clone(),
+                },
+            );
             self.declared_values.insert(decl.name.name.clone());
             Ok(())
         })()
@@ -1118,11 +1210,55 @@ impl TypeSystem {
     /// Register constructor schemes for an ADT in the type environment.
     /// This makes constructors (e.g. `Some`, `None`, `Ok`, `Err`) available
     /// to the type checker as normal values.
-    pub fn register_adt(&mut self, adt: &AdtDecl) {
-        self.adts.insert(adt.name.clone(), adt.clone());
-        for (name, scheme) in adt.constructor_schemes() {
-            self.register_value_scheme(&name, scheme);
+    pub fn register_adt(&mut self, adt: &AdtDecl) -> Result<(), TypeError> {
+        if let Some(existing) = self.adts.get_mut(&adt.name) {
+            // Declaration batches install an empty header first so recursive
+            // references can resolve while the complete variants are built.
+            if existing.variants.is_empty() && !adt.variants.is_empty() {
+                *existing = adt.clone();
+            } else {
+                merge_adt_docs(existing, adt)?;
+            }
+        } else {
+            self.adts.insert(adt.name.clone(), adt.clone());
         }
+
+        let registered = self.adts.get(&adt.name).cloned().ok_or_else(|| {
+            TypeError::Internal(format!(
+                "ADT `{}` disappeared during registration",
+                adt.name
+            ))
+        })?;
+        for ((name, scheme), variant) in registered
+            .constructor_schemes()
+            .into_iter()
+            .zip(&registered.variants)
+        {
+            let value = RegisteredValue {
+                scheme,
+                params: variant
+                    .args
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| Symbol::intern(&format!("arg{index}")))
+                    .collect(),
+                docs: variant.docs.clone(),
+            };
+            if let Some(existing) = self.env.lookup(&name) {
+                let mut values = existing.to_vec();
+                if let Some(current) = values
+                    .iter_mut()
+                    .find(|current| scheme_compatible(&current.scheme, &value.scheme))
+                {
+                    current.params = value.params;
+                    current.docs = value.docs;
+                    self.env.values = self.env.values.insert(name, values);
+                    continue;
+                }
+            }
+            self.register_value_scheme(&name, value);
+        }
+        Ok(())
     }
 
     fn register_type_decl_header(&mut self, decl: &TypeDecl) -> Result<(), TypeError> {
@@ -1132,13 +1268,22 @@ impl TypeSystem {
         if self.adts.contains_key(&decl.name) || self.aliases.contains_key(&decl.name) {
             return Err(TypeError::DuplicateType(decl.name.clone()));
         }
+        let param_names = type_param_names(&decl.params);
         match &decl.kind {
             TypeDeclKind::Alias(_) => {
-                let alias = TypeAlias::new(&decl.name, &decl.params, &mut self.supply);
+                let mut alias = TypeAlias::new(
+                    &decl.name,
+                    &param_names,
+                    decl.docs.clone(),
+                    &mut self.supply,
+                );
+                copy_type_param_docs(&mut alias.params, &decl.params);
                 self.aliases.insert(decl.name.clone(), alias);
             }
             TypeDeclKind::Adt(_) => {
-                let adt = AdtDecl::new(&decl.name, &decl.params, &mut self.supply);
+                let mut adt = AdtDecl::new(&decl.name, &param_names, &mut self.supply);
+                copy_type_param_docs(&mut adt.params, &decl.params);
+                adt.docs = decl.docs.clone();
                 self.adts.insert(decl.name.clone(), adt);
             }
         }
@@ -1152,7 +1297,9 @@ impl TypeSystem {
                 decl.name
             )));
         };
-        let mut adt = AdtDecl::new(&decl.name, &decl.params, &mut self.supply);
+        let param_names = type_param_names(&decl.params);
+        let mut adt = AdtDecl::new(&decl.name, &param_names, &mut self.supply);
+        copy_type_param_docs(&mut adt.params, &decl.params);
         let mut param_map: BTreeMap<Symbol, TypeVar> = BTreeMap::new();
         for param in &adt.params {
             param_map.insert(param.name.clone(), param.var.clone());
@@ -1161,11 +1308,34 @@ impl TypeSystem {
         for variant in variants {
             let mut args = Vec::new();
             for arg in &variant.args {
-                let ty = self.type_from_expr(decl, &param_map, arg)?;
-                args.push(expand_type_aliases(&self.aliases, &ty)?);
+                match &arg.typ {
+                    TypeExpr::Record(_, fields) => {
+                        let mut adt_fields = Vec::with_capacity(fields.len());
+                        for field in fields {
+                            let ty = self.type_from_expr(decl, &param_map, &field.typ)?;
+                            adt_fields.push(AdtField {
+                                name: field.name.clone(),
+                                typ: expand_type_aliases(&self.aliases, &ty)?,
+                                docs: field.docs.clone(),
+                            });
+                        }
+                        args.push(AdtArgument::Record {
+                            fields: adt_fields,
+                            docs: arg.docs.clone(),
+                        });
+                    }
+                    _ => {
+                        let ty = self.type_from_expr(decl, &param_map, &arg.typ)?;
+                        args.push(AdtArgument::Positional {
+                            typ: expand_type_aliases(&self.aliases, &ty)?,
+                            docs: arg.docs.clone(),
+                        });
+                    }
+                }
             }
-            adt.add_variant(variant.name.clone(), args);
+            adt.add_variant(variant.name.clone(), args, variant.docs.clone());
         }
+        adt.docs = decl.docs.clone();
         Ok(adt)
     }
 
@@ -1223,7 +1393,7 @@ impl TypeSystem {
         for decl in decls {
             if matches!(&decl.kind, TypeDeclKind::Adt(_)) {
                 let adt = self.adt_from_decl(decl)?;
-                self.register_adt(&adt);
+                self.register_adt(&adt)?;
                 adts.push(adt);
             }
         }
@@ -1258,7 +1428,7 @@ impl TypeSystem {
             }
             TypeDeclKind::Adt(_) => {
                 let adt = self.adt_from_decl(decl)?;
-                self.register_adt(&adt);
+                self.register_adt(&adt)?;
             }
         }
         Ok(())
@@ -1304,8 +1474,11 @@ impl TypeSystem {
             }
             TypeExpr::Record(_, fields) => {
                 let mut out = Vec::new();
-                for (name, ty) in fields {
-                    out.push((name.clone(), self.type_from_expr(decl, params, ty)?));
+                for field in fields {
+                    out.push((
+                        field.name.clone(),
+                        self.type_from_expr(decl, params, &field.typ)?,
+                    ));
                 }
                 Ok(Type::record(out))
             }
@@ -1326,14 +1499,17 @@ impl TypeSystem {
         BuiltinTypeId::from_symbol(name).map(BuiltinTypeId::arity)
     }
 
-    fn register_value_scheme(&mut self, name: &Symbol, scheme: Scheme) {
+    fn register_value_scheme(&mut self, name: &Symbol, value: RegisteredValue) {
         match self.env.lookup(name) {
-            None => self.env.extend(name.clone(), scheme),
+            None => self.env.extend_registered(name.clone(), value),
             Some(existing) => {
-                if existing.iter().any(|s| unify(&s.typ, &scheme.typ).is_ok()) {
+                if existing
+                    .iter()
+                    .any(|registered| unify(&registered.scheme.typ, &value.scheme.typ).is_ok())
+                {
                     return;
                 }
-                self.env.extend_overload(name.clone(), scheme);
+                self.env.extend_registered_overload(name.clone(), value);
             }
         }
     }
@@ -1446,10 +1622,10 @@ fn type_from_annotation_expr_vars_raw(
         }
         TypeExpr::Record(_, fields) => {
             let mut out = Vec::new();
-            for (name, ty) in fields {
+            for field in fields {
                 out.push((
-                    name.clone(),
-                    type_from_annotation_expr_vars_raw(adts, aliases, ty, vars)?,
+                    field.name.clone(),
+                    type_from_annotation_expr_vars_raw(adts, aliases, &field.typ, vars)?,
                 ));
             }
             Ok(Type::record(out))
