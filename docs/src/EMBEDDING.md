@@ -293,8 +293,8 @@ let mut math = Module::new(
     "acme.math",
     Some("Arithmetic operations provided by the host.".to_owned()),
 );
-math.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
-math.export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })?;
+math.export("inc", |_state: (), x: i32| { Ok(x + 1) })?;
+math.export_async("double_async", |_state: (), x: i32| async move { Ok(x * 2) })?;
 builder.inject_module(math)?;
 let compiler = builder.build_compiler();
 let parsed = parse("import acme.math (inc, double_async as d);\ninc (d 20)")
@@ -325,7 +325,7 @@ mod math {
 
     /// Increment an input by one.
     #[rex::export(name = "inc")]
-    pub fn increment(_state: &(), input: Input) -> Result<Input, EngineError> {
+    pub fn increment(_state: (), input: Input) -> Result<Input, EngineError> {
         Ok(Input { value: input.value + 1 })
     }
 }
@@ -475,7 +475,7 @@ let mut builder = Builder::with_prelude(())?;
 
 let mut m = Module::new("sample", None);
 m.add_rex_adt::<Label>()?;
-m.export("render_label", |_state: &(), label: Label| {
+m.export("render_label", |_state: (), label: Label| {
     Ok::<String, EngineError>(render_label(label))
 })?;
 builder.inject_module(m)?;
@@ -584,7 +584,7 @@ impl Importer for ToolImporter {
             }
 
             let mut tools = Module::new(self.tools_id.to_string(), None);
-            tools.export("inc", |_state: &(), x: i32| Ok(x + 1))?;
+            tools.export("inc", |_state: (), x: i32| Ok(x + 1))?;
 
             Ok(Some(ResolvedModule {
                 id: self.tools_id.clone(),
@@ -668,7 +668,7 @@ injected functions.
 
 - Use `Builder::with_prelude(())?` if you do not need host state.
 - If you do, pass your state struct into `Builder::new(state)` or `Builder::with_prelude(state)`.
-- `export` / `export_async` callbacks receive `&State` as their first parameter.
+- `export` / `export_async` callbacks receive an owned clone of `State` as their first parameter.
 - Value-based native APIs (`export_native*`) receive `Context<State>` so they can read
   `ctx.state()`; the context deliberately exposes no heap access.
 
@@ -884,8 +884,8 @@ for code in [
 ] {
     let mut builder = Builder::with_prelude(())?;
     let mut globals = Module::global();
-    globals.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
-    globals.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
+    globals.export("num_u8", |_state: (), x: u8| Ok(format!("{x}:u8")))?;
+    globals.export("num_i64", |_state: (), x: i64| Ok(format!("{x}:i64")))?;
     builder.inject_module(globals)?;
 
     let program = parse(code).map_err(|errs| format!("parse error: {errs:?}"))?;

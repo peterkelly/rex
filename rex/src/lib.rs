@@ -30,7 +30,7 @@
 //! let mut builder = Builder::with_prelude(())?;
 //!
 //! let mut math = Module::new("host.math", None);
-//! math.export("inc", |_state: &(), x: i32| {
+//! math.export("inc", |_state: (), x: i32| {
 //!     Ok::<i32, EngineError>(x + 1)
 //! })?;
 //! builder.inject_module(math)?;

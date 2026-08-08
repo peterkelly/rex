@@ -156,7 +156,7 @@ impl Importer for LazyRustImporter {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let mut module = Module::new(self.returned_name.clone(), None);
             module
-                .export("inc", |_state: &(), value: i32| {
+                .export("inc", |_state: (), value: i32| {
                     Ok::<i32, EngineError>(value + 1)
                 })
                 .unwrap();
@@ -203,7 +203,7 @@ impl Importer for SelectiveLazyRustImporter {
             calls.fetch_add(1, Ordering::SeqCst);
             let mut module = Module::new(module_name, None);
             module
-                .export("value", |_state: &()| Ok::<i32, EngineError>(42))
+                .export("value", |_state: ()| Ok::<i32, EngineError>(42))
                 .unwrap();
             Ok(Some(ResolvedModule {
                 id: req.module_id,
@@ -878,12 +878,12 @@ async fn module_injected_from_rust_sync_and_async_exports() {
 
     let mut module = Module::new("host.math", None);
     module
-        .export("inc", |_state: &(), x: i32| Ok(x + 1))
+        .export("inc", |_state: (), x: i32| Ok(x + 1))
         .unwrap();
     module
         .export_async(
             "double_async",
-            |_state: &(), x: i32| async move { Ok(x * 2) },
+            |_state: (), x: i32| async move { Ok(x * 2) },
         )
         .unwrap();
     builder.inject_module(module).unwrap();
@@ -997,8 +997,8 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
     let mut builder = builder_with_prelude();
 
     let mut module = Module::new("host.over", None);
-    module.export("id", |_state: &(), x: i32| Ok(x)).unwrap();
-    module.export("id", |_state: &(), x: String| Ok(x)).unwrap();
+    module.export("id", |_state: (), x: i32| Ok(x)).unwrap();
+    module.export("id", |_state: (), x: String| Ok(x)).unwrap();
     builder.inject_module(module).unwrap();
 
     let (value_ptr, ty) = run_snippet(
@@ -1240,10 +1240,10 @@ async fn module_injected_from_rust_wildcard_import() {
 
     let mut module = Module::new("host.ops", None);
     module
-        .export("triple", |_state: &(), x: i32| Ok(x * 3))
+        .export("triple", |_state: (), x: i32| Ok(x * 3))
         .unwrap();
     module
-        .export("add", |_state: &(), a: i32, b: i32| Ok(a + b))
+        .export("add", |_state: (), a: i32, b: i32| Ok(a + b))
         .unwrap();
     builder.inject_module(module).unwrap();
 
@@ -1269,11 +1269,11 @@ async fn module_injected_from_rust_rejects_duplicate_module_name() {
     let mut builder = builder_with_prelude();
 
     let mut one = Module::new("host.dupe", None);
-    one.export("x", |_state: &(), x: i32| Ok(x)).unwrap();
+    one.export("x", |_state: (), x: i32| Ok(x)).unwrap();
     builder.inject_module(one).unwrap();
 
     let mut two = Module::new("host.dupe", None);
-    two.export("y", |_state: &(), x: i32| Ok(x)).unwrap();
+    two.export("y", |_state: (), x: i32| Ok(x)).unwrap();
     let err = builder.inject_module(two).unwrap_err();
     assert!(err.to_string().contains("already injected"));
 }

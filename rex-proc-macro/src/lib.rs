@@ -94,28 +94,22 @@ fn exported_state_type(function: &ItemFn) -> Result<Type, Error> {
     let first = function.sig.inputs.first().ok_or_else(|| {
         Error::new(
             function.sig.span(),
-            "a Rex export must take `&State` as its first parameter",
+            "a Rex export must take an owned `State` as its first parameter",
         )
     })?;
     let FnArg::Typed(first) = first else {
         return Err(Error::new(
             first.span(),
-            "methods cannot be Rex exports; use a free function whose first parameter is `&State`",
+            "methods cannot be Rex exports; use a free function whose first parameter is an owned `State`",
         ));
     };
-    let Type::Reference(reference) = first.ty.as_ref() else {
-        return Err(Error::new(
-            first.ty.span(),
-            "a Rex export's first parameter must be an immutable `&State` reference",
-        ));
-    };
-    if reference.mutability.is_some() {
+    if let Type::Reference(reference) = first.ty.as_ref() {
         return Err(Error::new(
             reference.span(),
-            "a Rex export's state parameter cannot be mutable",
+            "a Rex export's first parameter must be an owned `State`, not a reference",
         ));
     }
-    Ok(reference.elem.as_ref().clone())
+    Ok(first.ty.as_ref().clone())
 }
 
 fn exported_param_names(function: &ItemFn) -> Result<Vec<String>, Error> {

@@ -18,7 +18,7 @@ mod host_documented {
 
     /// Double the request's value.
     #[rex::export(name = "double")]
-    pub fn double_request(_state: &(), request: Request) -> Result<Request, EngineError> {
+    pub fn double_request(_state: (), request: Request) -> Result<Request, EngineError> {
         Ok(Request {
             value: request.value * 2,
         })
@@ -40,7 +40,7 @@ mod host_generic_signature {
     }
 
     #[rex::export]
-    pub fn read_wrapped_leaf(_state: &(), wrapped: Wrapper<Leaf>) -> Result<i32, EngineError> {
+    pub fn read_wrapped_leaf(_state: (), wrapped: Wrapper<Leaf>) -> Result<i32, EngineError> {
         Ok(wrapped.value.value)
     }
 }

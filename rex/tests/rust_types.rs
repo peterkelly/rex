@@ -30,7 +30,7 @@ async fn infer_type(builder: Builder<()>, expr: &str) -> Type {
 
 #[tokio::test]
 async fn char_uses_the_rust_scalar_bridge() {
-    fn echo_char(_state: &(), value: char) -> Result<char, EngineError> {
+    fn echo_char(_state: (), value: char) -> Result<char, EngineError> {
         Ok(value)
     }
 
@@ -48,7 +48,7 @@ async fn char_uses_the_rust_scalar_bridge() {
 
 #[tokio::test]
 async fn vec_from_value() {
-    fn accept_vec(_state: &(), items: Vec<i32>) -> Result<String, EngineError> {
+    fn accept_vec(_state: (), items: Vec<i32>) -> Result<String, EngineError> {
         Ok(format!("accept_vec: {:?}", items))
     }
 
@@ -65,7 +65,7 @@ async fn vec_from_value() {
 
 #[tokio::test]
 async fn vec_from_value_accepts_list_literal_without_conversion() {
-    fn accept_vec(_state: &(), items: Vec<i32>) -> Result<String, EngineError> {
+    fn accept_vec(_state: (), items: Vec<i32>) -> Result<String, EngineError> {
         Ok(format!("accept_vec: {:?}", items))
     }
 
@@ -82,7 +82,7 @@ async fn vec_from_value_accepts_list_literal_without_conversion() {
 
 #[tokio::test]
 async fn vec_to_value() {
-    fn return_vec(_state: &(), input: String) -> Result<Vec<i32>, EngineError> {
+    fn return_vec(_state: (), input: String) -> Result<Vec<i32>, EngineError> {
         Ok((0..input.len()).map(|i| i as i32).collect())
     }
 
@@ -108,7 +108,7 @@ async fn vec_to_value() {
 
 #[tokio::test]
 async fn vec_rex_type() {
-    fn return_vec(_state: &(), input: String) -> Result<Vec<i32>, EngineError> {
+    fn return_vec(_state: (), input: String) -> Result<Vec<i32>, EngineError> {
         Ok((0..input.len()).map(|i| i as i32).collect())
     }
 
@@ -132,7 +132,7 @@ fn string_maps_rex_type() {
 
 #[tokio::test]
 async fn host_vecs_pattern_match_as_lists() {
-    fn return_vec(_state: &(), input: String) -> Result<Vec<i32>, EngineError> {
+    fn return_vec(_state: (), input: String) -> Result<Vec<i32>, EngineError> {
         Ok((0..input.len()).map(|i| i as i32).collect())
     }
 
@@ -156,7 +156,7 @@ async fn host_vecs_pattern_match_as_lists() {
 
 #[tokio::test]
 async fn host_vec_u8_returns_canonical_bytes_value() {
-    fn return_bytes(_state: &()) -> Result<Vec<u8>, EngineError> {
+    fn return_bytes(_state: ()) -> Result<Vec<u8>, EngineError> {
         Ok(vec![3, 4, 5])
     }
 
@@ -173,11 +173,11 @@ async fn host_vec_u8_returns_canonical_bytes_value() {
 
 #[tokio::test]
 async fn host_vec_u8_arguments_decode_binary_and_hybrid_lists() {
-    fn return_bytes(_state: &()) -> Result<Vec<u8>, EngineError> {
+    fn return_bytes(_state: ()) -> Result<Vec<u8>, EngineError> {
         Ok(vec![10, 11, 12, 13])
     }
 
-    fn accept_bytes(_state: &(), bytes: Vec<u8>) -> Result<String, EngineError> {
+    fn accept_bytes(_state: (), bytes: Vec<u8>) -> Result<String, EngineError> {
         Ok(format!("{bytes:?}"))
     }
 
@@ -253,7 +253,7 @@ async fn option_prelude() {
 
 #[tokio::test]
 async fn option_from_value() {
-    fn accept_opt(_state: &(), opt: Option<i32>) -> Result<String, EngineError> {
+    fn accept_opt(_state: (), opt: Option<i32>) -> Result<String, EngineError> {
         Ok(format!("accept_opt: {:?}", opt))
     }
 
@@ -281,7 +281,7 @@ async fn option_from_value() {
 
 #[tokio::test]
 async fn option_into_value() {
-    fn return_opt(_state: &(), s: String) -> Result<Option<i32>, EngineError> {
+    fn return_opt(_state: (), s: String) -> Result<Option<i32>, EngineError> {
         Ok(if s.is_empty() {
             None
         } else {
@@ -313,7 +313,7 @@ async fn option_into_value() {
 
 #[tokio::test]
 async fn option_rex_type() {
-    fn return_opt(_state: &(), s: String) -> Result<Option<i32>, EngineError> {
+    fn return_opt(_state: (), s: String) -> Result<Option<i32>, EngineError> {
         Ok(if s.is_empty() {
             None
         } else {
@@ -372,7 +372,7 @@ async fn result_prelude() {
 
 #[tokio::test]
 async fn result_from_value_primitives() {
-    fn accept_result(_state: &(), res: Result<i32, String>) -> Result<String, EngineError> {
+    fn accept_result(_state: (), res: Result<i32, String>) -> Result<String, EngineError> {
         Ok(format!("accept_result: {:?}", res))
     }
 
@@ -404,7 +404,7 @@ async fn result_from_value_primitives() {
 
 #[tokio::test]
 async fn result_from_value_different_primitives() {
-    fn accept_result(_state: &(), res: Result<f32, i32>) -> Result<String, EngineError> {
+    fn accept_result(_state: (), res: Result<f32, i32>) -> Result<String, EngineError> {
         Ok(format!("accept_result: {:?}", res))
     }
 
@@ -436,7 +436,7 @@ async fn result_from_value_different_primitives() {
 
 #[tokio::test]
 async fn result_into_value_primitives() {
-    fn return_result(_state: &(), s: String) -> Result<Result<i32, String>, EngineError> {
+    fn return_result(_state: (), s: String) -> Result<Result<i32, String>, EngineError> {
         Ok(if s.is_empty() {
             Err("empty string".to_string())
         } else {
@@ -477,7 +477,7 @@ async fn result_into_value_primitives() {
 
 #[tokio::test]
 async fn result_rex_type() {
-    fn return_result(_state: &(), s: String) -> Result<Result<i32, String>, EngineError> {
+    fn return_result(_state: (), s: String) -> Result<Result<i32, String>, EngineError> {
         Ok(if s.is_empty() {
             Err("empty string".to_string())
         } else {
@@ -523,7 +523,7 @@ struct CharacterRecord {
 
 #[tokio::test]
 async fn derived_types_accept_char_fields() {
-    fn identity(_state: &(), value: CharacterRecord) -> Result<CharacterRecord, EngineError> {
+    fn identity(_state: (), value: CharacterRecord) -> Result<CharacterRecord, EngineError> {
         Ok(value)
     }
 
@@ -541,7 +541,7 @@ async fn derived_types_accept_char_fields() {
 
 #[tokio::test]
 async fn result_from_value_custom_types() {
-    fn accept_result(_state: &(), res: Result<Point, ErrorInfo>) -> Result<String, EngineError> {
+    fn accept_result(_state: (), res: Result<Point, ErrorInfo>) -> Result<String, EngineError> {
         Ok(match res {
             Ok(p) => format!("Ok: Point({}, {})", p.x, p.y),
             Err(e) => format!("Err: {} (code {})", e.message, e.code),
@@ -583,7 +583,7 @@ async fn result_from_value_custom_types() {
 
 #[tokio::test]
 async fn result_into_value_custom_types() {
-    fn return_result(_state: &(), flag: bool) -> Result<Result<Point, ErrorInfo>, EngineError> {
+    fn return_result(_state: (), flag: bool) -> Result<Result<Point, ErrorInfo>, EngineError> {
         Ok(if flag {
             Ok(Point { x: 100, y: 200 })
         } else {

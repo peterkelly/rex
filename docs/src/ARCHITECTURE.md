@@ -33,8 +33,9 @@ The crates are designed so you can use them independently (e.g. parser-only tool
     `BTreeMap<String, Value>` for the program's external `main` interface; `run` consumes the
     evaluator, compiled program, and input map and returns a `Value`.
   - `Builder` carries host state as `Builder<State>` (`State: Clone + Send + Sync + 'static`);
-    typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed
-    `export_async` callbacks receive `&State` and return
+    typed `export` callbacks receive an owned clone of `State` and return
+    `Result<T, EngineError>`, typed `export_async` callbacks receive an owned clone of `State` and
+    return
     `Future<Output = Result<T, EngineError>>`, while dynamic native APIs (`export_native*`)
     receive `Context<State>`, an instantiated type, and owned `Value`s.
   - compile and evaluation APIs return `EngineError`; convenience entry

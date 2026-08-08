@@ -183,7 +183,7 @@ fn builder_with_gate(child_count: usize) -> (Builder<()>, GateControl) {
             let started = Arc::clone(&parts.started);
             let started_tx = parts.started_tx.clone();
             let releases = Arc::clone(&parts.releases);
-            move |_: &(), value: i32| {
+            move |_: (), value: i32| {
                 let started = Arc::clone(&started);
                 let started_tx = started_tx.clone();
                 let release = releases
@@ -214,7 +214,7 @@ fn builder_with_even_gate(child_count: usize) -> (Builder<()>, GateControl) {
             let started = Arc::clone(&parts.started);
             let started_tx = parts.started_tx.clone();
             let releases = Arc::clone(&parts.releases);
-            move |_: &(), value: i32| {
+            move |_: (), value: i32| {
                 let started = Arc::clone(&started);
                 let started_tx = started_tx.clone();
                 let release = releases
@@ -249,7 +249,7 @@ fn builder_with_gate_and_even_gate(
             let started = Arc::clone(&value_parts.started);
             let started_tx = value_parts.started_tx.clone();
             let releases = Arc::clone(&value_parts.releases);
-            move |_: &(), value: i32| {
+            move |_: (), value: i32| {
                 let started = Arc::clone(&started);
                 let started_tx = started_tx.clone();
                 let release = releases
@@ -271,7 +271,7 @@ fn builder_with_gate_and_even_gate(
             let started = Arc::clone(&even_parts.started);
             let started_tx = even_parts.started_tx.clone();
             let releases = Arc::clone(&even_parts.releases);
-            move |_: &(), value: i32| {
+            move |_: (), value: i32| {
                 let started = Arc::clone(&started);
                 let started_tx = started_tx.clone();
                 let release = releases
@@ -857,7 +857,7 @@ async fn async_call_policy_wraps_host_calls() {
 
     let mut module = Module::global();
     module
-        .export_async("bump", |_: &(), value: i32| async move { Ok(value + 1) })
+        .export_async("bump", |_: (), value: i32| async move { Ok(value + 1) })
         .unwrap();
     builder.inject_module(module).unwrap();
 
@@ -881,7 +881,7 @@ async fn async_call_policy_accepts_executor_closures() {
 
     let mut module = Module::global();
     module
-        .export_async("bump", |_: &(), value: i32| async move { Ok(value + 1) })
+        .export_async("bump", |_: (), value: i32| async move { Ok(value + 1) })
         .unwrap();
     builder.inject_module(module).unwrap();
 
@@ -904,7 +904,7 @@ async fn sync_calls_bypass_async_admission_and_executor() {
     module
         .export("bump", {
             let invoked = Arc::clone(&invoked);
-            move |_: &(), value: i32| {
+            move |_: (), value: i32| {
                 invoked.fetch_add(1, Ordering::SeqCst);
                 Ok(value + 1)
             }
@@ -1038,7 +1038,7 @@ async fn dynamic_native_async_permits_delay_host_callback_invocation() {
             let invoked = Arc::clone(&invoked);
             let started = Arc::clone(&started);
             let release = Arc::clone(&release);
-            move |_: &(), value: i32| {
+            move |_: (), value: i32| {
                 invoked.fetch_add(1, Ordering::SeqCst);
                 let started = Arc::clone(&started);
                 let started_tx = started_tx.clone();
@@ -1100,7 +1100,7 @@ async fn cancelling_evaluation_drops_pending_owned_host_future() {
             let started = Arc::clone(&started);
             let dropped = Arc::clone(&dropped);
             let release = Arc::clone(&release);
-            move |_: &(), value: i32| {
+            move |_: (), value: i32| {
                 let started = Arc::clone(&started);
                 let guard = DropCounter(Arc::clone(&dropped));
                 let release = release
@@ -1161,7 +1161,7 @@ async fn pending_async_bound_delays_invoking_host_callbacks() {
             let started = Arc::clone(&started);
             let started_tx = started_tx.clone();
             let releases = Arc::clone(&releases);
-            move |_: &(), value: i32| {
+            move |_: (), value: i32| {
                 invoked.fetch_add(1, Ordering::SeqCst);
                 let started = Arc::clone(&started);
                 let started_tx = started_tx.clone();
@@ -1392,17 +1392,17 @@ async fn extreme_stress_handles_host_callbacks_and_conversions() {
     let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     module
-        .export("triple", |_: &(), value: i32| Ok(value * 3))
+        .export("triple", |_: (), value: i32| Ok(value * 3))
         .unwrap();
     module
-        .export("pack", |_: &(), left: i32, right: i32| {
+        .export("pack", |_: (), left: i32, right: i32| {
             Ok(vec![left, right, left + right])
         })
         .unwrap();
     module
         .export_async(
             "bump_async",
-            |_: &(), value: i32| async move { Ok(value + 1) },
+            |_: (), value: i32| async move { Ok(value + 1) },
         )
         .unwrap();
     builder.inject_module(module).unwrap();

@@ -36,7 +36,7 @@ async fn injected_echo_module_roundtrips_embedder_types_through_json() {
     module
         .export(
             "echo",
-            |_state: &(), variant: EchoEnum, record: EchoRecord| Ok((variant, record)),
+            |_state: (), variant: EchoEnum, record: EchoRecord| Ok((variant, record)),
         )
         .unwrap();
     builder.inject_module(module).unwrap();

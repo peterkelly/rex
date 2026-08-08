@@ -64,7 +64,7 @@ pub fn inject_cli_prelude_builder(builder: &mut Builder) -> Result<(), EngineErr
 
 fn inject_cli_test_natives(builder: &mut Builder) -> Result<(), EngineError> {
     let mut module = Module::new("test", None);
-    module.export_async("do_something", |_state: &(), n: i32| async move {
+    module.export_async("do_something", |_state: (), n: i32| async move {
         println!("do_something {} begin", n);
         let extra = {
             let mut rng = rand::rng();
@@ -74,7 +74,7 @@ fn inject_cli_test_natives(builder: &mut Builder) -> Result<(), EngineError> {
         println!("do_something {} end", n);
         Ok::<i32, EngineError>(n)
     })?;
-    module.export_async("is_even", |_state: &(), n: i32| async move {
+    module.export_async("is_even", |_state: (), n: i32| async move {
         println!("is_even {} begin", n);
         let extra = {
             let mut rng = rand::rng();
@@ -116,7 +116,7 @@ fn inject_cli_process_natives(builder: &mut Builder) -> Result<(), EngineError> 
     module.add_rex_adt::<SpawnOptions>()?;
     module.add_rex_adt::<CliSubprocess>()?;
 
-    module.export_async("spawn", |_state: &(), opts: SpawnOptions| async move {
+    module.export_async("spawn", |_state: (), opts: SpawnOptions| async move {
         let child = Command::new(opts.cmd)
             .args(opts.args)
             .stdin(Stdio::null())
@@ -141,18 +141,15 @@ fn inject_cli_process_natives(builder: &mut Builder) -> Result<(), EngineError> 
         Ok::<CliSubprocess, EngineError>(CliSubprocess { id })
     })?;
 
-    module.export_async(
-        "wait",
-        |_state: &(), subprocess: CliSubprocess| async move {
-            let entry = subprocess_get(&subprocess.id, "std.process.wait")?;
-            let output = subprocess_output(&entry, "std.process.wait").await?;
-            Ok::<i32, EngineError>(output.exit_code)
-        },
-    )?;
+    module.export_async("wait", |_state: (), subprocess: CliSubprocess| async move {
+        let entry = subprocess_get(&subprocess.id, "std.process.wait")?;
+        let output = subprocess_output(&entry, "std.process.wait").await?;
+        Ok::<i32, EngineError>(output.exit_code)
+    })?;
 
     module.export_async(
         "stdout",
-        |_state: &(), subprocess: CliSubprocess| async move {
+        |_state: (), subprocess: CliSubprocess| async move {
             let entry = subprocess_get(&subprocess.id, "std.process.stdout")?;
             let output = subprocess_output(&entry, "std.process.stdout").await?;
             Ok::<Vec<u8>, EngineError>(output.stdout.clone())
@@ -161,7 +158,7 @@ fn inject_cli_process_natives(builder: &mut Builder) -> Result<(), EngineError> 
 
     module.export_async(
         "stderr",
-        |_state: &(), subprocess: CliSubprocess| async move {
+        |_state: (), subprocess: CliSubprocess| async move {
             let entry = subprocess_get(&subprocess.id, "std.process.stderr")?;
             let output = subprocess_output(&entry, "std.process.stderr").await?;
             Ok::<Vec<u8>, EngineError>(output.stderr.clone())

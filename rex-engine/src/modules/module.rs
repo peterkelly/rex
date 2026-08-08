@@ -140,7 +140,7 @@ pub struct StagedAdtDecl {
 /// let mut builder = Builder::with_prelude(()).unwrap();
 ///
 /// let mut math = Module::new("acme.math", None);
-/// math.export("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
+/// math.export("inc", |_state: (), x: i32| Ok(x + 1)).unwrap();
 ///
 /// builder.inject_module(math).unwrap();
 /// ```
@@ -191,7 +191,7 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     /// use rex_engine::{Export, Module};
     ///
     /// let mut module = Module::<()>::new("acme.math", None);
-    /// let export = Export::from_handler("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
+    /// let export = Export::from_handler("inc", |_state: (), x: i32| Ok(x + 1)).unwrap();
     /// module.add_export(export)?;
     ///
     /// assert_eq!(module.exports().len(), 1);
@@ -418,7 +418,7 @@ where
     /// use rex_engine::{Export, Module};
     ///
     /// let mut module = Module::<()>::new("acme.math", None);
-    /// let export = Export::from_handler("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
+    /// let export = Export::from_handler("inc", |_state: (), x: i32| Ok(x + 1)).unwrap();
     /// module.add_export(export)?;
     /// ```
     pub fn add_export(&mut self, mut export: Export<State>) -> Result<(), EngineError> {
@@ -431,6 +431,7 @@ where
     ///
     /// This is the most convenient API for exporting ordinary Rust functions or closures into a
     /// module. The handler's argument and return types drive the Rex signature automatically.
+    /// Each invocation receives an owned clone of the module's host state as its first argument.
     ///
     /// The staged export becomes available to Rex code after [`Builder::inject_module`] is called.
     ///
@@ -440,7 +441,7 @@ where
     /// use rex_engine::Module;
     ///
     /// let mut module = Module::<()>::new("acme.math", None);
-    /// module.export("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
+    /// module.export("inc", |_state: (), x: i32| Ok(x + 1)).unwrap();
     /// ```
     pub fn export<Sig, H>(&mut self, name: impl Into<String>, handler: H) -> Result<(), EngineError>
     where
@@ -452,7 +453,8 @@ where
     /// Stage a typed asynchronous Rust handler as a module export.
     ///
     /// Use this when the host implementation is naturally async, for example when it awaits I/O or
-    /// other long-running work.
+    /// other long-running work. Each invocation receives an owned clone of the module's host state
+    /// as its first argument, so the returned future can own it.
     ///
     /// # Examples
     ///
@@ -461,7 +463,7 @@ where
     ///
     /// let mut module = Module::<()>::new("acme.math", None);
     /// module
-    ///     .export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })
+    ///     .export_async("double_async", |_state: (), x: i32| async move { Ok(x * 2) })
     ///     .unwrap();
     /// ```
     pub fn export_async<Sig, H>(

@@ -182,7 +182,7 @@ async fn eval_native_injection() {
     let expr = parse("inc 1");
     let mut builder = Builder::with_prelude(()).unwrap();
     inject_globals(&mut builder, |module| {
-        module.export_async("inc", |_: &(), x: i32| async move { Ok(x + 1) })
+        module.export_async("inc", |_: (), x: i32| async move { Ok(x + 1) })
     });
 
     let value = eval_expr(builder, expr.as_ref()).await.unwrap();
@@ -208,29 +208,29 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
     );
     let mut builder = Builder::with_prelude(()).unwrap();
     inject_globals(&mut builder, |module| {
-        module.export("f0", |_: &()| Ok(0i32))?;
-        module.export("f1", |_: &(), a: i32| Ok(a))?;
-        module.export("f2", |_: &(), a: i32, b: i32| Ok(a + b))?;
-        module.export("f3", |_: &(), a: i32, b: i32, c: i32| Ok(a + b + c))?;
-        module.export("f4", |_: &(), a: i32, b: i32, c: i32, d: i32| {
+        module.export("f0", |_: ()| Ok(0i32))?;
+        module.export("f1", |_: (), a: i32| Ok(a))?;
+        module.export("f2", |_: (), a: i32, b: i32| Ok(a + b))?;
+        module.export("f3", |_: (), a: i32, b: i32, c: i32| Ok(a + b + c))?;
+        module.export("f4", |_: (), a: i32, b: i32, c: i32, d: i32| {
             Ok(a + b + c + d)
         })?;
-        module.export("f5", |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32| {
+        module.export("f5", |_: (), a: i32, b: i32, c: i32, d: i32, e: i32| {
             Ok(a + b + c + d + e)
         })?;
         module.export(
             "f6",
-            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| Ok(a + b + c + d + e + g),
+            |_: (), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| Ok(a + b + c + d + e + g),
         )?;
         module.export(
             "f7",
-            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| {
+            |_: (), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| {
                 Ok(a + b + c + d + e + g + h)
             },
         )?;
         module.export(
             "f8",
-            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| {
+            |_: (), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| {
                 Ok(a + b + c + d + e + g + h + i)
             },
         )?;
@@ -309,34 +309,34 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
     );
     let mut builder = Builder::with_prelude(()).unwrap();
     inject_globals(&mut builder, |module| {
-        module.export_async("af0", |_: &()| async { Ok(0i32) })?;
-        module.export_async("af1", |_: &(), a: i32| async move { Ok(a) })?;
-        module.export_async("af2", |_: &(), a: i32, b: i32| async move { Ok(a + b) })?;
-        module.export_async("af3", |_: &(), a: i32, b: i32, c: i32| async move {
+        module.export_async("af0", |_: ()| async { Ok(0i32) })?;
+        module.export_async("af1", |_: (), a: i32| async move { Ok(a) })?;
+        module.export_async("af2", |_: (), a: i32, b: i32| async move { Ok(a + b) })?;
+        module.export_async("af3", |_: (), a: i32, b: i32, c: i32| async move {
             Ok(a + b + c)
         })?;
-        module.export_async("af4", |_: &(), a: i32, b: i32, c: i32, d: i32| async move {
+        module.export_async("af4", |_: (), a: i32, b: i32, c: i32, d: i32| async move {
             Ok(a + b + c + d)
         })?;
         module.export_async(
             "af5",
-            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32| async move { Ok(a + b + c + d + e) },
+            |_: (), a: i32, b: i32, c: i32, d: i32, e: i32| async move { Ok(a + b + c + d + e) },
         )?;
         module.export_async(
             "af6",
-            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| async move {
+            |_: (), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| async move {
                 Ok(a + b + c + d + e + g)
             },
         )?;
         module.export_async(
             "af7",
-            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| async move {
+            |_: (), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| async move {
                 Ok(a + b + c + d + e + g + h)
             },
         )?;
         module.export_async(
             "af8",
-            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| async move {
+            |_: (), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| async move {
                 Ok(a + b + c + d + e + g + h + i)
             },
         )?;
@@ -500,8 +500,8 @@ async fn eval_sync_native_injection() {
     fn builder_with_natives() -> Builder {
         let mut builder = Builder::new(());
         inject_globals(&mut builder, |module| {
-            module.export("zero", |_: &()| Ok(0u32))?;
-            module.export("(+)", |_: &(), x: u32, y: u32| Ok(x + y))?;
+            module.export("zero", |_: ()| Ok(0u32))?;
+            module.export("(+)", |_: (), x: u32, y: u32| Ok(x + y))?;
             module.export_value("one", 1u32)?;
             Ok(())
         });
@@ -525,12 +525,12 @@ async fn eval_sync_native_injection() {
 async fn typed_native_injection_uses_owned_value_conversions() {
     let mut builder = builder_with_arith();
     inject_globals(&mut builder, |module| {
-        module.export("bump_handle_only", |_: &(), value: HandleOnlyI32| {
+        module.export("bump_handle_only", |_: (), value: HandleOnlyI32| {
             Ok(HandleOnlyI32(value.0 + 1))
         })?;
         module.export(
             "shift_handle_only_list",
-            |_: &(), values: Vec<HandleOnlyI32>| {
+            |_: (), values: Vec<HandleOnlyI32>| {
                 Ok(values
                     .into_iter()
                     .map(|value| HandleOnlyI32(value.0 + 10))
@@ -579,7 +579,7 @@ async fn typed_native_injection_uses_owned_value_conversions() {
 async fn eval_export_err_is_evaluation_failure() {
     let mut builder = Builder::new(());
     inject_globals(&mut builder, |module| {
-        module.export("fail", |_: &()| {
+        module.export("fail", |_: ()| {
             Err::<i32, _>(EngineError::Custom("boom".into()))
         })
     });

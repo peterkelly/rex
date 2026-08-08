@@ -7,14 +7,14 @@ use rex::{
 
 fn register_integer_literal_natives(builder: &mut Builder<()>) -> Result<(), EngineError> {
     let mut module = Module::global();
-    module.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
-    module.export("num_u16", |_state: &(), x: u16| Ok(format!("{x}:u16")))?;
-    module.export("num_u32", |_state: &(), x: u32| Ok(format!("{x}:u32")))?;
-    module.export("num_u64", |_state: &(), x: u64| Ok(format!("{x}:u64")))?;
-    module.export("num_i8", |_state: &(), x: i8| Ok(format!("{x}:i8")))?;
-    module.export("num_i16", |_state: &(), x: i16| Ok(format!("{x}:i16")))?;
-    module.export("num_i32", |_state: &(), x: i32| Ok(format!("{x}:i32")))?;
-    module.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
+    module.export("num_u8", |_state: (), x: u8| Ok(format!("{x}:u8")))?;
+    module.export("num_u16", |_state: (), x: u16| Ok(format!("{x}:u16")))?;
+    module.export("num_u32", |_state: (), x: u32| Ok(format!("{x}:u32")))?;
+    module.export("num_u64", |_state: (), x: u64| Ok(format!("{x}:u64")))?;
+    module.export("num_i8", |_state: (), x: i8| Ok(format!("{x}:i8")))?;
+    module.export("num_i16", |_state: (), x: i16| Ok(format!("{x}:i16")))?;
+    module.export("num_i32", |_state: (), x: i32| Ok(format!("{x}:i32")))?;
+    module.export("num_i64", |_state: (), x: i64| Ok(format!("{x}:i64")))?;
     builder.inject_module(module)
 }
 

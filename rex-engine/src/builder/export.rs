@@ -223,6 +223,7 @@ where
     }
 }
 
+/// A typed synchronous host handler whose first argument is an owned `State`.
 pub trait HostFnSync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
     fn collect_required_adts(
         out: &mut Vec<AdtDecl>,
@@ -238,6 +239,7 @@ pub trait HostFnSync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + '
     ) -> Result<(), EngineError>;
 }
 
+/// A typed asynchronous host handler whose first argument is an owned `State`.
 pub trait HostFnAsync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
     fn collect_required_adts(
         out: &mut Vec<AdtDecl>,

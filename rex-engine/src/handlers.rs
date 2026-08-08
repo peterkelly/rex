@@ -110,7 +110,7 @@ macro_rules! define_handler_impl {
         impl<State, F, R> HostFnSync<State, $sig> for F
         where
             State: Clone + Send + Sync + 'static,
-            F: for<'a> Fn(&'a State) -> Result<R, EngineError> + Send + Sync + 'static,
+            F: Fn(State) -> Result<R, EngineError> + Send + Sync + 'static,
             R: IntoRex + RexType,
         {
             fn collect_required_adts(
@@ -140,7 +140,7 @@ macro_rules! define_handler_impl {
                                     got: args.len(),
                                 });
                             }
-                            let value = self(engine.state())?;
+                            let value = self(engine.state().clone())?;
                             value.into_rex()
                         })();
                         async move { result }.boxed()
@@ -157,7 +157,7 @@ macro_rules! define_handler_impl {
         impl<State, F, R, $($arg_ty),+> HostFnSync<State, $sig> for F
         where
             State: Clone + Send + Sync + 'static,
-            F: for<'a> Fn(&'a State, $($arg_ty),+) -> Result<R, EngineError> + Send + Sync + 'static,
+            F: Fn(State, $($arg_ty),+) -> Result<R, EngineError> + Send + Sync + 'static,
             R: IntoRex + RexType,
             $($arg_ty: FromRex + RexType),+
         {
@@ -196,7 +196,7 @@ macro_rules! define_handler_impl {
                                 expected: $arity,
                                 got: $idx,
                             })?)?;)*
-                            let value = self(engine.state(), $($arg_name),+)?;
+                            let value = self(engine.state().clone(), $($arg_name),+)?;
                             value.into_rex()
                         })();
                         async move { result }.boxed()
@@ -252,7 +252,7 @@ macro_rules! define_async_handler_impl {
         impl<State, F, Fut, R> HostFnAsync<State, $sig> for F
         where
             State: Clone + Send + Sync + 'static,
-            F: for<'a> Fn(&'a State) -> Fut + Send + Sync + 'static,
+            F: Fn(State) -> Fut + Send + Sync + 'static,
             Fut: Future<Output = Result<R, EngineError>> + Send + 'static,
             R: IntoRex + RexType,
         {
@@ -290,7 +290,7 @@ macro_rules! define_async_handler_impl {
                         })();
                         async move {
                             args?;
-                            let value = f(engine.state()).await?;
+                            let value = f(engine.state().clone()).await?;
                             value.into_rex()
                         }
                         .boxed()
@@ -306,7 +306,7 @@ macro_rules! define_async_handler_impl {
         impl<State, F, Fut, R, $($arg_ty),+> HostFnAsync<State, $sig> for F
         where
             State: Clone + Send + Sync + 'static,
-            F: for<'a> Fn(&'a State, $($arg_ty),+) -> Fut + Send + Sync + 'static,
+            F: Fn(State, $($arg_ty),+) -> Fut + Send + Sync + 'static,
             Fut: Future<Output = Result<R, EngineError>> + Send + 'static,
             R: IntoRex + RexType,
             $($arg_ty: FromRex + RexType),+
@@ -353,7 +353,7 @@ macro_rules! define_async_handler_impl {
                         })();
                         match args {
                             Ok(($($arg_name,)+)) => {
-                                let future = f(engine.state(), $($arg_name),+);
+                                let future = f(engine.state().clone(), $($arg_name),+);
                                 async move {
                                     let value = future.await?;
                                     value.into_rex()

@@ -69,7 +69,7 @@ impl Importer for LazySampleImporter {
             module.add_rex_adt::<Correctness>().unwrap();
             module.add_rex_adt::<Label>().unwrap();
             module
-                .export("render_label", |_: &(), label: Label| {
+                .export("render_label", |_: (), label: Label| {
                     Ok::<String, EngineError>(render_label(label))
                 })
                 .unwrap();
@@ -90,7 +90,7 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
     module.add_rex_adt::<Correctness>().unwrap();
     module.add_rex_adt::<Label>().unwrap();
     module
-        .export("render_label", |_: &(), label: Label| {
+        .export("render_label", |_: (), label: Label| {
             Ok::<String, EngineError>(render_label(label))
         })
         .unwrap();
@@ -206,7 +206,7 @@ async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
     let mut module = Module::new("sample", None);
     module.add_rex_adt::<Label>().unwrap();
     module
-        .export("render_label", |_: &(), label: Label| {
+        .export("render_label", |_: (), label: Label| {
             Ok::<String, EngineError>(render_label(label))
         })
         .unwrap();
@@ -283,7 +283,7 @@ async fn hash_values_cross_native_runtime_boundaries() {
     let mut builder = Builder::with_prelude(()).unwrap();
     common::inject_globals(&mut builder, |module| {
         module.export_value("expected_hash", expected)?;
-        module.export("identity_hash", |_: &(), value: Hash| {
+        module.export("identity_hash", |_: (), value: Hash| {
             Ok::<Hash, EngineError>(value)
         })
     })
@@ -334,7 +334,7 @@ struct Entity2 {
 }
 
 impl Entity2 {
-    fn rex_new(state: &HostState, name: String, numbers: Vec<u32>) -> Result<Entity2, EngineError> {
+    fn rex_new(state: HostState, name: String, numbers: Vec<u32>) -> Result<Entity2, EngineError> {
         Ok(Entity2 {
             account_id: state.account_id,
             project_id: state.project_id,
@@ -368,19 +368,19 @@ struct HostState {
     roles: Vec<String>,
 }
 
-fn current_account_id(state: &HostState) -> Result<Uuid, EngineError> {
+fn current_account_id(state: HostState) -> Result<Uuid, EngineError> {
     Ok(state.account_id)
 }
 
-fn current_project_id(state: &HostState) -> Result<Uuid, EngineError> {
+fn current_project_id(state: HostState) -> Result<Uuid, EngineError> {
     Ok(state.project_id)
 }
 
-fn is_admin(state: &HostState) -> Result<bool, EngineError> {
+fn is_admin(state: HostState) -> Result<bool, EngineError> {
     Ok(state.is_admin)
 }
 
-fn have_role(state: &HostState, role: String) -> Result<bool, EngineError> {
+fn have_role(state: HostState, role: String) -> Result<bool, EngineError> {
     Ok(state.roles.iter().any(|r| r == &role))
 }
 
@@ -616,9 +616,7 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     .unwrap();
 
     common::inject_globals(&mut builder, |module| {
-        module.export_async("have_role_async", |state: &HostState, role: String| {
-            have_role_async(state.clone(), role)
-        })
+        module.export_async("have_role_async", have_role_async)
     })
     .unwrap();
 
@@ -757,22 +755,22 @@ async fn overloaded_exports_types_and_values() {
     EmbedRecord::inject_rex(&mut builder).unwrap();
 
     common::inject_globals(&mut builder, |module| {
-        module.export("over1", |_state: &(), x: i32| Ok(x + 1))?;
-        module.export("over1", |_state: &(), x: bool| {
+        module.export("over1", |_state: (), x: i32| Ok(x + 1))?;
+        module.export("over1", |_state: (), x: bool| {
             Ok(if x {
                 "bool:true".to_string()
             } else {
                 "bool:false".to_string()
             })
         })?;
-        module.export("over1", |_state: &(), rec: EmbedRecord| Ok(rec.n > 10))?;
-        module.export("over3", |_state: &(), a: i32, b: i32, c: i32| Ok(a + b + c))?;
-        module.export("over3", |_state: &(), a: String, b: String, c: String| {
+        module.export("over1", |_state: (), rec: EmbedRecord| Ok(rec.n > 10))?;
+        module.export("over3", |_state: (), a: i32, b: i32, c: i32| Ok(a + b + c))?;
+        module.export("over3", |_state: (), a: String, b: String, c: String| {
             Ok(a.len() < b.len() + c.len())
         })?;
         module.export(
             "over3",
-            |_state: &(), a: EmbedRecord, b: EmbedRecord, c: EmbedRecord| {
+            |_state: (), a: EmbedRecord, b: EmbedRecord, c: EmbedRecord| {
                 Ok(format!("records:{}:{}:{}", a.n, b.n, c.n))
             },
         )?;
@@ -822,29 +820,29 @@ async fn overloaded_async_exports_types_and_values() {
     EmbedRecord::inject_rex(&mut builder).unwrap();
 
     common::inject_globals(&mut builder, |module| {
-        module.export_async("a1", |_state: &(), x: i32| async move { Ok(x + 1) })?;
-        module.export_async("a1", |_state: &(), x: bool| async move {
+        module.export_async("a1", |_state: (), x: i32| async move { Ok(x + 1) })?;
+        module.export_async("a1", |_state: (), x: bool| async move {
             Ok(if x {
                 "bool:true".to_string()
             } else {
                 "bool:false".to_string()
             })
         })?;
-        module.export_async("a1", |_state: &(), rec: EmbedRecord| async move {
+        module.export_async("a1", |_state: (), rec: EmbedRecord| async move {
             Ok(rec.n > 10)
         })?;
-        module.export_async("a3", |_state: &(), a: i32, b: i32, c: i32| async move {
+        module.export_async("a3", |_state: (), a: i32, b: i32, c: i32| async move {
             Ok(a + b + c)
         })?;
         module.export_async(
             "a3",
-            |_state: &(), a: String, b: String, c: String| async move {
+            |_state: (), a: String, b: String, c: String| async move {
                 Ok(a.len() < b.len() + c.len())
             },
         )?;
         module.export_async(
             "a3",
-            |_state: &(), a: EmbedRecord, b: EmbedRecord, c: EmbedRecord| async move {
+            |_state: (), a: EmbedRecord, b: EmbedRecord, c: EmbedRecord| async move {
                 Ok(format!("records:{}:{}:{}", a.n, b.n, c.n))
             },
         )?;

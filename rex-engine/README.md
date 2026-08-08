@@ -18,7 +18,7 @@ use rex_parser::parse;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = Builder::with_prelude(())?;
     let mut globals = Module::global();
-    globals.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
+    globals.export("inc", |_state: (), x: i32| { Ok(x + 1) })?;
     globals.export_value("answer", 42i32)?;
     builder.inject_module(globals)?;
 
@@ -91,11 +91,11 @@ the function-level docs.
 
 Operator names can be injected with parentheses (e.g., `"(+)"`); the engine normalizes to `+`.
 
-`Builder` is generic over host state (`Builder<State>`, where `State: Clone + Send + Sync + 'static`).
-`export` callbacks receive `&State` as the first argument and must return `Result<T, EngineError>`;
-returning `Err(...)` fails evaluation.
-`export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`;
-returning `Err(...)` fails evaluation.
+`Builder` is generic over host state (`Builder<State>`, where
+`State: Clone + Send + Sync + 'static`). `export` callbacks receive an owned clone of `State` as
+the first argument and must return `Result<T, EngineError>`; returning `Err(...)` fails evaluation.
+`export_async` callbacks receive an owned clone of `State` and return
+`Future<Output = Result<T, EngineError>>`; returning `Err(...)` fails evaluation.
 Value-based APIs (`export_native*`) receive `Context<State>`, the instantiated call type, and an
 owned `Vec<Value>`. The context exposes host state and type information but no heap capability.
 It does not retain runtime registries or internal root tokens.

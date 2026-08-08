@@ -38,8 +38,8 @@ implementation is a no-op for non-ADT leaves.
 
 `#[rex::export]` registers a synchronous or asynchronous free Rust function as a Rex export. The
 generated `<function>_rex_export()` helper preserves the function's Rust doc comments and its
-Rex-visible Rust parameter names. The first `&State` parameter is host context and is not exposed
-to Rex.
+Rex-visible Rust parameter names. The first owned `State` parameter is host context and is not
+exposed to Rex.
 
 Rust does not permit `#[doc]` attributes or doc comments on individual function parameters. Put
 parameter descriptions in the function-level Rust documentation; the generated parameter metadata
@@ -51,7 +51,7 @@ contains names only.
 /// `sample_id` is the stable identifier assigned by the host.
 #[rex::export(name = "lookup")]
 pub async fn lookup_sample(
-    state: &HostState,
+    state: HostState,
     sample_id: String,
 ) -> Result<Sample, rex::engine::EngineError> {
     state.lookup(sample_id).await
@@ -73,7 +73,7 @@ mod samples {
 
     /// Return whether a sample exists.
     #[rex::export]
-    pub fn exists(state: &HostState, sample_id: String) -> Result<bool, EngineError> {
+    pub fn exists(state: HostState, sample_id: String) -> Result<bool, EngineError> {
         Ok(state.contains(&sample_id))
     }
 }

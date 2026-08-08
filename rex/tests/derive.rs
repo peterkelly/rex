@@ -445,7 +445,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
         MyStruct::inject_rex(&mut builder).unwrap();
 
         common::inject_globals(&mut builder, |module| {
-            module.export("bump_y", |_: &(), mut s: MyStruct| {
+            module.export("bump_y", |_: (), mut s: MyStruct| {
                 s.y += 1;
                 Ok(s)
             })
@@ -533,7 +533,7 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     Maybe::<i32>::inject_rex(&mut builder).unwrap();
 
     common::inject_globals(&mut builder, |module| {
-        module.export("unwrap_or_zero", |_: &(), m: Maybe<i32>| {
+        module.export("unwrap_or_zero", |_: (), m: Maybe<i32>| {
             Ok(match m {
                 Maybe::Just(v) => v,
                 Maybe::Nothing => 0,
