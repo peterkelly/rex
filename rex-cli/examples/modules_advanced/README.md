@@ -13,5 +13,5 @@ filesystem importer:
 Run it:
 
 ```sh
-cargo run -p rex-cli --bin rex -- rex-cli/examples/modules_advanced/main.rex
+cargo run -p rex-cli --bin rex_cli -- rex-cli/examples/modules_advanced/main.rex
 ```

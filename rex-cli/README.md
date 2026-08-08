@@ -1,6 +1,6 @@
-# Rex CLI (`rex`)
+# Rex CLI (`rex_cli`)
 
-This crate provides the `rex` command-line interface.
+This crate provides the `rex_cli` command-line interface.
 
 It is a thin wrapper around the `rex` crate facade for the core pipeline:
 
@@ -11,14 +11,14 @@ It is a thin wrapper around the `rex` crate facade for the core pipeline:
 Run a `.rex` file:
 
 ```sh
-cargo run -p rex-cli --bin rex -- rex-cli/examples/record_update.rex
+cargo run -p rex-cli --bin rex_cli -- rex-cli/examples/record_update.rex
 ```
 
 Run a `.rex` file that defines `main` by passing JSON inputs whose top-level
 fields match the function parameters:
 
 ```sh
-cargo run -p rex-cli --bin rex -- path/to/program.rex --inputs path/to/inputs.json
+cargo run -p rex-cli --bin rex_cli -- path/to/program.rex --inputs path/to/inputs.json
 ```
 
 ```json
@@ -35,20 +35,20 @@ model; for a zero-argument `main`, pass `{}` as the inputs file.
 Inspect the entry point input and result types:
 
 ```sh
-cargo run -p rex-cli --bin rex -- rex-cli/examples/main_inputs.rex --manifest
+cargo run -p rex-cli --bin rex_cli -- rex-cli/examples/main_inputs.rex --manifest
 ```
 
 Run the same example with JSON inputs:
 
 ```sh
-cargo run -p rex-cli --bin rex -- rex-cli/examples/main_inputs.rex \
+cargo run -p rex-cli --bin rex_cli -- rex-cli/examples/main_inputs.rex \
   --inputs rex-cli/examples/main_inputs.json
 ```
 
 Run inline code:
 
 ```sh
-cargo run -p rex-cli --bin rex -- -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rex-cli --bin rex_cli -- -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 Program results are printed as JSON.
@@ -56,7 +56,7 @@ Program results are printed as JSON.
 For string results, pass `--raw-output` to print the string contents directly:
 
 ```sh
-cargo run -p rex-cli --bin rex -- --raw-output -c '"hello"'
+cargo run -p rex-cli --bin rex_cli -- --raw-output -c '"hello"'
 ```
 
 Inspect compiler output:

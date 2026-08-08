@@ -18,13 +18,13 @@ programs compact.
 From this repository, you can run a Rex file:
 
 ```sh
-cargo run -p rex-cli --bin rex -- rex-cli/examples/record_update.rex
+cargo run -p rex-cli --bin rex_cli -- rex-cli/examples/record_update.rex
 ```
 
 Or evaluate a small snippet inline:
 
 ```sh
-cargo run -p rex-cli --bin rex -- -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rex-cli --bin rex_cli -- -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 ### What you should see
@@ -105,7 +105,7 @@ in
 Run it:
 
 ```sh
-cargo run -p rex-cli --bin rex -- hello.rex
+cargo run -p rex-cli --bin rex_cli -- hello.rex
 ```
 
 ## Lambda and Arrow Spelling

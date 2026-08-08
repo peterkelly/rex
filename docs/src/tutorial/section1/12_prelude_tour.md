@@ -59,7 +59,7 @@ The prelude also exposes some generic helpers (type-class-based):
 
 When you see an unfamiliar function:
 
-1. Ask the CLI for its type: `cargo run -p rex-cli --bin rex -- --emit-type -c 'the_name'`
+1. Ask the CLI for its type: `cargo run -p rex-cli --bin rex_cli -- --emit-type -c 'the_name'`
 2. If it’s a type-class method, find the class in `rex-engine/src/prelude/typeclasses.rex`
 3. If it’s a Rust-backed helper or primitive, find the runtime wiring in `rex-engine/src/prelude/mod.rs`
 

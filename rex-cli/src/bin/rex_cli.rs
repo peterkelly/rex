@@ -23,7 +23,7 @@ use rex_cli::cli_prelude;
 use rex_cli::filesystem_importer::FilesystemImporter;
 
 #[derive(Parser)]
-#[command(name = "rex")]
+#[command(name = "rex_cli")]
 #[command(about = "Rex (Rush Expressions) CLI")]
 #[command(arg_required_else_help = true)]
 struct Cli {
@@ -355,7 +355,8 @@ mod tests {
 
     #[test]
     fn raw_output_flag_parses() {
-        let cli = Cli::try_parse_from(["rex", "--raw-output", "-c", "\"hello\""]).expect("parse");
+        let cli =
+            Cli::try_parse_from(["rex_cli", "--raw-output", "-c", "\"hello\""]).expect("parse");
         assert!(cli.args.raw_output);
     }
 

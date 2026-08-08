@@ -10,7 +10,8 @@ Rex is a Cargo workspace. The most important crates are:
 - `rex-engine`: host environment building, compilation, evaluation, and native injection
 - `rex-proc-macro`: derives and registration attributes for documented Rust types, functions, and
   modules exposed to Rex
-- `rex`: CLI binary
+- `rex`: top-level embedding facade and integration tests
+- `rex-cli`: `rex_cli` command-line binary
 
 Architecture overview: [ARCHITECTURE.md](ARCHITECTURE.md).
 

@@ -20,7 +20,8 @@ computations and data manipulation.
 
 ## Crates in this workspace
 
-- `rex`: Crate acting as entry point for embedding in other Rust programs, CLI tool for testing. Also contains examples and integration tests.
+- `rex`: Crate acting as the entry point for embedding in other Rust programs. Also contains examples and integration tests.
+- `rex-cli`: CLI crate providing the `rex_cli` binary.
 - `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `CompilationUnit`, symbols, spans).
 - `rex-parser`: source parser producing `CompilationUnit { decls, body }`.
 - `rex-typesystem`: Hindley–Milner inference + ADTs + type classes.
@@ -51,8 +52,8 @@ cargo clippy --tests
 ## CLI Usage
 
 ```sh
-cargo run -p rex-cli --bin rex -- rex-cli/examples/record_update.rex
-cargo run -p rex-cli --bin rex -- -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rex-cli --bin rex_cli -- rex-cli/examples/record_update.rex
+cargo run -p rex-cli --bin rex_cli -- -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 ## LSP + VS Code Extension

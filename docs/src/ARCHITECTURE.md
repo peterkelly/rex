@@ -45,7 +45,8 @@ The crates are designed so you can use them independently (e.g. parser-only tool
     Rust-backed modules. Named modules accept optional Markdown docs in `Module::new`.
 - `rex-proc-macro`: `#[derive(Rex)]`, `#[rex::export]`, and `#[rex::module]` bridge documented Rust
   types, functions, and modules into Rex registrations.
-- `rex`: CLI front-end around the pipeline.
+- `rex`: top-level facade for embedding the pipeline in Rust applications.
+- `rex-cli`: `rex_cli` command-line front-end around the pipeline.
 - `rex-lsp` / `rex-vscode`: editor tooling.
 
 `rex-engine` is organized internally around the same phases:

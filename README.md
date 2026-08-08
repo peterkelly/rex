@@ -93,7 +93,7 @@ This repo is a Cargo workspace. The key crates are:
 - `rex-engine`: runtime evaluator + native-function injection, backed by `rex-typesystem`
 - `rex-proc-macro`: `#[derive(Rex)]`, `#[rex::export]`, and `#[rex::module]` for bridging
   documented Rust APIs into Rex
-- `rex-cli`: CLI crate providing the `rex` binary (`cargo run -p rex-cli --bin rex -- ...`)
+- `rex-cli`: CLI crate providing the `rex_cli` binary (`cargo run -p rex-cli --bin rex_cli -- ...`)
 - `rex-fuzz`: stdin-driven fuzz harness binaries
 - `rex-util`: small shared helpers (e.g. LSP content hashing, CLI import-path helpers,
   bundled `std.*` module sources)
@@ -104,25 +104,25 @@ This repo is a Cargo workspace. The key crates are:
 Run a Rex file:
 
 ```sh
-cargo run -p rex-cli --bin rex -- rex-cli/examples/record_update.rex
+cargo run -p rex-cli --bin rex_cli -- rex-cli/examples/record_update.rex
 ```
 
 Run the advanced module import example:
 
 ```sh
-cargo run -p rex-cli --bin rex -- rex-cli/examples/modules_advanced/main.rex
+cargo run -p rex-cli --bin rex_cli -- rex-cli/examples/modules_advanced/main.rex
 ```
 
 Run inline code:
 
 ```sh
-cargo run -p rex-cli --bin rex -- -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rex-cli --bin rex_cli -- -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 Run a program with an explicit `main`:
 
 ```sh
-cargo run -p rex-cli --bin rex -- rex-cli/examples/main_inputs.rex \
+cargo run -p rex-cli --bin rex_cli -- rex-cli/examples/main_inputs.rex \
   --inputs rex-cli/examples/main_inputs.json
 ```
 

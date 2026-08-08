@@ -1,10 +1,10 @@
 // Inspect manifest:
 //
-// rex --manifest main_inputs.rex
+// rex_cli --manifest main_inputs.rex
 //
 // Run with inputs:
 //
-// rex --inputs main_inputs.json main_inputs.rex
+// rex_cli --inputs main_inputs.json main_inputs.rex
 
 type SharedMeta = SharedMeta {
     label: String,

@@ -15,13 +15,13 @@ to make the problem obvious.
 Run a Rex file:
 
 ```sh
-cargo run -p rex-cli --bin rex -- path/to/file.rex
+cargo run -p rex-cli --bin rex_cli -- path/to/file.rex
 ```
 
 Run a file with JSON inputs for its entry point:
 
 ```sh
-cargo run -p rex-cli --bin rex -- path/to/program.rex --inputs path/to/inputs.json
+cargo run -p rex-cli --bin rex_cli -- path/to/program.rex --inputs path/to/inputs.json
 ```
 
 The inputs file is a top-level JSON object. Each field name must match a
@@ -31,31 +31,31 @@ and have the empty input shape `{}`.
 Inspect the entry point type metadata:
 
 ```sh
-cargo run -p rex-cli --bin rex -- path/to/program.rex --manifest
+cargo run -p rex-cli --bin rex_cli -- path/to/program.rex --manifest
 ```
 
 Run an inline snippet:
 
 ```sh
-cargo run -p rex-cli --bin rex -- -c 'let x = 1 in x + 2'
+cargo run -p rex-cli --bin rex_cli -- -c 'let x = 1 in x + 2'
 ```
 
 Show the parsed AST and exit:
 
 ```sh
-cargo run -p rex-cli --bin rex -- --emit-ast -c '1 + 2'
+cargo run -p rex-cli --bin rex_cli -- --emit-ast -c '1 + 2'
 ```
 
 Show the entry point result type and exit:
 
 ```sh
-cargo run -p rex-cli --bin rex -- --emit-type -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rex-cli --bin rex_cli -- --emit-type -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 Print a string result without JSON quotes:
 
 ```sh
-cargo run -p rex-cli --bin rex -- --raw-output -c '"hello"'
+cargo run -p rex-cli --bin rex_cli -- --raw-output -c '"hello"'
 ```
 
 ## “Parse error”: start small
