@@ -1,5 +1,5 @@
 use super::{
-    ToolExecution, ToolExecutionError, ToolExecutionPlan, ToolExecutor, ToolFuture,
+    ToolExecution, ToolExecutionError, ToolExecutionPlan, ToolExecutor, ToolFuture, catalog,
     workspace::ToolWorkspace,
 };
 use crate::storage::store::Store;
@@ -26,12 +26,11 @@ async fn execute_local(
     let workspace = ToolWorkspace::prepare(store, &plan.inputs, &plan.outputs).await?;
     let arguments = workspace.render_arguments(&plan.arguments, workspace.root())?;
 
-    let (executable, subcommand) = plan.program.command();
+    let runtime = catalog::runtime(plan.program);
+    let executable = runtime.executable;
     let mut command = Command::new(executable);
-    if let Some(subcommand) = subcommand {
-        command.arg(subcommand);
-    }
     command
+        .args(runtime.prefix_arguments)
         .args(arguments)
         .current_dir(workspace.root())
         .env("MAGICK_TEMPORARY_PATH", workspace.scratch_dir())

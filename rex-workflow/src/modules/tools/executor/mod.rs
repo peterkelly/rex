@@ -1,3 +1,4 @@
+mod catalog;
 mod local;
 mod workspace;
 
@@ -149,24 +150,19 @@ pub enum ToolProgram {
     PdfImages,
 }
 
+/// A set of programs installed together in one tool runtime image.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ToolBundle {
+    Ffmpeg,
+    ImageMagick,
+    Qpdf,
+    Poppler,
+}
+
 impl ToolProgram {
-    pub(super) fn command(self) -> (&'static str, Option<&'static str>) {
-        match self {
-            Self::Ffmpeg => ("ffmpeg", None),
-            Self::Ffprobe => ("ffprobe", None),
-            Self::ImageMagick => ("magick", None),
-            Self::ImageMagickMogrify => ("magick", Some("mogrify")),
-            Self::ImageMagickIdentify => ("magick", Some("identify")),
-            Self::ImageMagickCompare => ("magick", Some("compare")),
-            Self::ImageMagickComposite => ("magick", Some("composite")),
-            Self::ImageMagickMontage => ("magick", Some("montage")),
-            Self::ImageMagickStream => ("magick", Some("stream")),
-            Self::Qpdf => ("qpdf", None),
-            Self::PdfInfo => ("pdfinfo", None),
-            Self::PdfToText => ("pdftotext", None),
-            Self::PdfToCairo => ("pdftocairo", None),
-            Self::PdfImages => ("pdfimages", None),
-        }
+    /// Return the runtime image bundle containing this program.
+    pub fn bundle(self) -> ToolBundle {
+        catalog::runtime(self).bundle
     }
 }
 
