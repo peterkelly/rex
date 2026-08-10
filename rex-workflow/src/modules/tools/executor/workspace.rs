@@ -1,326 +1,96 @@
-use crate::{
-    modules::tools::executor::OutputKind::{Directory, Numbered, Single, Tree},
-    storage::{store::Store, transfer},
+use super::{
+    CasInput, ExpectedOutput, InputKind, OutputId,
+    OutputKind::{Directory, Numbered, Single, Tree},
+    PathSlot, ToolArgument, ToolExecutionError,
 };
+use crate::storage::{store::Store, transfer};
 use blake3::Hash;
 use std::{
     collections::BTreeMap,
-    error::Error,
-    fmt,
-    future::Future,
     path::{Path, PathBuf},
-    pin::Pin,
-    process::Stdio,
-    sync::Arc,
 };
-use tokio::{io::AsyncWriteExt, process::Command};
 
-pub type InputId = usize;
-pub type OutputId = usize;
+const INPUT_DIRECTORY: &str = "inputs";
+const OUTPUT_DIRECTORY: &str = "outputs";
+const SCRATCH_DIRECTORY: &str = "scratch";
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PathSlot {
-    Input(InputId),
-    InputParent(InputId),
-    Output(OutputId),
+pub(super) struct ToolWorkspace {
+    temporary: tempfile::TempDir,
+    input_paths: Vec<PathBuf>,
+    output_paths: Vec<PathBuf>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ToolArgument {
-    Literal(String),
-    Path {
-        slot: PathSlot,
-        prefix: String,
-        suffix: String,
-    },
-    Joined(Vec<ToolArgument>),
-}
-
-impl ToolArgument {
-    pub fn literal(value: impl Into<String>) -> Self {
-        Self::Literal(value.into())
-    }
-
-    pub fn input(id: InputId) -> Self {
-        Self::Path {
-            slot: PathSlot::Input(id),
-            prefix: String::new(),
-            suffix: String::new(),
+impl ToolWorkspace {
+    pub(super) async fn prepare(
+        store: &Store,
+        inputs: &[CasInput],
+        outputs: &[ExpectedOutput],
+    ) -> Result<Self, ToolExecutionError> {
+        let temporary = tempfile::tempdir()
+            .map_err(|error| ToolExecutionError::new(format!("create tool workspace: {error}")))?;
+        for directory in [INPUT_DIRECTORY, OUTPUT_DIRECTORY, SCRATCH_DIRECTORY] {
+            let path = temporary.path().join(directory);
+            std::fs::create_dir_all(&path).map_err(|error| {
+                ToolExecutionError::new(format!("create `{}`: {error}", path.display()))
+            })?;
         }
+
+        let input_paths = materialize_inputs(store, temporary.path(), inputs).await?;
+        let output_paths = prepare_outputs(temporary.path(), outputs)?;
+        Ok(Self {
+            temporary,
+            input_paths,
+            output_paths,
+        })
     }
 
-    pub fn input_decorated(
-        id: InputId,
-        prefix: impl Into<String>,
-        suffix: impl Into<String>,
-    ) -> Self {
-        Self::Path {
-            slot: PathSlot::Input(id),
-            prefix: prefix.into(),
-            suffix: suffix.into(),
-        }
+    pub(super) fn root(&self) -> &Path {
+        self.temporary.path()
     }
 
-    pub fn input_parent_decorated(
-        id: InputId,
-        prefix: impl Into<String>,
-        suffix: impl Into<String>,
-    ) -> Self {
-        Self::Path {
-            slot: PathSlot::InputParent(id),
-            prefix: prefix.into(),
-            suffix: suffix.into(),
-        }
+    pub(super) fn scratch_dir(&self) -> PathBuf {
+        self.root().join(SCRATCH_DIRECTORY)
     }
 
-    pub fn output(id: OutputId) -> Self {
-        Self::Path {
-            slot: PathSlot::Output(id),
-            prefix: String::new(),
-            suffix: String::new(),
-        }
+    pub(super) fn render_arguments(
+        &self,
+        arguments: &[ToolArgument],
+        execution_root: &Path,
+    ) -> Result<Vec<String>, ToolExecutionError> {
+        let input_paths = resolve_paths(execution_root, &self.input_paths);
+        let output_paths = resolve_paths(execution_root, &self.output_paths);
+        render_arguments(arguments, &input_paths, &output_paths)
     }
 
-    pub fn output_decorated(id: OutputId, prefix: impl Into<String>) -> Self {
-        Self::Path {
-            slot: PathSlot::Output(id),
-            prefix: prefix.into(),
-            suffix: String::new(),
-        }
-    }
-
-    pub fn output_with_suffix(id: OutputId, suffix: impl Into<String>) -> Self {
-        Self::Path {
-            slot: PathSlot::Output(id),
-            prefix: String::new(),
-            suffix: suffix.into(),
-        }
-    }
-
-    pub fn joined(parts: Vec<ToolArgument>) -> Self {
-        Self::Joined(parts)
+    pub(super) async fn import_outputs(
+        &self,
+        store: &Store,
+        outputs: &[ExpectedOutput],
+    ) -> Result<BTreeMap<OutputId, Vec<Hash>>, ToolExecutionError> {
+        let output_paths = resolve_paths(self.root(), &self.output_paths);
+        import_outputs(store, outputs, &output_paths).await
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct CasInput {
-    pub hash: Hash,
-    pub extension: String,
-    pub kind: InputKind,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InputKind {
-    Blob,
-    Tree,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OutputKind {
-    Single,
-    Numbered,
-    Directory,
-    Tree,
-}
-
-#[derive(Clone, Debug)]
-pub struct ExpectedOutput {
-    pub kind: OutputKind,
-    pub extension: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct ToolExecutionPlan {
-    pub program: ToolProgram,
-    pub arguments: Vec<ToolArgument>,
-    pub inputs: Vec<CasInput>,
-    pub outputs: Vec<ExpectedOutput>,
-    pub stdin: Option<Hash>,
-}
-
-/// One headless external program that the workflow host may execute.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ToolProgram {
-    Ffmpeg,
-    Ffprobe,
-    ImageMagick,
-    ImageMagickMogrify,
-    ImageMagickIdentify,
-    ImageMagickCompare,
-    ImageMagickComposite,
-    ImageMagickMontage,
-    ImageMagickStream,
-    Qpdf,
-    PdfInfo,
-    PdfToText,
-    PdfToCairo,
-    PdfImages,
-}
-
-impl ToolProgram {
-    fn command(self) -> (&'static str, Option<&'static str>) {
-        match self {
-            Self::Ffmpeg => ("ffmpeg", None),
-            Self::Ffprobe => ("ffprobe", None),
-            Self::ImageMagick => ("magick", None),
-            Self::ImageMagickMogrify => ("magick", Some("mogrify")),
-            Self::ImageMagickIdentify => ("magick", Some("identify")),
-            Self::ImageMagickCompare => ("magick", Some("compare")),
-            Self::ImageMagickComposite => ("magick", Some("composite")),
-            Self::ImageMagickMontage => ("magick", Some("montage")),
-            Self::ImageMagickStream => ("magick", Some("stream")),
-            Self::Qpdf => ("qpdf", None),
-            Self::PdfInfo => ("pdfinfo", None),
-            Self::PdfToText => ("pdftotext", None),
-            Self::PdfToCairo => ("pdftocairo", None),
-            Self::PdfImages => ("pdfimages", None),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ToolExecution {
-    pub exit_code: Option<i32>,
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-    pub outputs: BTreeMap<OutputId, Vec<Hash>>,
-}
-
-#[derive(Debug)]
-pub struct ToolExecutionError(String);
-
-impl ToolExecutionError {
-    fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
-    }
-}
-
-impl fmt::Display for ToolExecutionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl Error for ToolExecutionError {}
-
-pub type ToolFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<ToolExecution, ToolExecutionError>> + Send + 'a>>;
-
-pub trait ToolExecutor: Send + Sync {
-    fn execute<'a>(&'a self, store: &'a Store, plan: ToolExecutionPlan) -> ToolFuture<'a>;
-}
-
-#[derive(Clone, Default)]
-pub struct LocalToolExecutor;
-
-impl ToolExecutor for LocalToolExecutor {
-    fn execute<'a>(&'a self, store: &'a Store, plan: ToolExecutionPlan) -> ToolFuture<'a> {
-        Box::pin(execute_local(store, plan))
-    }
-}
-
-pub fn local_executor() -> Arc<dyn ToolExecutor> {
-    Arc::new(LocalToolExecutor)
-}
-
-async fn execute_local(
-    store: &Store,
-    plan: ToolExecutionPlan,
-) -> Result<ToolExecution, ToolExecutionError> {
-    let temporary = tempfile::tempdir()
-        .map_err(|error| ToolExecutionError::new(format!("create tool workspace: {error}")))?;
-    let input_dir = temporary.path().join("inputs");
-    let output_dir = temporary.path().join("outputs");
-    let scratch_dir = temporary.path().join("scratch");
-    for directory in [&input_dir, &output_dir, &scratch_dir] {
-        std::fs::create_dir_all(directory).map_err(|error| {
-            ToolExecutionError::new(format!("create `{}`: {error}", directory.display()))
-        })?;
-    }
-
-    let input_paths = materialize_inputs(store, &input_dir, &plan.inputs).await?;
-    let output_paths = prepare_outputs(&output_dir, &plan.outputs)?;
-    let arguments = render_arguments(&plan.arguments, &input_paths, &output_paths)?;
-
-    let (executable, subcommand) = plan.program.command();
-    let mut command = Command::new(executable);
-    if let Some(subcommand) = subcommand {
-        command.arg(subcommand);
-    }
-    command
-        .args(arguments)
-        .current_dir(temporary.path())
-        .env("MAGICK_TEMPORARY_PATH", &scratch_dir)
-        .env("TMPDIR", &scratch_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-
-    let stdin_data = match plan.stdin {
-        Some(hash) => Some(
-            store
-                .get(hash)
-                .await
-                .map_err(|error| ToolExecutionError::new(format!("read stdin object: {error}")))?,
-        ),
-        None => None,
-    };
-    command.stdin(if stdin_data.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    });
-
-    let mut child = command
-        .spawn()
-        .map_err(|error| ToolExecutionError::new(format!("spawn `{executable}`: {error}")))?;
-    let stdin_writer = if let Some(data) = stdin_data {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| ToolExecutionError::new("spawned tool has no stdin pipe"))?;
-        Some(tokio::spawn(async move {
-            stdin.write_all(&data).await?;
-            stdin.shutdown().await
-        }))
-    } else {
-        None
-    };
-
-    let process_output = child
-        .wait_with_output()
-        .await
-        .map_err(|error| ToolExecutionError::new(format!("wait for tool: {error}")))?;
-    if let Some(writer) = stdin_writer {
-        writer
-            .await
-            .map_err(|error| ToolExecutionError::new(format!("join stdin writer: {error}")))?
-            .map_err(|error| ToolExecutionError::new(format!("write tool stdin: {error}")))?;
-    }
-
-    let outputs = import_outputs(store, &plan.outputs, &output_paths).await?;
-    Ok(ToolExecution {
-        exit_code: process_output.status.code(),
-        stdout: process_output.stdout,
-        stderr: process_output.stderr,
-        outputs,
-    })
+fn resolve_paths(root: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
+    paths.iter().map(|path| root.join(path)).collect()
 }
 
 async fn materialize_inputs(
     store: &Store,
-    input_dir: &Path,
+    workspace_root: &Path,
     inputs: &[CasInput],
 ) -> Result<Vec<PathBuf>, ToolExecutionError> {
     let mut paths = Vec::with_capacity(inputs.len());
     for (id, input) in inputs.iter().enumerate() {
-        let path = match input.kind {
-            InputKind::Blob => input_dir.join(format!(
+        let relative_path = match input.kind {
+            InputKind::Blob => PathBuf::from(INPUT_DIRECTORY).join(format!(
                 "input-{id:04}.{}",
                 clean_extension(&input.extension)
             )),
-            InputKind::Tree => input_dir.join(format!("input-{id:04}")),
+            InputKind::Tree => PathBuf::from(INPUT_DIRECTORY).join(format!("input-{id:04}")),
         };
+        let path = workspace_root.join(&relative_path);
         match input.kind {
             InputKind::Blob => transfer::export_blob(store, input.hash, &path).await,
             InputKind::Tree => {
@@ -331,30 +101,32 @@ async fn materialize_inputs(
             }
         }
         .map_err(|error| ToolExecutionError::new(format!("materialize input {id}: {error}")))?;
-        paths.push(path);
+        paths.push(relative_path);
     }
     Ok(paths)
 }
 
 fn prepare_outputs(
-    output_dir: &Path,
+    workspace_root: &Path,
     outputs: &[ExpectedOutput],
 ) -> Result<Vec<PathBuf>, ToolExecutionError> {
     let mut paths = Vec::with_capacity(outputs.len());
     for (id, output) in outputs.iter().enumerate() {
         let extension = clean_extension(&output.extension);
-        let path = match output.kind {
-            Single => output_dir.join(format!("output-{id:04}.{extension}")),
-            Numbered => output_dir.join(format!("output-{id:04}-%06d.{extension}")),
+        let relative_path = match output.kind {
+            Single => PathBuf::from(OUTPUT_DIRECTORY).join(format!("output-{id:04}.{extension}")),
+            Numbered => {
+                PathBuf::from(OUTPUT_DIRECTORY).join(format!("output-{id:04}-%06d.{extension}"))
+            }
             Directory | Tree => {
-                let path = output_dir.join(format!("output-{id:04}"));
-                std::fs::create_dir_all(&path).map_err(|error| {
+                let path = PathBuf::from(OUTPUT_DIRECTORY).join(format!("output-{id:04}"));
+                std::fs::create_dir_all(workspace_root.join(&path)).map_err(|error| {
                     ToolExecutionError::new(format!("create output directory: {error}"))
                 })?;
                 path
             }
         };
-        paths.push(path);
+        paths.push(relative_path);
     }
     Ok(paths)
 }
@@ -493,6 +265,7 @@ fn clean_extension(extension: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::OutputKind;
     use super::*;
 
     #[test]
@@ -535,6 +308,24 @@ mod tests {
             [
                 "subtitles=filename='/private/work/inputs/subtitles.srt':fontsdir='/private/work/inputs'"
             ]
+        );
+    }
+
+    #[test]
+    fn workspace_paths_can_be_rendered_under_an_execution_root() {
+        assert_eq!(
+            resolve_paths(
+                Path::new("/work"),
+                &[PathBuf::from("inputs/input-0000.mp4")]
+            ),
+            [PathBuf::from("/work/inputs/input-0000.mp4")]
+        );
+        assert_eq!(
+            resolve_paths(
+                Path::new("/work"),
+                &[PathBuf::from("outputs/output-0000.mp3")]
+            ),
+            [PathBuf::from("/work/outputs/output-0000.mp3")]
         );
     }
 
