@@ -1,4 +1,7 @@
-use crate::{modules::storage::storage_module, state::State};
+use crate::{
+    modules::{storage::storage_module, tools},
+    state::State,
+};
 use rex::{
     ast::CompilationUnit,
     engine::{
@@ -64,6 +67,7 @@ async fn compile_cli_program(
         Builder::with_prelude(state).map_err(|e| format!("failed to initialize builder: {e}"))?;
 
     builder.inject_module(storage_module()?)?;
+    builder.add_importer(tools::importer());
 
     let compiler = builder.build_compiler();
     let (compiled, evaluator) = compiler
@@ -170,5 +174,31 @@ mod tests {
                 "total": 55
             })
         );
+    }
+
+    #[tokio::test]
+    async fn examples_compile() {
+        let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+        let mut paths = [
+            "imagemagick",
+            "ffmpeg",
+            "qpdf",
+            "poppler",
+            "imagemagick_ffmpeg",
+        ]
+        .into_iter()
+        .flat_map(|directory| std::fs::read_dir(examples.join(directory)).unwrap())
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "rex"))
+        .collect::<Vec<_>>();
+        paths.sort();
+        for path in paths {
+            let source = std::fs::read_to_string(&path).unwrap();
+            let program = parse_rex(&source)
+                .unwrap_or_else(|errors| panic!("{} did not parse: {errors:?}", path.display()));
+            compile_cli_program(&program, State::local(Store::new_in_memory()))
+                .await
+                .unwrap_or_else(|error| panic!("{} did not compile: {error}", path.display()));
+        }
     }
 }
