@@ -408,13 +408,28 @@ async fn import_outputs(
     let mut imported = BTreeMap::new();
     for (id, (output, path)) in outputs.iter().zip(paths).enumerate() {
         let files = match output.kind {
-            Single => {
-                if path.is_file() {
-                    vec![path.clone()]
-                } else {
-                    Vec::new()
+            Single => match std::fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(ToolExecutionError::new(format!(
+                        "tool output is a symbolic link: `{}`",
+                        path.display()
+                    )));
                 }
-            }
+                Ok(metadata) if metadata.file_type().is_file() => vec![path.clone()],
+                Ok(_) => {
+                    return Err(ToolExecutionError::new(format!(
+                        "tool output is not a regular file: `{}`",
+                        path.display()
+                    )));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(error) => {
+                    return Err(ToolExecutionError::new(format!(
+                        "inspect tool output `{}`: {error}",
+                        path.display()
+                    )));
+                }
+            },
             Numbered => {
                 let prefix = format!("output-{id:04}-");
                 let mut files = transfer::regular_files(path.parent().ok_or_else(|| {
@@ -521,5 +536,58 @@ mod tests {
                 "subtitles=filename='/private/work/inputs/subtitles.srt':fontsdir='/private/work/inputs'"
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn output_roots_must_not_be_symbolic_links() {
+        use std::os::unix::fs::symlink;
+
+        for kind in [
+            OutputKind::Single,
+            OutputKind::Numbered,
+            OutputKind::Directory,
+            OutputKind::Tree,
+        ] {
+            let temporary = tempfile::tempdir().unwrap();
+            let target = temporary.path().join("target");
+            let output = match kind {
+                OutputKind::Single => {
+                    std::fs::write(&target, b"outside").unwrap();
+                    let output = temporary.path().join("output");
+                    symlink(&target, &output).unwrap();
+                    output
+                }
+                OutputKind::Numbered => {
+                    std::fs::create_dir(&target).unwrap();
+                    let output_root = temporary.path().join("output-root");
+                    symlink(&target, &output_root).unwrap();
+                    output_root.join("output-0000-%06d.bin")
+                }
+                OutputKind::Directory | OutputKind::Tree => {
+                    std::fs::create_dir(&target).unwrap();
+                    std::fs::write(target.join("outside.txt"), b"outside").unwrap();
+                    let output = temporary.path().join("output");
+                    symlink(&target, &output).unwrap();
+                    output
+                }
+            };
+
+            let error = import_outputs(
+                &Store::new_in_memory(),
+                &[ExpectedOutput {
+                    kind,
+                    extension: "bin".to_string(),
+                }],
+                &[output],
+            )
+            .await
+            .unwrap_err();
+
+            assert!(
+                error.to_string().contains("symbolic link"),
+                "unexpected error for {kind:?}: {error}"
+            );
+        }
     }
 }

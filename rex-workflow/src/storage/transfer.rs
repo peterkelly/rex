@@ -10,7 +10,19 @@ pub async fn import_path(
     store: &Store,
     path: &Path,
 ) -> Result<(EntryKind, Hash), Box<dyn Error + Send + Sync>> {
-    if path.is_dir() {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            format!("path does not exist: `{}`", path.display())
+        } else {
+            format!("inspect path `{}`: {error}", path.display())
+        }
+    })?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(format!("cannot import symbolic link `{}`", path.display()).into());
+    }
+
+    if file_type.is_dir() {
         let mut entries = BTreeMap::new();
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
@@ -31,10 +43,14 @@ pub async fn import_path(
             entries.insert(name, (kind, hash));
         }
         Ok((EntryKind::Tree, store.put_tree(entries).await?))
-    } else if path.is_file() {
+    } else if file_type.is_file() {
         Ok((EntryKind::Blob, store.put(std::fs::read(path)?).await?))
     } else {
-        Err(format!("path does not exist: `{}`", path.display()).into())
+        Err(format!(
+            "cannot import non-file filesystem entry `{}`",
+            path.display()
+        )
+        .into())
     }
 }
 
@@ -78,8 +94,17 @@ fn collect_regular_files(
     path: &Path,
     files: &mut Vec<PathBuf>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    if !path.exists() {
-        return Ok(());
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(format!("tool output contains a symbolic link: `{}`", path.display()).into());
+    }
+    if !file_type.is_dir() {
+        return Err(format!("tool output path is not a directory: `{}`", path.display()).into());
     }
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;
