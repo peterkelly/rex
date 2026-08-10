@@ -1,5 +1,5 @@
 use crate::{
-    modules::tools::executor::{ToolExecutor, local_executor},
+    modules::tools::executor::{DockerToolImages, ToolExecutor, docker_executor, local_executor},
     storage::store::Store,
 };
 use std::sync::Arc;
@@ -15,6 +15,13 @@ impl State {
         Self {
             store,
             tools: local_executor(),
+        }
+    }
+
+    pub fn docker(store: Store, images: DockerToolImages) -> Self {
+        Self {
+            store,
+            tools: docker_executor(images),
         }
     }
 

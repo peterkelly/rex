@@ -1,4 +1,5 @@
 mod catalog;
+mod docker;
 mod local;
 mod workspace;
 
@@ -6,6 +7,7 @@ use crate::storage::store::Store;
 use blake3::Hash;
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, pin::Pin};
 
+pub use docker::{DockerToolExecutor, DockerToolImages, docker_executor};
 pub use local::{LocalToolExecutor, local_executor};
 
 pub type InputId = usize;
