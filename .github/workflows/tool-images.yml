@@ -1,0 +1,41 @@
+name: Tool images
+
+on:
+  pull_request:
+    paths:
+      - "rex-workflow/tool-images/**"
+      - ".github/workflows/tool-images.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "rex-workflow/tool-images/**"
+      - ".github/workflows/tool-images.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build amd64 and arm64 images
+        working-directory: rex-workflow/tool-images
+        run: docker buildx bake --set '*.platform=linux/amd64,linux/arm64'
+
+      - name: Load native images
+        working-directory: rex-workflow/tool-images
+        run: docker buildx bake --load
+
+      - name: Run hardened smoke tests
+        working-directory: rex-workflow/tool-images
+        run: ./verify.sh
