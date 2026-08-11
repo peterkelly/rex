@@ -1,19 +1,6 @@
 name: Tool images
 
 on:
-  pull_request:
-    paths:
-      - "rex-workflow/src/modules/tools/**"
-      - "rex-workflow/tests/docker_tools.rs"
-      - "rex-workflow/tool-images/**"
-      - ".github/workflows/tool-images.yml"
-  push:
-    branches: ["main"]
-    paths:
-      - "rex-workflow/src/modules/tools/**"
-      - "rex-workflow/tests/docker_tools.rs"
-      - "rex-workflow/tool-images/**"
-      - ".github/workflows/tool-images.yml"
   workflow_dispatch:
     inputs:
       run_integration_tests:
