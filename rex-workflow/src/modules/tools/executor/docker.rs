@@ -11,6 +11,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command as StdCommand, ExitStatus, Stdio},
     sync::Arc,
+    thread,
     time::Duration,
 };
 use tokio::{
@@ -663,13 +664,28 @@ impl Drop for ContainerCleanup {
         if !self.armed {
             return;
         }
-        let _ = StdCommand::new(&self.docker_binary)
-            .args(["container", "rm", "--force", &self.container_name])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
+
+        let _ = spawn_container_cleanup(self.docker_binary.clone(), self.container_name.clone());
     }
+}
+
+fn spawn_container_cleanup(
+    docker_binary: PathBuf,
+    container_name: String,
+) -> io::Result<thread::JoinHandle<()>> {
+    thread::Builder::new()
+        .name("rex-docker-cleanup".to_owned())
+        .spawn(move || {
+            // Spawn the Docker CLI inside this thread so every cleanup process
+            // that starts has an owner which waits for and reaps it. Dropping
+            // the JoinHandle detaches only the Rust thread, not the child.
+            let _ = StdCommand::new(docker_binary)
+                .args(["container", "rm", "--force", &container_name])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        })
 }
 
 #[cfg(test)]
@@ -784,6 +800,38 @@ mod tests {
         let output = read_bounded(std::io::Cursor::new(data), 64).await.unwrap();
         assert_eq!(output.len(), 64);
         assert!(output.ends_with(TRUNCATION_MARKER));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_reaper_waits_for_docker_process() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let fake_docker = temporary.path().join("docker");
+        std::fs::write(
+            &fake_docker,
+            "#!/bin/sh\n\
+             [ \"$1\" = container ] || exit 2\n\
+             [ \"$2\" = rm ] || exit 3\n\
+             [ \"$3\" = --force ] || exit 4\n\
+             [ \"$4\" = rex-tool-test ] || exit 5\n\
+             sleep 0.1\n\
+             printf reaped > \"$0.reaped\"\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&fake_docker).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&fake_docker, permissions).unwrap();
+
+        let reaper =
+            spawn_container_cleanup(fake_docker.clone(), "rex-tool-test".to_owned()).unwrap();
+        reaper.join().unwrap();
+
+        assert_eq!(
+            std::fs::read(fake_docker.with_extension("reaped")).unwrap(),
+            b"reaped"
+        );
     }
 
     #[cfg(unix)]
