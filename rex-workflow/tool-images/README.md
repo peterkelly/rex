@@ -60,6 +60,27 @@ let images = DockerToolImages::new(
 let state = State::docker(store, images);
 ```
 
+The `rex-workflow` executable uses the local process executor by default, so
+existing commands retain their current behavior. Select Docker for one run
+after building or pulling the configured images:
+
+```sh
+cargo run -p rex-workflow -- run workflow.rex --tool-executor docker
+```
+
+Set `REX_WORKFLOW_TOOL_EXECUTOR=docker` to select Docker without a command-line
+option. The image options and environment variables in the table below replace
+individual defaults when testing or provisioning published images. Docker-only
+image options are rejected with the local executor instead of being silently
+ignored.
+
+| CLI option | Environment variable | Default |
+|---|---|---|
+| `--docker-ffmpeg-image` | `REX_WORKFLOW_DOCKER_FFMPEG_IMAGE` | `rex-tool-ffmpeg:local` |
+| `--docker-imagemagick-image` | `REX_WORKFLOW_DOCKER_IMAGEMAGICK_IMAGE` | `rex-tool-imagemagick:local` |
+| `--docker-qpdf-image` | `REX_WORKFLOW_DOCKER_QPDF_IMAGE` | `rex-tool-qpdf:local` |
+| `--docker-poppler-image` | `REX_WORKFLOW_DOCKER_POPPLER_IMAGE` | `rex-tool-poppler:local` |
+
 The executor uses `--pull=never`. Building or pulling images is deliberately a
 host provisioning step, never a side effect of evaluating a workflow.
 
@@ -81,15 +102,9 @@ are rejected so a misspelled CI setting cannot silently skip the suite. Once
 enabled, missing Docker access, missing images, and tool failures are test
 failures rather than skips.
 
-The default image references can be overridden independently when testing
-published tags or digest-qualified images:
-
-| Variable | Default |
-|---|---|
-| `REX_WORKFLOW_DOCKER_FFMPEG_IMAGE` | `rex-tool-ffmpeg:local` |
-| `REX_WORKFLOW_DOCKER_IMAGEMAGICK_IMAGE` | `rex-tool-imagemagick:local` |
-| `REX_WORKFLOW_DOCKER_QPDF_IMAGE` | `rex-tool-qpdf:local` |
-| `REX_WORKFLOW_DOCKER_POPPLER_IMAGE` | `rex-tool-poppler:local` |
+The integration tests use the same image environment variables as the CLI, so
+the overrides in the preceding table also select published tags or
+digest-qualified images for the suite.
 
 The **Tool images** GitHub Actions workflow also leaves the runtime smoke and
 Rust integration tests disabled by default while still building both target
