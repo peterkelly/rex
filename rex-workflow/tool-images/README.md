@@ -63,6 +63,41 @@ let state = State::docker(store, images);
 The executor uses `--pull=never`. Building or pulling images is deliberately a
 host provisioning step, never a side effect of evaluating a workflow.
 
+## Run the Docker integration tests
+
+The Rust integration suite is opt-in. Ordinary `cargo test` runs compile the
+test target and exercise its toggle parser, but do not contact Docker or
+require the tool images. After building the four native `:local` images, enable
+the suite explicitly from the workspace root:
+
+```sh
+REX_WORKFLOW_DOCKER_TESTS=1 \
+cargo test -p rex-workflow --test docker_tools -- --nocapture
+```
+
+Set the variable to `0`, `false`, `off`, or `no` (or leave it unset) to disable
+the Docker tests. Values `1`, `true`, `on`, and `yes` enable them. Other values
+are rejected so a misspelled CI setting cannot silently skip the suite. Once
+enabled, missing Docker access, missing images, and tool failures are test
+failures rather than skips.
+
+The default image references can be overridden independently when testing
+published tags or digest-qualified images:
+
+| Variable | Default |
+|---|---|
+| `REX_WORKFLOW_DOCKER_FFMPEG_IMAGE` | `rex-tool-ffmpeg:local` |
+| `REX_WORKFLOW_DOCKER_IMAGEMAGICK_IMAGE` | `rex-tool-imagemagick:local` |
+| `REX_WORKFLOW_DOCKER_QPDF_IMAGE` | `rex-tool-qpdf:local` |
+| `REX_WORKFLOW_DOCKER_POPPLER_IMAGE` | `rex-tool-poppler:local` |
+
+The **Tool images** GitHub Actions workflow also leaves the runtime smoke and
+Rust integration tests disabled by default while still building both target
+architectures. Enable them for an individual manual run with the
+`run_integration_tests` checkbox. To enable them for matching pull requests
+and pushes as well, define the repository Actions variable
+`REX_WORKFLOW_DOCKER_TESTS` with the value `1`.
+
 ## Build a multi-platform release
 
 Set the prefix to a registry repository prefix and choose a release tag, then
