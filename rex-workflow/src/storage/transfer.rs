@@ -165,4 +165,26 @@ mod tests {
             [0_u8, 1, 2]
         );
     }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn deeply_nested_symbolic_links_are_rejected_by_every_import_path() {
+        use std::os::unix::fs::symlink;
+
+        let source = tempfile::tempdir().unwrap();
+        let nested = source.path().join("one/two/three");
+        std::fs::create_dir_all(&nested).unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        symlink(outside.path(), nested.join("escape")).unwrap();
+
+        let regular_files_error = regular_files(source.path()).unwrap_err().to_string();
+        assert!(regular_files_error.contains("symbolic link"));
+
+        let store = Store::new_in_memory();
+        let import_error = import_path(&store, source.path())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(import_error.contains("non-file filesystem entry"));
+    }
 }

@@ -3,17 +3,21 @@ name: Tool images
 on:
   pull_request:
     paths:
+      - "rex-workflow/src/modules/tools/**"
+      - "rex-workflow/tests/docker_tools.rs"
       - "rex-workflow/tool-images/**"
       - ".github/workflows/tool-images.yml"
   push:
     branches: ["main"]
     paths:
+      - "rex-workflow/src/modules/tools/**"
+      - "rex-workflow/tests/docker_tools.rs"
       - "rex-workflow/tool-images/**"
       - ".github/workflows/tool-images.yml"
   workflow_dispatch:
     inputs:
       run_integration_tests:
-        description: Build native images and run Docker integration tests
+        description: Run native Docker smoke and Rust integration tests
         required: false
         default: false
         type: boolean
@@ -22,8 +26,19 @@ permissions:
   contents: read
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
+  native-build-and-test:
+    name: Native ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     env:
       REX_WORKFLOW_DOCKER_TESTS: >-
         ${{ ((github.event_name == 'workflow_dispatch' &&
@@ -33,20 +48,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build amd64 and arm64 images
+      - name: Build and load native images
         working-directory: rex-workflow/tool-images
-        run: docker buildx bake --set '*.platform=linux/amd64,linux/arm64'
-
-      - name: Load native images
-        if: env.REX_WORKFLOW_DOCKER_TESTS == '1'
-        working-directory: rex-workflow/tool-images
-        run: docker buildx bake --load
+        run: docker buildx bake --set '*.platform=${{ matrix.platform }}' --load
 
       - name: Run hardened smoke tests
         if: env.REX_WORKFLOW_DOCKER_TESTS == '1'
@@ -63,4 +70,4 @@ jobs:
 
       - name: Run Docker integration tests
         if: env.REX_WORKFLOW_DOCKER_TESTS == '1'
-        run: cargo test -p rex-workflow --test docker_tools -- --nocapture
+        run: cargo test -p rex-workflow --test docker_tools -- --nocapture --test-threads=1

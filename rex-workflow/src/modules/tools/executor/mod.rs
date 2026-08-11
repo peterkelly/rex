@@ -168,6 +168,25 @@ impl ToolProgram {
     }
 }
 
+impl ToolBundle {
+    pub const ALL: [Self; 4] = [Self::Ffmpeg, Self::ImageMagick, Self::Qpdf, Self::Poppler];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Ffmpeg => "ffmpeg",
+            Self::ImageMagick => "imagemagick",
+            Self::Qpdf => "qpdf",
+            Self::Poppler => "poppler",
+        }
+    }
+}
+
+impl fmt::Display for ToolBundle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ToolExecution {
     pub exit_code: Option<i32>,

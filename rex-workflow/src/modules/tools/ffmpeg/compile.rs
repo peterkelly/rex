@@ -756,12 +756,6 @@ fn compile_input(builder: &mut PlanBuilder, input: MediaInput) -> Result<(), Ffm
             builder.option("-f", "lavfi");
             builder.option("-i", filter);
         }
-        MediaSource::NetworkMedia(url) => {
-            if url.is_empty() {
-                return Err(invalid("network media URL cannot be empty"));
-            }
-            builder.option("-i", url);
-        }
     }
     Ok(())
 }
@@ -786,7 +780,6 @@ fn compile_input_option(builder: &mut PlanBuilder, option: InputOption) -> Resul
         InputOption::InputThreadQueueSize(size) => {
             builder.option("-thread_queue_size", size.to_string())
         }
-        InputOption::InputHardwareAcceleration(method) => builder.option("-hwaccel", method),
         InputOption::InputDecoder(codec) => builder.option("-c", codec),
         InputOption::InputProtocolOption(option) | InputOption::InputDemuxerOption(option) => {
             builder.option(

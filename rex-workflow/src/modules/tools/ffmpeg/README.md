@@ -71,7 +71,6 @@ operation itself did not run to a meaningful completion state.
 - `StoredPackage` materializes an HLS or DASH CAS tree;
 - `TestVideo` and `SolidVideo` use FFmpeg's generated video sources;
 - `SineAudio` and `SilenceAudio` generate audio;
-- `NetworkMedia` reads a URL through an FFmpeg protocol;
 
 The generated sources use typed size, frame-rate, sample-rate, duration, color, and pattern fields.
 `MediaInput` adds seek ranges, looping, format hints, hardware acceleration, decoder selection, and

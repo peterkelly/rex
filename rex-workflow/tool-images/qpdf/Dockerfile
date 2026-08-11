@@ -1,23 +1,26 @@
 # syntax=docker/dockerfile:1
 
-ARG ALPINE_VERSION=3.24
-FROM alpine:${ALPINE_VERSION}
+ARG ALPINE_IMAGE=alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+FROM ${ALPINE_IMAGE} AS runtime
 
-ARG ALPINE_VERSION
 LABEL org.opencontainers.image.title="Rex QPDF tool runtime" \
       org.opencontainers.image.description="QPDF for isolated Rex workflows" \
       org.opencontainers.image.source="https://github.com/peterkelly/rex" \
-      ai.rex.tool-bundle="qpdf" \
-      ai.rex.alpine-version="${ALPINE_VERSION}"
+      ai.rex.tool-bundle="qpdf"
 
-ENV HOME=/work/scratch \
+ENV HOME=/work/tmp \
     LANG=C \
     LC_ALL=C \
-    TMPDIR=/work/scratch \
+    TMPDIR=/work/tmp \
     TZ=UTC \
-    XDG_CACHE_HOME=/work/scratch
+    XDG_CACHE_HOME=/work/tmp
 
 RUN apk add --no-cache qpdf \
-    && qpdf --version >/dev/null
+    && mkdir -p /work/inputs /work/outputs /work/tmp
 
 WORKDIR /work
+
+FROM runtime AS verification
+RUN qpdf --version >/dev/null
+
+FROM verification AS final

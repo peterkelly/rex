@@ -11,7 +11,9 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
-mkdir -p "$workspace/inputs" "$workspace/outputs" "$workspace/scratch"
+mkdir -p "$workspace/inputs" "$workspace/outputs"
+
+user="$(id -u):$(id -g)"
 
 run_tool() {
     bundle=$1
@@ -25,10 +27,18 @@ run_tool() {
         --cap-drop=ALL \
         --security-opt=no-new-privileges \
         --no-healthcheck \
-        --mount "type=bind,source=$workspace,destination=/work" \
+        --pids-limit 512 \
+        --user "$user" \
+        --mount "type=bind,source=$workspace/inputs,destination=/work/inputs,readonly" \
+        --mount "type=bind,source=$workspace/outputs,destination=/work/outputs" \
+        --tmpfs /work/tmp:rw,noexec,nosuid,nodev,mode=1777,size=536870912 \
         --workdir /work \
-        --env MAGICK_TEMPORARY_PATH=/work/scratch \
-        --env TMPDIR=/work/scratch \
+        --env HOME=/work/tmp \
+        --env MAGICK_TEMPORARY_PATH=/work/tmp \
+        --env TMPDIR=/work/tmp \
+        --env LANG=C \
+        --env LC_ALL=C \
+        --env TZ=UTC \
         --entrypoint "$entrypoint" \
         "${IMAGE_PREFIX}-${bundle}:${IMAGE_TAG}" \
         "$@"
@@ -43,10 +53,20 @@ run_tool ffmpeg ffprobe \
     -of default=noprint_wrappers=1 /work/outputs/ffmpeg.png
 test -s "$workspace/outputs/ffmpeg.png"
 
+run_tool ffmpeg ffmpeg \
+    -hide_banner -loglevel error -y \
+    -f lavfi -i color=c=black:s=128x32 \
+    -vf 'drawtext=text=Rex:font=DejaVu Sans:fontcolor=white:x=4:y=4' \
+    -frames:v 1 /work/outputs/ffmpeg-font.png
+test -s "$workspace/outputs/ffmpeg-font.png"
+
 run_tool imagemagick magick \
     -size 16x16 'canvas:#336699' /work/outputs/imagemagick.webp
 run_tool imagemagick magick \
     identify /work/outputs/imagemagick.webp
+run_tool imagemagick magick \
+    -background white -fill black -font DejaVu-Sans label:Rex \
+    /work/outputs/imagemagick-font.png
 for command in mogrify compare composite montage; do
     run_tool imagemagick magick "$command" -version >/dev/null
 done
@@ -55,6 +75,7 @@ run_tool imagemagick magick \
     /work/outputs/imagemagick.webp /work/outputs/imagemagick.rgba
 test -s "$workspace/outputs/imagemagick.webp"
 test -s "$workspace/outputs/imagemagick.rgba"
+test -s "$workspace/outputs/imagemagick-font.png"
 
 printf '%s\n' \
     '%PDF-1.4' \
@@ -91,5 +112,22 @@ run_tool poppler pdftocairo \
 run_tool poppler pdfimages -list /work/outputs/page.pdf
 test -f "$workspace/outputs/page.txt"
 test -s "$workspace/outputs/page.png"
+
+if run_tool ffmpeg ffmpeg \
+    -hide_banner -loglevel error -y \
+    -f lavfi -i color=c=red:s=8x8 -frames:v 1 \
+    /work/inputs/must-not-write.png >/dev/null 2>&1; then
+    echo "tool unexpectedly wrote to the read-only input mount" >&2
+    exit 1
+fi
+test ! -e "$workspace/inputs/must-not-write.png"
+
+if run_tool ffmpeg ffmpeg \
+    -hide_banner -loglevel error -y \
+    -f lavfi -i color=c=red:s=8x8 -frames:v 1 \
+    /must-not-write.png >/dev/null 2>&1; then
+    echo "tool unexpectedly wrote to the read-only container root" >&2
+    exit 1
+fi
 
 echo "All Rex tool images passed their offline, read-only smoke tests."

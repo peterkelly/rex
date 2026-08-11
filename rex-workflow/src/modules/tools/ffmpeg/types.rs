@@ -148,7 +148,7 @@ pub struct SilenceAudioSource {
     pub duration: Option<Time>,
 }
 
-/// A stored, generated, or network media source.
+/// A stored or generated media source.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum MediaSource {
     StoredMedia(Media),
@@ -157,7 +157,6 @@ pub enum MediaSource {
     SolidVideo(SolidVideoSource),
     SineAudio(SineAudioSource),
     SilenceAudio(SilenceAudioSource),
-    NetworkMedia(String),
 }
 
 /// An input-scoped FFmpeg option applied before its corresponding media source.
@@ -175,7 +174,6 @@ pub enum InputOption {
     InputStreamLoop(i64),
     InputReadAtNativeRate,
     InputThreadQueueSize(u64),
-    InputHardwareAcceleration(String),
     InputDecoder(String),
     InputProtocolOption(NameValue),
     InputDemuxerOption(NameValue),

@@ -1178,12 +1178,14 @@ dependencies = [
  "blake3",
  "clap",
  "futures",
+ "nix",
  "object_store",
  "rex",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

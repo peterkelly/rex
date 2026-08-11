@@ -8,7 +8,8 @@ use super::{ToolBundle, ToolProgram};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ToolRuntime {
     pub(super) bundle: ToolBundle,
-    pub(super) executable: &'static str,
+    pub(super) local_executable: &'static str,
+    pub(super) container_executable: &'static str,
     pub(super) prefix_arguments: &'static [&'static str],
 }
 
@@ -16,12 +17,14 @@ pub(super) const fn runtime(program: ToolProgram) -> ToolRuntime {
     match program {
         ToolProgram::Ffmpeg => ToolRuntime {
             bundle: ToolBundle::Ffmpeg,
-            executable: "ffmpeg",
+            local_executable: "ffmpeg",
+            container_executable: "ffmpeg",
             prefix_arguments: &[],
         },
         ToolProgram::Ffprobe => ToolRuntime {
             bundle: ToolBundle::Ffmpeg,
-            executable: "ffprobe",
+            local_executable: "ffprobe",
+            container_executable: "ffprobe",
             prefix_arguments: &[],
         },
         ToolProgram::ImageMagick => image_magick(&[]),
@@ -33,7 +36,8 @@ pub(super) const fn runtime(program: ToolProgram) -> ToolRuntime {
         ToolProgram::ImageMagickStream => image_magick(&["stream"]),
         ToolProgram::Qpdf => ToolRuntime {
             bundle: ToolBundle::Qpdf,
-            executable: "qpdf",
+            local_executable: "qpdf",
+            container_executable: "qpdf",
             prefix_arguments: &[],
         },
         ToolProgram::PdfInfo => poppler("pdfinfo"),
@@ -46,7 +50,8 @@ pub(super) const fn runtime(program: ToolProgram) -> ToolRuntime {
 const fn image_magick(prefix_arguments: &'static [&'static str]) -> ToolRuntime {
     ToolRuntime {
         bundle: ToolBundle::ImageMagick,
-        executable: "magick",
+        local_executable: "magick",
+        container_executable: "magick",
         prefix_arguments,
     }
 }
@@ -54,7 +59,8 @@ const fn image_magick(prefix_arguments: &'static [&'static str]) -> ToolRuntime 
 const fn poppler(executable: &'static str) -> ToolRuntime {
     ToolRuntime {
         bundle: ToolBundle::Poppler,
-        executable,
+        local_executable: executable,
+        container_executable: executable,
         prefix_arguments: &[],
     }
 }
@@ -142,7 +148,8 @@ mod tests {
                 runtime(program),
                 ToolRuntime {
                     bundle,
-                    executable,
+                    local_executable: executable,
+                    container_executable: executable,
                     prefix_arguments,
                 }
             );

@@ -27,7 +27,7 @@ async fn execute_local(
     let arguments = workspace.render_arguments(&plan.arguments, workspace.root())?;
 
     let runtime = catalog::runtime(plan.program);
-    let executable = runtime.executable;
+    let executable = runtime.local_executable;
     let mut command = Command::new(executable);
     command
         .args(runtime.prefix_arguments)

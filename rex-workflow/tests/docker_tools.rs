@@ -1,9 +1,21 @@
 use blake3::Hash;
 use rex_workflow::{
-    modules::tools::executor::DockerToolImages, run::eval_rex, state::State, storage::store::Store,
+    modules::tools::executor::{
+        CasInput, DockerToolExecutor, DockerToolImages, ExpectedOutput, InputKind, OutputKind,
+        ToolArgument, ToolExecutionPlan, ToolExecutor, ToolProgram,
+    },
+    run::eval_rex,
+    state::State,
+    storage::store::Store,
 };
 use serde_json::{Value, json};
-use std::{env, str::FromStr};
+use std::{
+    collections::BTreeSet,
+    env,
+    process::{Command, Stdio},
+    str::FromStr,
+    time::Duration,
+};
 
 const ENABLE_ENV: &str = "REX_WORKFLOW_DOCKER_TESTS";
 const FFMPEG_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_FFMPEG_IMAGE";
@@ -23,7 +35,7 @@ fn docker_fixture() -> Option<DockerFixture> {
     }
 
     let store = Store::new_in_memory();
-    let images = DockerToolImages::new(
+    let images = DockerToolImages::development(
         image_reference(FFMPEG_IMAGE_ENV, "rex-tool-ffmpeg:local"),
         image_reference(IMAGEMAGICK_IMAGE_ENV, "rex-tool-imagemagick:local"),
         image_reference(QPDF_IMAGE_ENV, "rex-tool-qpdf:local"),
@@ -294,4 +306,418 @@ fn sample_pdf() -> Vec<u8> {
         .as_bytes(),
     );
     pdf
+}
+
+fn docker_executor_fixture() -> Option<(Store, DockerToolExecutor)> {
+    if !docker_tests_enabled() {
+        eprintln!("skipping Docker integration test; set {ENABLE_ENV}=1 to enable the suite");
+        return None;
+    }
+    let images = DockerToolImages::development(
+        image_reference(FFMPEG_IMAGE_ENV, "rex-tool-ffmpeg:local"),
+        image_reference(IMAGEMAGICK_IMAGE_ENV, "rex-tool-imagemagick:local"),
+        image_reference(QPDF_IMAGE_ENV, "rex-tool-qpdf:local"),
+        image_reference(POPPLER_IMAGE_ENV, "rex-tool-poppler:local"),
+    );
+    Some((Store::new_in_memory(), DockerToolExecutor::new(images)))
+}
+
+fn ffmpeg_png_plan(kind: OutputKind, color: &str) -> ToolExecutionPlan {
+    let output = match kind {
+        OutputKind::Single | OutputKind::Numbered => ToolArgument::output(0),
+        OutputKind::Directory | OutputKind::Tree => {
+            ToolArgument::output_with_suffix(0, "/frame.png")
+        }
+    };
+    let mut arguments = vec![
+        ToolArgument::literal("-hide_banner"),
+        ToolArgument::literal("-loglevel"),
+        ToolArgument::literal("error"),
+        ToolArgument::literal("-y"),
+        ToolArgument::literal("-f"),
+        ToolArgument::literal("lavfi"),
+        ToolArgument::literal("-i"),
+        ToolArgument::literal(format!("color=c={color}:s=16x16:r=1:d=2")),
+        ToolArgument::literal("-frames:v"),
+        ToolArgument::literal(if kind == OutputKind::Numbered {
+            "2"
+        } else {
+            "1"
+        }),
+        output,
+    ];
+    if kind == OutputKind::Numbered {
+        arguments.insert(arguments.len() - 1, ToolArgument::literal("-start_number"));
+        arguments.insert(arguments.len() - 1, ToolArgument::literal("1"));
+    }
+    ToolExecutionPlan {
+        program: ToolProgram::Ffmpeg,
+        arguments,
+        inputs: Vec::new(),
+        outputs: vec![ExpectedOutput {
+            kind,
+            extension: "png".to_owned(),
+        }],
+        stdin: None,
+    }
+}
+
+fn literal_plan(program: ToolProgram, arguments: &[&str]) -> ToolExecutionPlan {
+    ToolExecutionPlan {
+        program,
+        arguments: arguments
+            .iter()
+            .copied()
+            .map(ToolArgument::literal)
+            .collect(),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        stdin: None,
+    }
+}
+
+#[tokio::test]
+async fn docker_supports_every_output_kind() {
+    let Some((store, executor)) = docker_executor_fixture() else {
+        return;
+    };
+    for (kind, color) in [
+        (OutputKind::Single, "red"),
+        (OutputKind::Numbered, "green"),
+        (OutputKind::Directory, "blue"),
+        (OutputKind::Tree, "yellow"),
+    ] {
+        let execution = executor
+            .execute(&store, ffmpeg_png_plan(kind, color))
+            .await
+            .unwrap_or_else(|error| panic!("execute {kind:?} output plan: {error}"));
+        assert_eq!(
+            execution.exit_code,
+            Some(0),
+            "{kind:?}: {}",
+            String::from_utf8_lossy(&execution.stderr)
+        );
+        let hashes = execution.outputs.get(&0).expect("output entry");
+        let expected_count = if kind == OutputKind::Numbered { 2 } else { 1 };
+        assert_eq!(hashes.len(), expected_count, "{kind:?}");
+        if kind == OutputKind::Tree {
+            let tree = store.get_tree(hashes[0]).await.expect("read output tree");
+            assert!(tree.contains_key("frame.png"));
+        } else {
+            for hash in hashes {
+                assert!(
+                    store
+                        .get(*hash)
+                        .await
+                        .expect("read output blob")
+                        .starts_with(b"\x89PNG")
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn docker_enforces_input_root_host_and_network_isolation() {
+    let Some((store, executor)) = docker_executor_fixture() else {
+        return;
+    };
+
+    let input_bytes = b"immutable input".to_vec();
+    let input_hash = store.put(input_bytes.clone()).await.unwrap();
+    let mut overwrite_input = literal_plan(
+        ToolProgram::Ffmpeg,
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=8x8",
+            "-frames:v",
+            "1",
+            "/work/inputs/input-0000.bin",
+        ],
+    );
+    overwrite_input.inputs.push(CasInput {
+        hash: input_hash,
+        extension: "bin".to_owned(),
+        kind: InputKind::Blob,
+    });
+    let execution = executor.execute(&store, overwrite_input).await.unwrap();
+    assert_ne!(execution.exit_code, Some(0));
+    assert_eq!(store.get(input_hash).await.unwrap(), input_bytes);
+
+    let root_write = executor
+        .execute(
+            &store,
+            literal_plan(
+                ToolProgram::Ffmpeg,
+                &[
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=red:s=8x8",
+                    "-frames:v",
+                    "1",
+                    "/must-not-write.png",
+                ],
+            ),
+        )
+        .await
+        .unwrap();
+    assert_ne!(root_write.exit_code, Some(0));
+
+    let sentinel = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(sentinel.path(), b"host secret").unwrap();
+    let sentinel_path = sentinel.path().to_string_lossy().into_owned();
+    let hidden_host_file = executor
+        .execute(
+            &store,
+            literal_plan(ToolProgram::Ffprobe, &["-v", "error", &sentinel_path]),
+        )
+        .await
+        .unwrap();
+    assert_ne!(hidden_host_file.exit_code, Some(0));
+
+    let network = executor
+        .execute(
+            &store,
+            literal_plan(
+                ToolProgram::Ffprobe,
+                &[
+                    "-v",
+                    "error",
+                    "-rw_timeout",
+                    "1000000",
+                    "https://example.com/",
+                ],
+            ),
+        )
+        .await
+        .unwrap();
+    assert_ne!(network.exit_code, Some(0));
+}
+
+#[tokio::test]
+async fn docker_uses_packaged_and_cas_supplied_fonts() {
+    let Some((store, executor)) = docker_executor_fixture() else {
+        return;
+    };
+
+    let fallback = ToolExecutionPlan {
+        program: ToolProgram::ImageMagick,
+        arguments: [
+            "-background",
+            "white",
+            "-fill",
+            "black",
+            "-font",
+            "DejaVu-Sans",
+            "label:Rex",
+        ]
+        .into_iter()
+        .map(ToolArgument::literal)
+        .chain(std::iter::once(ToolArgument::output(0)))
+        .collect(),
+        inputs: Vec::new(),
+        outputs: vec![ExpectedOutput {
+            kind: OutputKind::Single,
+            extension: "png".to_owned(),
+        }],
+        stdin: None,
+    };
+    let execution = executor.execute(&store, fallback).await.unwrap();
+    assert_eq!(
+        execution.exit_code,
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&execution.stderr)
+    );
+
+    let font = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "--pull=never",
+            "--network=none",
+            "--entrypoint",
+            "cat",
+            &image_reference(IMAGEMAGICK_IMAGE_ENV, "rex-tool-imagemagick:local"),
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("extract packaged test font");
+    assert!(
+        font.status.success(),
+        "{}",
+        String::from_utf8_lossy(&font.stderr)
+    );
+    let font_hash = store.put(font.stdout).await.unwrap();
+    let cas_font = ToolExecutionPlan {
+        program: ToolProgram::ImageMagick,
+        arguments: vec![
+            ToolArgument::literal("-background"),
+            ToolArgument::literal("white"),
+            ToolArgument::literal("-fill"),
+            ToolArgument::literal("black"),
+            ToolArgument::literal("-font"),
+            ToolArgument::input(0),
+            ToolArgument::literal("label:Rex"),
+            ToolArgument::output(0),
+        ],
+        inputs: vec![CasInput {
+            hash: font_hash,
+            extension: "ttf".to_owned(),
+            kind: InputKind::Blob,
+        }],
+        outputs: vec![ExpectedOutput {
+            kind: OutputKind::Single,
+            extension: "png".to_owned(),
+        }],
+        stdin: None,
+    };
+    let execution = executor.execute(&store, cas_font).await.unwrap();
+    assert_eq!(
+        execution.exit_code,
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&execution.stderr)
+    );
+}
+
+#[tokio::test]
+async fn docker_distinguishes_tool_failures_from_missing_images() {
+    let Some((store, executor)) = docker_executor_fixture() else {
+        return;
+    };
+    let failure = executor
+        .execute(
+            &store,
+            literal_plan(ToolProgram::Ffmpeg, &["--definitely-not-an-ffmpeg-option"]),
+        )
+        .await
+        .expect("ordinary tool failure is an execution result");
+    assert_ne!(failure.exit_code, Some(0));
+    assert!(!failure.stderr.is_empty());
+
+    let missing = DockerToolExecutor::new(DockerToolImages::development(
+        "rex-tool-image-that-does-not-exist:missing",
+        "rex-tool-imagemagick:local",
+        "rex-tool-qpdf:local",
+        "rex-tool-poppler:local",
+    ));
+    let error = missing
+        .execute(&store, literal_plan(ToolProgram::Ffmpeg, &["-version"]))
+        .await
+        .expect_err("missing image is infrastructure failure");
+    assert!(error.to_string().contains("create Docker tool container"));
+    assert!(
+        error
+            .to_string()
+            .contains("rex-tool-image-that-does-not-exist")
+    );
+}
+
+fn rex_container_names() -> BTreeSet<String> {
+    let output = Command::new("docker")
+        .args([
+            "container",
+            "ls",
+            "--all",
+            "--format",
+            "{{.Names}}",
+            "--filter",
+            "label=rex.workflow=true",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("list Rex containers");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[tokio::test]
+async fn docker_cancellation_cleans_up_and_concurrent_runs_are_isolated() {
+    let Some((store, executor)) = docker_executor_fixture() else {
+        return;
+    };
+    let baseline = rex_container_names();
+    let task_store = store.clone();
+    let task_executor = executor.clone();
+    let task = tokio::spawn(async move {
+        task_executor
+            .execute(
+                &task_store,
+                literal_plan(
+                    ToolProgram::Ffmpeg,
+                    &[
+                        "-hide_banner",
+                        "-loglevel",
+                        "error",
+                        "-re",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "sine=frequency=440:duration=60",
+                        "-f",
+                        "null",
+                        "-",
+                    ],
+                ),
+            )
+            .await
+    });
+    for _ in 0..50 {
+        if rex_container_names().len() > baseline.len() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        rex_container_names().len() > baseline.len(),
+        "long-running container never appeared"
+    );
+    task.abort();
+    let _ = task.await;
+    for _ in 0..50 {
+        if rex_container_names() == baseline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        rex_container_names(),
+        baseline,
+        "cancellation leaked a container"
+    );
+
+    let red = executor.execute(&store, ffmpeg_png_plan(OutputKind::Single, "red"));
+    let blue = executor.execute(&store, ffmpeg_png_plan(OutputKind::Single, "blue"));
+    let (red, blue) = tokio::join!(red, blue);
+    let red = red.unwrap();
+    let blue = blue.unwrap();
+    assert_eq!(red.exit_code, Some(0));
+    assert_eq!(blue.exit_code, Some(0));
+    assert_ne!(red.outputs[&0], blue.outputs[&0]);
+    assert_eq!(
+        rex_container_names(),
+        baseline,
+        "completed runs leaked containers"
+    );
 }

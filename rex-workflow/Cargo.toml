@@ -18,6 +18,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+uuid = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["user"] }
 
 [lints]
 workspace = true

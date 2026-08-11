@@ -48,6 +48,14 @@ impl ToolWorkspace {
         self.temporary.path()
     }
 
+    pub(super) fn input_dir(&self) -> PathBuf {
+        self.root().join(INPUT_DIRECTORY)
+    }
+
+    pub(super) fn output_dir(&self) -> PathBuf {
+        self.root().join(OUTPUT_DIRECTORY)
+    }
+
     pub(super) fn scratch_dir(&self) -> PathBuf {
         self.root().join(SCRATCH_DIRECTORY)
     }
