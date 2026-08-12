@@ -385,7 +385,7 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
                 builder: &mut ::rex::engine::Builder<State>,
             ) -> Result<(), ::rex::engine::EngineError>
             where
-                Self: ::rex::engine::RexDefault<State>,
+                Self: ::rex::engine::RexDefault<State> + ::rex::engine::IntoRex,
             {
                 builder.inject_rex_adt::<Self>()?;
                 builder.inject_rex_default_instance::<Self>()

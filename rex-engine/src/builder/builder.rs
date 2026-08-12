@@ -222,7 +222,7 @@ where
 
     pub fn inject_rex_default_instance<T>(&mut self) -> Result<(), EngineError>
     where
-        T: RexType + RexDefault<State>,
+        T: RexType + RexDefault<State> + IntoRex,
     {
         let class = Symbol::intern("Default");
         let method = Symbol::intern("default");
@@ -252,7 +252,7 @@ where
         );
         let native_scheme = Scheme::new(vec![], vec![], head_ty.clone());
         let func: HostValueCallable<State> = Arc::new(move |engine, _, _| {
-            let result = T::rex_default(engine);
+            let result = T::rex_default(engine).and_then(IntoRex::into_rex);
             async move { result }.boxed()
         });
         self.register_native_registration(

@@ -27,11 +27,21 @@ use rex_typesystem::{
 };
 use std::{future::Future, sync::Arc};
 
-pub trait RexDefault<State>
+pub trait RexDefault<State>: Sized
 where
     State: Clone + Send + Sync + 'static,
 {
-    fn rex_default(ctx: Context<State>) -> Result<Value, EngineError>;
+    fn rex_default(ctx: Context<State>) -> Result<Self, EngineError>;
+}
+
+impl<State, T> RexDefault<State> for T
+where
+    State: Clone + Send + Sync + 'static,
+    T: Default,
+{
+    fn rex_default(_ctx: Context<State>) -> Result<Self, EngineError> {
+        Ok(Self::default())
+    }
 }
 
 pub(crate) type NativeValueFuture = NativeFuture;

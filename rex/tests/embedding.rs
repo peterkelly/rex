@@ -14,9 +14,8 @@ use rex::{
     Rex,
     ast::Symbol,
     engine::{
-        Builder, CompileOptions, Context, EngineError, FromRex, ImportRequest, Importer, IntoRex,
-        Module, ModuleId, ResolvedModule, ResolvedModuleContent, RexDefault, Value,
-        virtual_export_name,
+        Builder, CompileOptions, Context, EngineError, FromRex, ImportRequest, Importer, Module,
+        ModuleId, ResolvedModule, ResolvedModuleContent, RexDefault, Value, virtual_export_name,
     },
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Scheme, Type, TypeError, TypeKind},
@@ -333,6 +332,12 @@ struct Entity2 {
     numbers: Vec<u32>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Rex)]
+struct RustDefaultEntity {
+    enabled: bool,
+    count: i32,
+}
+
 impl Entity2 {
     fn rex_new(state: HostState, name: String, numbers: Vec<u32>) -> Result<Entity2, EngineError> {
         Ok(Entity2 {
@@ -347,16 +352,15 @@ impl Entity2 {
 }
 
 impl RexDefault<HostState> for Entity1 {
-    fn rex_default(engine: Context<HostState>) -> Result<Value, EngineError> {
-        let entity = Entity1 {
+    fn rex_default(engine: Context<HostState>) -> Result<Self, EngineError> {
+        Ok(Entity1 {
             account_id: engine.state().account_id,
             project_id: engine.state().project_id,
             name: "".to_string(),
             description: None,
             tags: None,
             numbers: vec![],
-        };
-        entity.into_rex()
+        })
     }
 }
 
@@ -459,6 +463,22 @@ async fn injected_functions_can_read_shared_state_fields() {
     assert!(items[2].to_rust::<bool>().unwrap());
     assert!(items[3].to_rust::<bool>().unwrap());
     assert!(!items[4].to_rust::<bool>().unwrap());
+}
+
+#[tokio::test]
+async fn rust_default_types_get_rex_default_instance() {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    RustDefaultEntity::inject_rex_with_default(&mut builder).unwrap();
+
+    let (_heap, value, ty) =
+        common::eval_source(builder, "let e: RustDefaultEntity = default in e")
+            .await
+            .unwrap();
+    assert_eq!(ty, Type::con("RustDefaultEntity", 0));
+    assert_eq!(
+        RustDefaultEntity::from_rex(value).unwrap(),
+        RustDefaultEntity::default()
+    );
 }
 
 #[tokio::test]
