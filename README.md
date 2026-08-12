@@ -9,7 +9,7 @@
 </p>
 
 Rex (short for *[Rush](https://rush.cloud/) Expressions*) is a statically typed,
-pure functional workflow language and an embeddable Rust runtime. It is designed for
+pure functional workflow language. It is designed for
 scientific computing and data processing: work in Rex is expressed as pure
 transformations over immutable values, while typed tool modules delegate
 work to external programs for compute-intensive tasks.
@@ -23,8 +23,7 @@ processing scientific data:
 - **Content-addressable storage** identifies every stored input and output artifact
   by its [BLAKE3](https://en.wikipedia.org/wiki/BLAKE_(hash_function)) hash. Files
   and directory trees are immutable values, so intermediate artifacts can be passed
-  between tools without shared filenames or mutable working directories. This is
-  the same approach as used by Git.
+  between tools without shared filenames or mutable working directories.
 - **Typed tool APIs** expose domain concepts such as video codecs, PDF structure,
   image operations, and output formats. Rex programs construct valid tool
   requests rather than assembling shell command strings.
@@ -134,12 +133,10 @@ callers retain which stage failed.
 There are no temporary filenames, subprocess calls, quoting rules, or cleanup
 steps in the source. The host compiles each typed request into an execution
 plan, materializes only the declared CAS inputs, validates and imports each
-output, and returns the final contact sheet's hash. The example has been run
-end to end on a five-page PDF using the local executor; Poppler produced five
-CAS-backed PNGs and ImageMagick assembled all five into a single JPEG.
+output, and returns the final contact sheet's hash.
 
 Other tool combinations follow the same pattern. See the [combined FFmpeg and
-ImageMagick examples](rex-workflow/examples/imagemagick_ffmpeg/README.md) for
+ImageMagick examples](rex-workflow/examples/imagemagick_ffmpeg) for
 video contact sheets, polished thumbnails, watermarked video, title-card
 video, and animated GIF workflows.
 
@@ -170,9 +167,9 @@ in
 Rex uses strict evaluation, but expressions and functions are pure: their
 meaning does not depend on hidden mutable state in the language. This gives
 the evaluator freedom to run independent asynchronous calls concurrently
-without making users manage threads, futures, locks, or callback graphs.
-Sequential dependencies are expressed by passing one result into the next;
-independent work remains independent in the source.
+without making users manage threads, futures, locks, async/await syntax,
+or callback graphs. Sequential dependencies are expressed by passing one
+result into the next; independent work remains independent in the source.
 
 Purity also improves reviewability. A function's arguments describe the data
 it can use, its result type describes what it can produce, and an algebraic
@@ -225,11 +222,13 @@ The data model has two object kinds:
 - A **blob** is an opaque byte sequence: an image, video, PDF, table, model,
   log, or any other file.
 - A **tree** is a deterministically encoded map from names to blob or tree
-  entries. Trees represent directories and multi-file datasets such as HLS or
-  DASH packages, extracted image collections, and nested results.
+  entries. Trees represent directories and multi-file datasets, extracted
+  image collections, and nested results.
 
 Each tree entry records its kind, hash, and size. Trees can contain other trees,
-so one root hash identifies a complete immutable directory hierarchy.
+so one root hash identifies a complete immutable directory hierarchy. The sizes
+are cumulative, meaning that an entry that refers to another tree includes total
+size of everything it contains.
 
 ```text
 host file or directory
@@ -261,7 +260,7 @@ This model provides several useful properties:
 - **Natural composition.** An output hash from one tool is immediately usable
   by another tool without exporting and re-importing an intermediate file.
 - **Portable storage.** The same API can use a local filesystem store, an
-  in-memory store, or an implementation of Rust's `object_store::ObjectStore`.
+  in-memory store, or a cloud-hosted S3 bucket.
 
 The CAS is deliberately aligned with the functional language: creating a new
 artifact does not mutate an old artifact, and calling `put` with the same
