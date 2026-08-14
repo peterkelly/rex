@@ -19,9 +19,7 @@ import tools.ffmpeg as FF;
 fn main (input: Hash) -> Result FF.MediaInfo FF.FfmpegError =
     FF.probe
         (FF.Media { content = input })
-        (FF.ProbeOptions {
-            detail = FF.ProbeAll,
+        FF.ProbeOptions {
             count_frames = true,
-            count_packets = true,
-            read_intervals = None
-        });
+            count_packets = true
+        };

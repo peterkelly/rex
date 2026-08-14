@@ -47,7 +47,7 @@ fn encode_title_card (title: String, card: IM.Image)
                 options = []
             }
         ],
-        filters = FF.FilterGraph { chains = [] },
+        filters = FF.FilterGraph {},
         outputs = [
             FF.MediaOutput {
                 format = FF.ContainerFormat { name = "mp4" },

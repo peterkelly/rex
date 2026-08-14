@@ -98,7 +98,9 @@ pub use rex_proc_macro::export;
 /// Register an inline Rust module and generate its documented Rex module factory.
 ///
 /// Functions marked with [`export`] and ADTs marked `#[rex(export)]` are added
-/// to the generated `rex_module()` function.
+/// to the generated `rex_module()` function. The optional `defaults(Type, ...)`
+/// argument registers qualified Rex `Default` instances backed by each listed
+/// type's [`engine::RexDefault`] implementation.
 pub use rex_proc_macro::module;
 
 /// Parse, typecheck, evaluate, and JSON-encode a Rex snippet.

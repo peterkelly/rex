@@ -19,7 +19,7 @@ pub fn module() -> Result<Module<State>, EngineError> {
 /// Exit status 3 is preserved as a successful result with `warnings`; invalid requests and fatal
 /// QPDF failures are returned as `Err QpdfError`. The available behavior depends on the installed
 /// `qpdf` executable.
-#[rex::module(name = "tools.qpdf")]
+#[rex::module(name = "tools.qpdf", defaults(OverlaySpec, JsonOptions))]
 mod api {
     use super::*;
 

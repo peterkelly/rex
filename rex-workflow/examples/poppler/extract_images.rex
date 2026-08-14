@@ -5,11 +5,7 @@ import tools.poppler as P;
 fn main (input: Hash) -> Result P.ExtractedImages P.PopplerError =
     P.pdfimages
         (P.Pdf { content = input })
-        (P.PdfImagesOptions {
-            first_page = None,
-            last_page = None,
+        P.PdfImagesOptions {
             format = P.ImagesAll,
-            include_page_numbers = true,
-            owner_password = None,
-            user_password = None
-        });
+            include_page_numbers = true
+        };

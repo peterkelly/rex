@@ -1,6 +1,8 @@
+mod common;
+
 use rex::{
     ast::Symbol,
-    engine::{Builder, EngineError, virtual_export_name},
+    engine::{Builder, EngineError, Value, virtual_export_name},
 };
 
 /// Host APIs used to test documented registration.
@@ -52,6 +54,31 @@ mod host_split_attributes {
     #[rex(name = "RenamedType")]
     pub struct RustTypeName {
         pub value: i32,
+    }
+}
+
+#[rex::module(name = "host.defaults", defaults(Options))]
+mod host_defaults {
+    use rex::engine::EngineError;
+
+    #[derive(Clone, Debug, rex::Rex)]
+    pub struct Options {
+        pub retries: i32,
+        pub enabled: bool,
+    }
+
+    impl Default for Options {
+        fn default() -> Self {
+            Self {
+                retries: 3,
+                enabled: false,
+            }
+        }
+    }
+
+    #[rex::export]
+    pub fn retries(_state: (), options: Options) -> Result<i32, EngineError> {
+        Ok(options.retries)
     }
 }
 
@@ -137,5 +164,29 @@ fn rex_name_is_found_after_a_separate_export_marker() -> Result<(), EngineError>
     let declarations = module.declarations();
     assert_eq!(declarations.types.len(), 1);
     assert_eq!(declarations.types[0].name.as_ref(), "RenamedType");
+    Ok(())
+}
+
+#[tokio::test]
+async fn module_macro_registers_private_qualified_defaults() -> Result<(), EngineError> {
+    let module = host_defaults::rex_module()?;
+    assert_eq!(module.exports().len(), 1);
+    assert_eq!(module.exports()[0].name, "retries");
+
+    let mut builder = Builder::with_prelude(())?;
+    builder.inject_module(module)?;
+    let (_heap, value, _typ) = common::eval_source(
+        builder,
+        r#"
+        import host.defaults as D;
+        (
+            D.retries D.Options {},
+            D.retries D.Options { retries = 9 }
+        )
+        "#,
+    )
+    .await?;
+
+    assert_eq!(value, Value::Tuple(vec![Value::I32(3), Value::I32(9)]));
     Ok(())
 }

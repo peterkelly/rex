@@ -72,7 +72,7 @@ mod tests {
     use super::*;
     use crate::storage::store::Store;
     use rex::{
-        engine::{Builder, CompileOptions, ModuleId},
+        engine::{Builder, CompileOptions, ModuleId, Value},
         parser::parse as parse_rex,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -229,5 +229,51 @@ mod tests {
 
         assert_eq!(USED_CALLS.load(Ordering::SeqCst), 1);
         assert_eq!(UNUSED_CALLS.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn production_tool_modules_register_qualified_defaults() {
+        let state = State::local(Store::new_in_memory());
+        let mut builder = Builder::with_prelude(state).unwrap();
+        builder.add_importer(importer());
+        let compiler = builder.build_compiler();
+        let program = parse_rex(
+            r#"
+                import tools.ffmpeg as F;
+                import tools.poppler as P;
+                import tools.qpdf as Q;
+
+                let
+                    info: P.PdfInfoOptions = default,
+                    text: P.PdfToTextOptions = {
+                        default with { no_page_breaks = true }
+                    },
+                    cairo: P.PdfToCairoOptions = {
+                        default with { resolution = Some 144.0 }
+                    },
+                    images: P.PdfImagesOptions = {
+                        default with { format = P.ImagesAll }
+                    },
+                    overlay: Q.OverlaySpec = default,
+                    json: Q.JsonOptions = {
+                        default with { keys = [Q.JsonPages] }
+                    },
+                    equalizer: F.VideoEqualizer = {
+                        default with { brightness = Some 0.1 }
+                    },
+                    graph: F.FilterGraph = default,
+                    probe: F.ProbeOptions = {
+                        default with { count_frames = true }
+                    }
+                in
+                    true
+            "#,
+        )
+        .unwrap();
+        let options = CompileOptions::new(ModuleId::parse("main").unwrap());
+
+        let (program, evaluator) = compiler.compile_program(&program, options).await.unwrap();
+        let value = evaluator.run(program, Default::default()).await.unwrap();
+        assert_eq!(value, Value::Bool(true));
     }
 }

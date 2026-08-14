@@ -515,7 +515,7 @@ async fn derived_rex_default_can_read_host_state() {
 }
 
 #[tokio::test]
-async fn derived_rex_default_record_update_can_override_fields() {
+async fn derived_rex_default_partial_constructor_can_override_fields() {
     let account_id = uuid::uuid!("33333333-3333-4333-8333-333333333333");
     let project_id = uuid::uuid!("44444444-4444-4444-8444-444444444444");
     let mut builder: Builder<HostState> = Builder::with_prelude(HostState {
@@ -530,7 +530,7 @@ async fn derived_rex_default_record_update_can_override_fields() {
 
     let (_heap, value, ty) = common::eval_source(
         builder,
-        r#"let e: Entity1 = { default with { name = "sample", tags = Some ["x", "y"], numbers = [7, 11] } } in e"#,
+        r#"Entity1 { name = "sample", tags = Some ["x", "y"], numbers = [7, 11] }"#,
     )
     .await
     .unwrap();

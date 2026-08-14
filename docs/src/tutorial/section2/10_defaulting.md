@@ -74,6 +74,31 @@ instance<a> Default (Box a) <= Default a where {
 }
 ```
 
+### Constructing named options with selected overrides
+
+For a single-constructor ADT with named fields, the constructor itself can request the type's
+default and override only the fields you supply:
+
+```rex,interactive
+type Config = Config { retries: i32, enabled: Bool, label: String };
+
+instance Default Config where {
+    default = Config { retries = 3, enabled = false, label = "standard" };
+}
+
+Config { retries = 9 }
+```
+
+This evaluates to a `Config` with `retries = 9`, `enabled = false`, and `label = "standard"`.
+Use `Config {}` when you want the default value while keeping its type explicit.
+
+Omitted fields come from `Default Config` as a whole. Rex does not default each field separately,
+so manually chosen and interdependent defaults are preserved. Complete construction still works
+without a `Default` instance, while partial construction requires one.
+
+This shorthand is intentionally limited to single-variant record ADTs. For an ADT with multiple
+variants, a type-level default might produce a different variant from the constructor you named.
+
 ### Ambiguous `default` calls and `is`
 
 When multiple `Default` instances are in scope, `default` may be ambiguous until you pin the type.

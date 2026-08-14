@@ -320,6 +320,15 @@ pub(crate) fn expected_type_in_expr(
                 };
                 visit(body.as_ref(), typed_body.as_ref(), pos, body_expected, best);
             }
+            (Expr::App(_, _, argument), TypedExprKind::RecordUpdate { updates, .. }) => {
+                if let Expr::Dict(_, fields) = argument.as_ref() {
+                    for (name, value) in fields {
+                        if let Some(typed_value) = updates.get(name) {
+                            visit(value, typed_value, pos, Some(&typed_value.typ), best);
+                        }
+                    }
+                }
+            }
             (Expr::App(_span, f, x), TypedExprKind::App(tf, tx)) => {
                 let expected_arg = match tf.typ.as_ref() {
                     TypeKind::Fun(arg, _ret) => Some(arg),
@@ -498,6 +507,15 @@ pub(crate) fn inferred_type_in_expr(
                 },
             ) => {
                 visit(body.as_ref(), typed_body.as_ref(), pos, best);
+            }
+            (Expr::App(_, _, argument), TypedExprKind::RecordUpdate { updates, .. }) => {
+                if let Expr::Dict(_, fields) = argument.as_ref() {
+                    for (name, value) in fields {
+                        if let Some(typed_value) = updates.get(name) {
+                            visit(value, typed_value, pos, best);
+                        }
+                    }
+                }
             }
             (Expr::App(_, f, x), TypedExprKind::App(tf, tx)) => {
                 visit(f.as_ref(), tf.as_ref(), pos, best);
@@ -2165,6 +2183,15 @@ pub(crate) fn hover_type_in_expr(
                 for (k, v) in updates {
                     if let Some(tv) = tupdates.get(k) {
                         visit(ts, v.as_ref(), tv, ctx);
+                    }
+                }
+            }
+            (Expr::App(_, _, argument), TypedExprKind::RecordUpdate { updates, .. }) => {
+                if let Expr::Dict(_, fields) = argument.as_ref() {
+                    for (name, value) in fields {
+                        if let Some(typed_value) = updates.get(name) {
+                            visit(ts, value, typed_value, ctx);
+                        }
                     }
                 }
             }

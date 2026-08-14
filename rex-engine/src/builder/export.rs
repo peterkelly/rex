@@ -90,6 +90,11 @@ where
         matches!(&self.payload, ExportPayload::Value { .. })
     }
 
+    pub(crate) fn into_private(mut self) -> Self {
+        self.interface.is_pub = false;
+        self
+    }
+
     fn from_injector(
         name: impl Into<String>,
         interface: DeclareFnDecl,

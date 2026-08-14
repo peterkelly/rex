@@ -711,6 +711,7 @@ fn drain_typed_expr_kind(kind: &mut TypedExprKind, stack: &mut Vec<Arc<TypedExpr
         | TypedExprKind::Uuid(..)
         | TypedExprKind::DateTime(..)
         | TypedExprKind::Hole
+        | TypedExprKind::ClassMethod { .. }
         | TypedExprKind::Var { .. } => {}
     }
 }
@@ -837,6 +838,9 @@ impl TypedExpr {
                     updates: out,
                 }
             }
+            TypedExprKind::ClassMethod { name } => {
+                TypedExprKind::ClassMethod { name: name.clone() }
+            }
             TypedExprKind::Var { name, overloads } => TypedExprKind::Var {
                 name: name.clone(),
                 overloads: overloads.iter().map(|t| t.apply(s)).collect(),
@@ -902,6 +906,9 @@ pub enum TypedExprKind {
     RecordUpdate {
         base: Arc<TypedExpr>,
         updates: BTreeMap<Symbol, Arc<TypedExpr>>,
+    },
+    ClassMethod {
+        name: Symbol,
     },
     Var {
         name: Symbol,

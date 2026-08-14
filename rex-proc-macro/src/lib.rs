@@ -58,6 +58,7 @@ pub fn derive_rex(input: TokenStream) -> TokenStream {
 #[derive(Default)]
 struct RegistrationArgs {
     name: Option<LitStr>,
+    defaults: Option<Vec<Type>>,
 }
 
 impl Parse for RegistrationArgs {
@@ -81,8 +82,21 @@ impl Parse for RegistrationArgs {
                     };
                     args.name = Some(name);
                 }
+                Meta::List(meta) if meta.path.is_ident("defaults") => {
+                    if args.defaults.is_some() {
+                        return Err(Error::new(meta.span(), "duplicate `defaults` argument"));
+                    }
+                    let defaults = meta
+                        .parse_args_with(Punctuated::<Type, Token![,]>::parse_terminated)?
+                        .into_iter()
+                        .collect();
+                    args.defaults = Some(defaults);
+                }
                 other => {
-                    return Err(Error::new(other.span(), "expected `name = \"...\"`"));
+                    return Err(Error::new(
+                        other.span(),
+                        "expected `name = \"...\"` or `defaults(Type, ...)`",
+                    ));
                 }
             }
         }
@@ -137,6 +151,12 @@ fn exported_param_names(function: &ItemFn) -> Result<Vec<String>, Error> {
 }
 
 fn expand_export(args: RegistrationArgs, function: ItemFn) -> Result<TokenStream2, Error> {
+    if args.defaults.is_some() {
+        return Err(Error::new(
+            function.sig.span(),
+            "`defaults(...)` is supported only by `#[rex::module]`",
+        ));
+    }
     if !function.sig.generics.params.is_empty() || function.sig.generics.where_clause.is_some() {
         return Err(Error::new(
             function.sig.generics.span(),
@@ -219,6 +239,7 @@ fn expand_module(args: RegistrationArgs, mut module: ItemMod) -> Result<TokenStr
             "a Rex module requires `name = \"...\"`",
         )
     })?;
+    let default_types = args.defaults.unwrap_or_default();
     let module_docs = docs_from_attrs(&module.attrs)?;
     let module_span = module.span();
     let (_, items) = module
@@ -292,6 +313,7 @@ fn expand_module(args: RegistrationArgs, mut module: ItemMod) -> Result<TokenStr
             );
             #(__rex_module.add_rex_adt::<#exported_types>()?;)*
             #(__rex_module.add_export(#export_helpers()?)?;)*
+            #(__rex_module.add_rex_default_instance::<#default_types>()?;)*
             Ok(__rex_module)
         }
     })?;

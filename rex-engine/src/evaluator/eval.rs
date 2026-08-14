@@ -375,7 +375,7 @@ pub(crate) fn frame_for_expr(
             update_values: Vec::new(),
             remaining_updates: 0,
         }),
-        TypedExprKind::Var { .. } => Frame::Var(FrVar {
+        TypedExprKind::ClassMethod { .. } | TypedExprKind::Var { .. } => Frame::Var(FrVar {
             parent,
             expr,
             env,
@@ -479,31 +479,37 @@ where
             frames.replace(frame_id, Frame::RecordUpdate(frame))?;
             Ok(EvalControl::Push { expr: base, env })
         }
-        Frame::Var(mut frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Var { name, .. } => {
-                match eval_resolve_var(runtime, scope, &frame.env, name, &frame.expr.typ)? {
-                    EvalVarResult::Value(value) => Ok(EvalControl::Return(value)),
-                    EvalVarResult::Push { expr, env } => {
-                        frame.state = FrValueState::Enter;
-                        frames.replace(frame_id, Frame::Var(frame))?;
-                        Ok(EvalControl::Push { expr, env })
-                    }
-                    EvalVarResult::PushNative(task) => Ok(EvalControl::PushFrame(Box::new(
-                        Frame::NativeCall(FrNativeCall {
-                            parent: Some(frame_id),
-                            state: FrNativeCallState::Enter,
-                            task,
-                        }),
-                    ))),
-                    EvalVarResult::AwaitNative(future) => {
-                        frame.state = FrValueState::Enter;
-                        frames.replace(frame_id, Frame::Var(frame))?;
-                        Ok(EvalControl::AwaitNative(future))
-                    }
+        Frame::Var(mut frame) => {
+            let resolved = match frame.expr.kind.as_ref() {
+                TypedExprKind::ClassMethod { name } => {
+                    eval_resolve_class_method(runtime, scope, name, &frame.expr.typ)?
+                }
+                TypedExprKind::Var { name, .. } => {
+                    eval_resolve_var(runtime, scope, &frame.env, name, &frame.expr.typ)?
+                }
+                _ => return frame_kind_error("var"),
+            };
+            match resolved {
+                EvalVarResult::Value(value) => Ok(EvalControl::Return(value)),
+                EvalVarResult::Push { expr, env } => {
+                    frame.state = FrValueState::Enter;
+                    frames.replace(frame_id, Frame::Var(frame))?;
+                    Ok(EvalControl::Push { expr, env })
+                }
+                EvalVarResult::PushNative(task) => Ok(EvalControl::PushFrame(Box::new(
+                    Frame::NativeCall(FrNativeCall {
+                        parent: Some(frame_id),
+                        state: FrNativeCallState::Enter,
+                        task,
+                    }),
+                ))),
+                EvalVarResult::AwaitNative(future) => {
+                    frame.state = FrValueState::Enter;
+                    frames.replace(frame_id, Frame::Var(frame))?;
+                    Ok(EvalControl::AwaitNative(future))
                 }
             }
-            _ => frame_kind_error("var"),
-        },
+        }
         Frame::App(frame) => eval_app_enter(frames, frame_id, frame),
         Frame::Project(mut frame) => {
             let expr = match frame.expr.kind.as_ref() {
@@ -1310,6 +1316,24 @@ where
         } else {
             Ok(EvalVarResult::Value(ctx_root))
         }
+    }
+}
+
+fn eval_resolve_class_method<State>(
+    runtime: &RuntimeCore<State>,
+    scope: &mut RootScope<'_>,
+    name: &Symbol,
+    typ: &Type,
+) -> Result<EvalVarResult, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match runtime.resolve_class_method_plan(scope, name, typ)? {
+        ClassMethodPlan::Evaluate { env, expr } => Ok(EvalVarResult::Push {
+            expr: Arc::new(expr),
+            env,
+        }),
+        ClassMethodPlan::Deferred(value) => Ok(EvalVarResult::Value(value)),
     }
 }
 

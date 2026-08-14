@@ -286,7 +286,9 @@ pub struct SubtitleFilter {
 }
 
 /// Optional video equalizer adjustments; omitted fields retain FFmpeg defaults.
-#[derive(Clone, Debug, PartialEq, Rex)]
+///
+/// The default leaves every adjustment unspecified.
+#[derive(Clone, Debug, Default, PartialEq, Rex)]
 pub struct VideoEqualizer {
     pub brightness: Option<f64>,
     pub contrast: Option<f64>,
@@ -409,7 +411,9 @@ pub struct FilterChain {
 }
 
 /// A complex FFmpeg filter graph made of ordered chains.
-#[derive(Clone, Debug, PartialEq, Rex)]
+///
+/// The default is an empty graph and emits no `-filter_complex` option.
+#[derive(Clone, Debug, Default, PartialEq, Rex)]
 pub struct FilterGraph {
     pub chains: Vec<FilterChain>,
 }
@@ -701,17 +705,21 @@ pub struct MuxMapping {
 }
 
 /// The FFprobe metadata sections included by `probe`.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Rex)]
 pub enum ProbeDetail {
     ProbeContainer,
     ProbeStreams,
     ProbeChapters,
     ProbePrograms,
+    #[default]
     ProbeAll,
 }
 
 /// FFprobe metadata controls, including optional counting and interval restriction.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
+///
+/// The default requests container, stream, chapter, and program metadata without the additional
+/// work of counting frames or packets, and reads without an interval restriction.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Rex)]
 pub struct ProbeOptions {
     pub detail: ProbeDetail,
     pub count_frames: bool,

@@ -733,16 +733,32 @@ impl AstBuilder {
     }
 
     fn application_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
-        let mut terms = child_rules(node, RexRule::PostfixExpr);
-        let Some(first) = terms.next() else {
+        let terms = child_rules(node, RexRule::PostfixExpr)
+            .map(|term| self.postfix_expr(term))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut grouped = Vec::with_capacity(terms.len());
+        let mut terms = terms.into_iter().peekable();
+        while let Some(term) = terms.next() {
+            if is_constructor_reference(&term) && matches!(terms.peek(), Some(Expr::Dict(..))) {
+                let Some(fields) = terms.next() else {
+                    grouped.push(term);
+                    continue;
+                };
+                let span = Span::from_begin_end(term.span().begin, fields.span().end);
+                grouped.push(Expr::App(span, Arc::new(term), Arc::new(fields)));
+            } else {
+                grouped.push(term);
+            }
+        }
+
+        let mut terms = grouped.into_iter();
+        let Some(mut base) = terms.next() else {
             return Err(ParseError::new(node.span, "expected expression"));
         };
-        let mut base = self.postfix_expr(first)?;
         let begin = base.span().begin;
         for term in terms {
-            let arg = self.postfix_expr(term)?;
-            let span = Span::from_begin_end(begin, arg.span().end);
-            base = Expr::App(span, Arc::new(base), Arc::new(arg));
+            let span = Span::from_begin_end(begin, term.span().end);
+            base = Expr::App(span, Arc::new(base), Arc::new(term));
         }
         Ok(base)
     }
@@ -1461,6 +1477,14 @@ fn is_uppercase_symbol(symbol: &Symbol) -> bool {
         .next()
         .map(|ch| ch.is_uppercase())
         .unwrap_or(false)
+}
+
+fn is_constructor_reference(expr: &Expr) -> bool {
+    match expr {
+        Expr::Var(var) => is_uppercase_symbol(&var.name),
+        Expr::Project(_, _, field) => is_uppercase_symbol(field),
+        _ => false,
+    }
 }
 
 struct SignatureFnParts {

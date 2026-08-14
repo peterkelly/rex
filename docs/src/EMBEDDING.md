@@ -311,12 +311,12 @@ comments become Rex metadata automatically:
 
 ```rust,ignore
 /// Arithmetic tools exposed by this host.
-#[rex::module(name = "acme.math")]
+#[rex::module(name = "acme.math", defaults(Input))]
 mod math {
     use rex::engine::EngineError;
 
     /// A value supplied to arithmetic operations.
-    #[derive(Clone, rex::Rex)]
+    #[derive(Clone, Default, rex::Rex)]
     #[rex(export)]
     pub struct Input {
         /// The integer to operate on.
@@ -340,6 +340,13 @@ functions marked `#[rex::export]`, and stages non-generic derived ADTs marked `#
 doc comments and Rex-visible parameter names, and generates a `<function>_rex_export()` helper.
 Every derived ADT reachable through an exported function's argument or result types is staged
 automatically, including ADTs nested inside standard containers.
+
+The optional `defaults(Type, ...)` module argument stages a qualified Rex `Default` instance for
+each listed concrete Rust type. A listed type must implement `RexDefault<State>` and `IntoRex`;
+ordinary Rust `Default` types receive `RexDefault` through its blanket implementation. The native
+value producer is private, while the instance becomes available when the named module is imported.
+This permits explicitly typed option construction such as `tool Options {}` or
+`tool Options { retries = 3 }`. Omitted fields come from the registered default.
 
 Rust does not allow `#[doc]` attributes or doc comments on individual function parameters.
 Parameter descriptions therefore belong in the function-level doc comment; Rex metadata stores

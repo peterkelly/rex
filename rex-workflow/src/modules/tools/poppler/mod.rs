@@ -19,7 +19,10 @@ pub fn module() -> Result<Module<State>, EngineError> {
 /// and `pdfimages` documentation. PDFs and generated files remain content-addressed; heterogeneous
 /// `pdfimages` output is preserved as a CAS tree. Expected command failures are returned as
 /// `Err PopplerError`, while storage and executor failures remain Rex evaluation errors.
-#[rex::module(name = "tools.poppler")]
+#[rex::module(
+    name = "tools.poppler",
+    defaults(PdfInfoOptions, PdfToTextOptions, PdfToCairoOptions, PdfImagesOptions,)
+)]
 mod api {
     use super::*;
 

@@ -1054,6 +1054,13 @@ fn test_list_cons_constructor_call_expr() {
 }
 
 #[test]
+fn test_record_constructor_binds_as_one_application_argument() {
+    let expr = parse("consume Config { retries = 9 }");
+    let expected = app!(v!("consume"), app!(v!("Config"), d!(retries = u!(9))));
+    assert_expr_eq!(expr, expected; ignore span);
+}
+
+#[test]
 fn test_operator_precedence() {
     let expr = parse("1 + 2 * 3 - 4");
     let expected = app!(

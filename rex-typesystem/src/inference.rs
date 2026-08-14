@@ -1275,6 +1275,11 @@ fn infer_expr_type_inner(
             Ok((preds, fun_ty))
         }
         Expr::App(..) => {
+            if let Some(inferred) = infer_partial_record_constructor_type(
+                unifier, supply, env, adts, aliases, known, expr,
+            )? {
+                return Ok(inferred);
+            }
             let (head, args) = collect_app_chain(expr);
             let (mut preds, mut func_ty) =
                 infer_expr_type(unifier, supply, env, adts, aliases, known, head)?;
@@ -1837,6 +1842,11 @@ fn infer_expr(
                 Ok((preds, fun_ty, typed))
             }
             Expr::App(..) => {
+                if let Some(inferred) = infer_partial_record_constructor_typed(
+                    unifier, supply, env, adts, aliases, known, expr,
+                )? {
+                    return Ok(inferred);
+                }
                 if let Some((leaf, frames)) = collect_tail_app_chain(expr) {
                     return infer_tail_app_chain_typed(
                         unifier, supply, env, adts, aliases, known, leaf, frames,
@@ -2253,6 +2263,143 @@ fn ctor_lookup<'a>(
         }
     }
     found
+}
+
+type PartialRecordConstructor<'a, 'e> =
+    (&'a AdtDecl, &'a AdtVariant, &'e BTreeMap<Symbol, Arc<Expr>>);
+
+fn partial_record_constructor<'a, 'e>(
+    expr: &'e Expr,
+    adts: &'a BTreeMap<Symbol, AdtDecl>,
+) -> Option<PartialRecordConstructor<'a, 'e>> {
+    let Expr::App(_, constructor, argument) = expr else {
+        return None;
+    };
+    let Expr::Var(constructor) = constructor.as_ref() else {
+        return None;
+    };
+    let Expr::Dict(_, supplied) = argument.as_ref() else {
+        return None;
+    };
+    let (adt, variant) = ctor_lookup(adts, &constructor.name)?;
+    let fields = record_fields(variant)?;
+    fields
+        .iter()
+        .any(|(name, _)| !supplied.contains_key(name))
+        .then_some((adt, variant, supplied))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn infer_partial_record_constructor_type(
+    unifier: &mut Unifier,
+    supply: &mut TypeVarSupply,
+    env: &TypeEnv,
+    adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
+    known: &KnownVariants,
+    expr: &Expr,
+) -> Result<Option<(Vec<Predicate>, Type)>, TypeError> {
+    let Some((adt, variant, supplied)) = partial_record_constructor(expr, adts) else {
+        return Ok(None);
+    };
+    if adt.variants.len() != 1 {
+        return Err(TypeError::PartialRecordConstructorRequiresSingleVariant {
+            constructor: variant.name.clone(),
+            typ: adt.result_type().to_string(),
+        });
+    }
+    let (result_ty, fields) = instantiate_variant_fields(adt, variant, supply)
+        .ok_or(TypeError::UnsupportedExpr("partial record constructor"))?;
+    let expected: BTreeMap<_, _> = fields.into_iter().collect();
+    let mut preds = vec![Predicate::new("Default", result_ty.clone())];
+
+    for (name, value) in supplied {
+        let expected_ty = expected.get(name).ok_or_else(|| TypeError::UnknownField {
+            field: name.clone(),
+            typ: result_ty.to_string(),
+        })?;
+        let (field_preds, field_ty) = infer_expr_type_with_hint(
+            unifier,
+            supply,
+            env,
+            adts,
+            aliases,
+            known,
+            HintedExpr {
+                expected: Some(expected_ty.clone()),
+                expr: value,
+            },
+        )?;
+        unify_or_implicit_widen(unifier, &field_ty, expected_ty)?;
+        preds.extend(field_preds);
+    }
+
+    Ok(Some((preds, unifier.apply_type(&result_ty))))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn infer_partial_record_constructor_typed(
+    unifier: &mut Unifier,
+    supply: &mut TypeVarSupply,
+    env: &TypeEnv,
+    adts: &BTreeMap<Symbol, AdtDecl>,
+    aliases: &BTreeMap<Symbol, TypeAlias>,
+    known: &KnownVariants,
+    expr: &Expr,
+) -> Result<Option<(Vec<Predicate>, Type, TypedExpr)>, TypeError> {
+    let Some((adt, variant, supplied)) = partial_record_constructor(expr, adts) else {
+        return Ok(None);
+    };
+    if adt.variants.len() != 1 {
+        return Err(TypeError::PartialRecordConstructorRequiresSingleVariant {
+            constructor: variant.name.clone(),
+            typ: adt.result_type().to_string(),
+        });
+    }
+    let (result_ty, fields) = instantiate_variant_fields(adt, variant, supply)
+        .ok_or(TypeError::UnsupportedExpr("partial record constructor"))?;
+    let expected: BTreeMap<_, _> = fields.into_iter().collect();
+    let mut preds = vec![Predicate::new("Default", result_ty.clone())];
+    let typed_default = TypedExpr::new(
+        result_ty.clone(),
+        TypedExprKind::ClassMethod {
+            name: Symbol::intern("default"),
+        },
+    );
+
+    let mut typed_updates = BTreeMap::new();
+    for (name, value) in supplied {
+        let expected_ty = expected.get(name).ok_or_else(|| TypeError::UnknownField {
+            field: name.clone(),
+            typ: result_ty.to_string(),
+        })?;
+        let (field_preds, field_ty, typed_value) = infer_expr_typed_with_hint(
+            unifier,
+            supply,
+            env,
+            adts,
+            aliases,
+            known,
+            HintedExpr {
+                expected: Some(expected_ty.clone()),
+                expr: value,
+            },
+        )?;
+        let (_, typed_value) =
+            coerce_typed_to_expected(unifier, &field_ty, expected_ty, typed_value)?;
+        preds.extend(field_preds);
+        typed_updates.insert(name.clone(), Arc::new(typed_value));
+    }
+
+    let result_ty = unifier.apply_type(&result_ty);
+    let typed = TypedExpr::new(
+        result_ty.clone(),
+        TypedExprKind::RecordUpdate {
+            base: Arc::new(typed_default),
+            updates: typed_updates,
+        },
+    );
+    Ok(Some((preds, result_ty, typed)))
 }
 
 fn record_fields(variant: &AdtVariant) -> Option<Vec<(Symbol, Type)>> {

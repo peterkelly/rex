@@ -1687,6 +1687,16 @@ fn expected_type_reports_function_argument_type() {
 }
 
 #[test]
+fn expected_type_reports_partial_constructor_field_type() {
+    let text = "type Config = Config { retries: i32, enabled: Bool };\n\
+instance Default Config where { default = Config { retries = 3, enabled = false }; }\n\
+Config { retries = 9 }";
+    let ty = expected_type_for_source_public(text, 2, 19)
+        .expect("expected type at partial constructor field");
+    assert_eq!(ty, "i32");
+}
+
+#[test]
 fn functions_producing_expected_type_include_user_fn() {
     let text = r#"
 fn mk : i32 -> i32 = \x -> x;

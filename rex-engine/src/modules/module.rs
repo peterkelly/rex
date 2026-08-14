@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
 use rex_ast::{
-    ClassDecl, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, InstanceDecl, Span,
-    TypeDecl, TypeDeclKind, TypeExpr, TypeField, TypeParam, TypeVariant as AstTypeVariant,
-    TypeVariantArg,
+    ClassDecl, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, InstanceDecl,
+    InstanceMethodImpl, Span, Symbol, TypeDecl, TypeDeclKind, TypeExpr, TypeField, TypeParam,
+    TypeVariant as AstTypeVariant, TypeVariantArg, Var,
 };
 use rex_typesystem::{
-    types::{AdtArgument, AdtDecl, AdtField, AdtVariant, RexType, Scheme, Type},
+    types::{AdtArgument, AdtDecl, AdtField, AdtVariant, RexType, Scheme, Type, Types},
     types::{collect_adts_in_types, merge_adt_docs, order_adt_family},
 };
 
 use crate::{
-    Context, EngineError, IntoRex, Value,
+    Context, EngineError, IntoRex, RexDefault, Value,
     builder::{
         core::Builder,
         export::{Export, HostFnAsync, HostFnSync, NativeFuture},
@@ -197,6 +197,12 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     /// assert_eq!(module.exports().len(), 1);
     /// ```
     pub(crate) exports: Vec<Export<State>>,
+
+    /// Host callables needed by staged declarations but not exported from the module.
+    ///
+    /// Internal declarations participate in qualification and typechecking so instance methods can
+    /// refer to them, but their private interfaces keep them out of the module's public API.
+    pub(crate) internals: Vec<Export<State>>,
 }
 
 impl<State> Module<State>
@@ -238,6 +244,7 @@ where
             adts: Vec::new(),
             instances: Vec::new(),
             exports: Vec::new(),
+            internals: Vec::new(),
         }
     }
 
@@ -407,6 +414,75 @@ where
         self.add_adt_family(family)
     }
 
+    /// Stage a Rex `Default` instance for a Rust type.
+    ///
+    /// The default-producing native remains private to the module. Named-module installation
+    /// qualifies both the instance head and its native reference, so importing the module makes
+    /// `default` available for the qualified type without exporting an implementation helper.
+    pub fn add_rex_default_instance<T>(&mut self) -> Result<(), EngineError>
+    where
+        T: RexType + RexDefault<State> + IntoRex,
+    {
+        let class = Symbol::intern("Default");
+        let head_ty = T::rex_type();
+        if !head_ty.ftv().is_empty() {
+            return Err(EngineError::UnsupportedExpr);
+        }
+
+        let head = type_expr_from_type(&head_ty);
+        if self
+            .instances
+            .iter()
+            .any(|instance| instance.class == class && instance.head == head)
+        {
+            return Err(EngineError::DuplicateTypeclassImpl {
+                class,
+                typ: head_ty.to_string(),
+            });
+        }
+
+        self.add_rex_adt::<T>()?;
+        let native_name = format!(
+            "__rex_default_for_{}",
+            sanitize_type_name_for_symbol(&head_ty)
+        );
+        if self
+            .exports
+            .iter()
+            .chain(&self.internals)
+            .any(|export| export.name == native_name)
+        {
+            return Err(EngineError::Internal(format!(
+                "module value `{native_name}` is already registered"
+            )));
+        }
+
+        let native = Export::from_native(
+            &native_name,
+            Scheme::new(vec![], vec![], head_ty),
+            0,
+            |ctx: Context<State>, _, _| T::rex_default(ctx).and_then(IntoRex::into_rex),
+        )?
+        .into_private();
+        self.internals.push(native);
+        self.instances.push(InstanceDecl {
+            span: Span::default(),
+            is_pub: false,
+            type_params: Vec::new(),
+            class: Symbol::intern("Default"),
+            head,
+            context: Vec::new(),
+            methods: vec![InstanceMethodImpl {
+                name: Symbol::intern("default"),
+                type_params: Vec::new(),
+                ann: None,
+                body: Arc::new(Expr::Var(Var::new(native_name))),
+            }],
+            docs: None,
+        });
+        Ok(())
+    }
+
     /// Append a preconstructed [`Export`] to this module.
     ///
     /// This is useful when exports are assembled elsewhere, such as from plugin metadata or a
@@ -573,6 +649,19 @@ where
     {
         self.add_export(Export::<State>::from_value(name, value)?)
     }
+}
+
+fn sanitize_type_name_for_symbol(typ: &Type) -> String {
+    typ.to_string()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn type_decl_from_adt(adt: &AdtDecl) -> TypeDecl {

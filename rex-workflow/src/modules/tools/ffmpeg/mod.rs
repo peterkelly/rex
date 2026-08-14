@@ -22,7 +22,10 @@ pub fn module() -> Result<Module<State>, EngineError> {
 /// and tool-process failures are returned as `Err FfmpegError`, while storage and executor failures
 /// remain Rex evaluation errors. Available codecs, formats, devices, filters, and hardware features
 /// depend on the FFmpeg installation used by the workflow host.
-#[rex::module(name = "tools.ffmpeg")]
+#[rex::module(
+    name = "tools.ffmpeg",
+    defaults(VideoEqualizer, FilterGraph, ProbeOptions)
+)]
 mod api {
     use super::*;
 

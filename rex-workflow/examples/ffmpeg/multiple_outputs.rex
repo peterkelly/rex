@@ -22,7 +22,7 @@ fn main (input: Hash) -> Result (List FF.MediaArtifact) FF.FfmpegError =
         inputs = [
             FF.MediaInput { source = FF.StoredMedia (FF.Media { content = input }), options = [] }
         ],
-        filters = FF.FilterGraph { chains = [] },
+        filters = FF.FilterGraph {},
         outputs = [
             FF.MediaOutput {
                 format = FF.ContainerFormat { name = "mp4" },

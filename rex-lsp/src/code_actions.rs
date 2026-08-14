@@ -591,6 +591,18 @@ pub(crate) fn in_scope_value_types_at_position(
                     scope.pop();
                 }
             }
+            (Expr::App(_, _, argument), TypedExprKind::RecordUpdate { updates, .. }) => {
+                if let Expr::Dict(_, fields) = argument.as_ref() {
+                    for (name, value) in fields {
+                        if position_in_span(pos, *value.span())
+                            && let Some(typed_value) = updates.get(name)
+                        {
+                            visit(value, typed_value, pos, scope, best);
+                            break;
+                        }
+                    }
+                }
+            }
             (Expr::App(_span, fun, arg), TypedExprKind::App(tfun, targ)) => {
                 if position_in_span(pos, *fun.span()) {
                     visit(fun.as_ref(), tfun.as_ref(), pos, scope, best);

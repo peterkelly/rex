@@ -71,6 +71,11 @@ where
     while let Some(frame) = stack.pop() {
         match frame {
             ScopeWalkStep::Expr(expr) => match expr.kind.as_ref() {
+                TypedExprKind::ClassMethod { name } => {
+                    if !type_system.class_methods.contains_key(name) {
+                        return Err(EngineError::UnknownVar(name.clone()));
+                    }
+                }
                 TypedExprKind::Var { name, overloads } => {
                     if bound.iter().any(|n| n == name) {
                         continue;
@@ -358,7 +363,8 @@ fn collect_default_candidates(expr: &TypedExpr, out: &mut Vec<Type>) {
                 }
                 stack.push(scrutinee);
             }
-            TypedExprKind::Var { .. }
+            TypedExprKind::ClassMethod { .. }
+            | TypedExprKind::Var { .. }
             | TypedExprKind::Bool(..)
             | TypedExprKind::Uint(..)
             | TypedExprKind::Int(..)

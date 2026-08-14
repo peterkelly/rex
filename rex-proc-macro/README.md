@@ -65,15 +65,32 @@ pub async fn lookup_sample(
 derived ADTs marked `#[rex(export)]`. Rust doc comments on the inline module become module-level
 Rex documentation.
 
+Use `defaults(Type, ...)` to register qualified Rex `Default` instances for concrete Rust types.
+Each listed type must implement `RexType`, `IntoRex`, and `RexDefault<State>`; the blanket
+`RexDefault` implementation covers ordinary Rust `Default` types. The generated native default
+producer remains private to the module. In Rex, a registered single-variant options type can be
+constructed as `LookupOptions {}` or with selected overrides such as
+`LookupOptions { include_archived = true }`; omitted fields come from the registered default.
+
 ```rust,ignore
 /// Host sample-management APIs.
-#[rex::module(name = "host.samples")]
+#[rex::module(name = "host.samples", defaults(LookupOptions))]
 mod samples {
     use rex::engine::EngineError;
 
+    #[derive(Default, rex::Rex)]
+    pub struct LookupOptions {
+        pub include_archived: bool,
+    }
+
     /// Return whether a sample exists.
     #[rex::export]
-    pub fn exists(state: HostState, sample_id: String) -> Result<bool, EngineError> {
+    pub fn exists(
+        state: HostState,
+        sample_id: String,
+        options: LookupOptions,
+    ) -> Result<bool, EngineError> {
+        let _ = options;
         Ok(state.contains(&sample_id))
     }
 }

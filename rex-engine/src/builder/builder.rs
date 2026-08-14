@@ -38,7 +38,7 @@ use crate::{
         validate_native_export_scheme,
     },
 };
-use futures::{FutureExt, future::BoxFuture};
+use futures::future::BoxFuture;
 use rex_ast::{DeclareFnDecl, Expr, FnDecl, InstanceDecl, Scope, Symbol};
 use rex_typesystem::{
     inference::infer,
@@ -194,6 +194,10 @@ where
             let mut decls = module.declarations();
             decls.types.clear();
 
+            for internal in module.internals {
+                self.inject_module_export(ROOT_MODULE_NAME, internal)?;
+            }
+
             let (value_exports, callable_exports): (Vec<_>, Vec<_>) =
                 module.exports.into_iter().partition(Export::is_value);
             for export in callable_exports {
@@ -227,14 +231,9 @@ where
         let class = Symbol::intern("Default");
         let method = Symbol::intern("default");
         let head_ty = T::rex_type();
-
         if !self.type_system.class_methods.contains_key(&method) {
             return Err(EngineError::UnknownVar(method));
         }
-        if !head_ty.ftv().is_empty() {
-            return Err(EngineError::UnsupportedExpr);
-        }
-
         if let Some(instances) = self.type_system.classes.instances.get(&class)
             && instances
                 .iter()
@@ -246,44 +245,9 @@ where
             });
         }
 
-        let native_name = format!(
-            "__rex_default_for_{}",
-            sanitize_type_name_for_symbol(&head_ty)
-        );
-        let native_scheme = Scheme::new(vec![], vec![], head_ty.clone());
-        let func: HostValueCallable<State> = Arc::new(move |engine, _, _| {
-            let result = T::rex_default(engine).and_then(IntoRex::into_rex);
-            async move { result }.boxed()
-        });
-        self.register_native_registration(
-            ROOT_MODULE_NAME,
-            &native_name,
-            NativeRegistration::sync(native_scheme, 0, func),
-        )?;
-
-        self.type_system.register_instance(
-            "Default",
-            Instance::new(vec![], Predicate::new(class.clone(), head_ty.clone()), None),
-        );
-
-        let mut methods: BTreeMap<Symbol, Arc<TypedExpr>> = BTreeMap::new();
-        methods.insert(
-            method.clone(),
-            Arc::new(TypedExpr::new(
-                head_ty.clone(),
-                TypedExprKind::Var {
-                    name: Symbol::intern(&native_name),
-                    overloads: vec![],
-                },
-            )),
-        );
-
-        let def_env = self.env.clone();
-        self.runtime
-            .typeclasses
-            .insert(class, head_ty, def_env, methods)?;
-
-        Ok(())
+        let mut module = Module::global();
+        module.add_rex_default_instance::<T>()?;
+        self.inject_module(module)
     }
 
     pub fn adt_decl(&mut self, name: &str, params: &[&str]) -> AdtDecl {
@@ -570,10 +534,13 @@ where
         body: None,
         docs: module.docs.clone(),
     };
-    package
-        .decls
-        .declare_fns
-        .extend(module.exports.iter().map(|export| export.interface.clone()));
+    package.decls.declare_fns.extend(
+        module
+            .internals
+            .iter()
+            .chain(&module.exports)
+            .map(|export| export.interface.clone()),
+    );
     let local_type_names = module_local_type_names_from_declarations(&package.decls);
     engine
         .module_loader_mut()
@@ -599,6 +566,9 @@ where
         },
     );
 
+    for internal in module.internals {
+        engine.inject_module_export(&module_name, internal)?;
+    }
     let (value_exports, callable_exports): (Vec<_>, Vec<_>) =
         module.exports.into_iter().partition(Export::is_value);
     for export in callable_exports {
@@ -1411,13 +1381,6 @@ fn qualify_module_scheme_refs(
         })
         .collect();
     Scheme::new(scheme.vars.clone(), preds, typ)
-}
-
-fn sanitize_type_name_for_symbol(typ: &Type) -> String {
-    typ.to_string()
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
 }
 
 // TODO: Merge with type_head_and_args_for_adt_family in rex-typesystem

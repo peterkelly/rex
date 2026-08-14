@@ -28,8 +28,9 @@ pub struct ExtractedImages {
 }
 
 /// Output representation selected for `pdftotext`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum TextFormat {
+    #[default]
     PlainText,
     PhysicalLayout,
     ContentStreamOrder,
@@ -40,8 +41,9 @@ pub enum TextFormat {
 }
 
 /// Line-ending convention selected with `pdftotext -eol`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum EndOfLine {
+    #[default]
     EolUnix,
     EolDos,
     EolMac,
@@ -57,7 +59,10 @@ pub struct PixelRectangle {
 }
 
 /// Options corresponding to common `pdftotext` command-line flags.
-#[derive(Clone, Debug, PartialEq, Rex)]
+///
+/// The default selects plain UTF-8 text with Unix line endings and otherwise leaves Poppler's
+/// documented behavior unchanged.
+#[derive(Clone, Debug, Default, PartialEq, Rex)]
 pub struct PdfToTextOptions {
     pub first_page: Option<u64>,
     pub last_page: Option<u64>,
@@ -97,7 +102,9 @@ pub struct PageInfo {
 }
 
 /// Page selection and passwords supplied to `pdfinfo`.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
+///
+/// The default inspects every page without supplying a password.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Rex)]
 pub struct PdfInfoOptions {
     pub first_page: Option<u64>,
     pub last_page: Option<u64>,
@@ -145,24 +152,27 @@ pub enum CairoFormat {
 }
 
 /// Odd/even page filtering accepted by `pdftocairo`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum PageSelection {
+    #[default]
     AllPages,
     OddPages,
     EvenPages,
 }
 
 /// Raster color mode accepted by `pdftocairo`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum CairoColorMode {
+    #[default]
     CairoColor,
     CairoGrayscale,
     CairoMonochrome,
 }
 
 /// Antialiasing mode accepted by `pdftocairo -antialias`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum CairoAntialias {
+    #[default]
     AntialiasDefault,
     AntialiasNone,
     AntialiasGray,
@@ -173,7 +183,10 @@ pub enum CairoAntialias {
 }
 
 /// Common rendering and page-selection options for `pdftocairo`.
-#[derive(Clone, Debug, PartialEq, Rex)]
+///
+/// The default renders all pages in color with Poppler's default antialiasing and no sizing,
+/// cropping, format-specific, or password overrides.
+#[derive(Clone, Debug, Default, PartialEq, Rex)]
 pub struct PdfToCairoOptions {
     pub first_page: Option<u64>,
     pub last_page: Option<u64>,
@@ -204,8 +217,9 @@ pub enum CairoOutput {
 }
 
 /// Encoding policy selected for files extracted by `pdfimages`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum PdfImagesFormat {
+    #[default]
     ImagesDefault,
     ImagesPng,
     ImagesTiff,
@@ -217,7 +231,10 @@ pub enum PdfImagesFormat {
 }
 
 /// Page selection, naming, passwords, and output policy for `pdfimages`.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
+///
+/// The default extracts every page using `pdfimages`' default PBM/PPM policy, without page-number
+/// suffixes or passwords.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Rex)]
 pub struct PdfImagesOptions {
     pub first_page: Option<u64>,
     pub last_page: Option<u64>,

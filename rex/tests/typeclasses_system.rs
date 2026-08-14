@@ -285,6 +285,100 @@ async fn default_custom_adt_single_ctor_named_fields() {
 }
 
 #[tokio::test]
+async fn partial_record_constructor_uses_named_type_default() {
+    assert_eval(
+        r#"
+        type Config = Config { retries: i32, enabled: Bool, label: String };
+
+        instance Default Config where {
+            default = Config { retries = 3, enabled = false, label = "standard" };
+        }
+        fn consume (config: Config) -> Config = config;
+        consume Config { retries = 9 }
+        "#,
+        r#"Config {enabled = false, label = "standard", retries = 9i32}"#,
+        Type::con("Config", 0),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn partial_record_constructor_ignores_lexical_default_binding() {
+    assert_eval(
+        r#"
+        type Config = Config { retries: i32, enabled: Bool };
+
+        instance Default Config where {
+            default = Config { retries = 3, enabled = true };
+        }
+        let default = Config { retries = 100, enabled = false } in
+            Config { retries = 9 }
+        "#,
+        "Config {enabled = true, retries = 9i32}",
+        Type::con("Config", 0),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn empty_record_constructor_is_explicitly_typed_default() {
+    assert_eval(
+        r#"
+        type Config = Config { retries: i32, enabled: Bool };
+
+        instance Default Config where {
+            default = Config { retries = 3, enabled = true };
+        }
+        Config {}
+        "#,
+        "Config {enabled = true, retries = 3i32}",
+        Type::con("Config", 0),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn complete_record_constructor_does_not_require_default() {
+    assert_eval(
+        r#"
+        type Config = Config { retries: i32, enabled: Bool };
+        Config { retries = 7, enabled = false }
+        "#,
+        "Config {enabled = false, retries = 7i32}",
+        Type::con("Config", 0),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn partial_record_constructor_requires_default_instance() {
+    assert_err_contains(
+        r#"
+        type Config = Config { retries: i32, enabled: Bool };
+        Config { retries = 7 }
+        "#,
+        "no instance for Default Config",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn partial_record_constructor_rejects_multi_variant_default() {
+    assert_err_contains(
+        r#"
+        type Choice = A { x: i32, y: i32 } | B;
+
+        instance Default Choice where {
+            default = B;
+        }
+        A { x = 1 }
+        "#,
+        "partial record constructor `A` requires a single-variant ADT",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn default_custom_adt_enum_unit_variants() {
     assert_eval(
         r#"

@@ -6,9 +6,6 @@ fn main (input: Hash) -> Result Q.JsonOutput Q.QpdfError =
     Q.json
         (Q.Pdf { content = input })
         None
-        (Q.JsonOptions {
-            keys = [Q.JsonPages, Q.JsonOutlines, Q.JsonEncrypt],
-            objects = [],
-            stream_data = Q.JsonStreamDataNone,
-            decode_level = Q.DecodeGeneralized
-        });
+        Q.JsonOptions {
+            keys = [Q.JsonPages, Q.JsonOutlines, Q.JsonEncrypt]
+        };

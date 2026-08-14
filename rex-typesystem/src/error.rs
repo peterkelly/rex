@@ -67,6 +67,10 @@ pub enum TypeError {
     UnknownField { field: Symbol, typ: String },
     #[error("field `{field}` is not definitely available on {typ}")]
     FieldNotKnown { field: Symbol, typ: String },
+    #[error(
+        "partial record constructor `{constructor}` requires a single-variant ADT, but {typ} has multiple variants"
+    )]
+    PartialRecordConstructorRequiresSingleVariant { constructor: Symbol, typ: String },
     #[error("non-exhaustive match for {typ}: missing {missing:?}")]
     NonExhaustiveMatch { typ: String, missing: Vec<Symbol> },
     #[error(

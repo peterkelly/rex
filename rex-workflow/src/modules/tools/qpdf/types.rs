@@ -43,7 +43,10 @@ pub struct PageSource {
 }
 
 /// Page mapping options used by QPDF's `--overlay` and `--underlay` operations.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
+///
+/// The default supplies no password or page-range overrides, so QPDF maps overlay pages in
+/// sequence onto corresponding output pages.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Rex)]
 pub struct OverlaySpec {
     pub password: Option<String>,
     pub to: Option<String>,
@@ -82,9 +85,10 @@ pub enum StreamDataMode {
 }
 
 /// QPDF's stream decoding level used by transformations and JSON output.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Rex)]
 pub enum DecodeLevel {
     DecodeNone,
+    #[default]
     DecodeGeneralized,
     DecodeSpecialized,
     DecodeAll,
@@ -192,14 +196,18 @@ pub enum JsonKey {
 }
 
 /// How QPDF includes stream data in JSON output.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Rex)]
 pub enum JsonStreamData {
+    #[default]
     JsonStreamDataNone,
     JsonStreamDataInline,
 }
 
 /// Selection and stream options for QPDF JSON version 2 output.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
+///
+/// The default includes all keys and objects, omits stream data, and uses generalized decoding,
+/// matching QPDF's documented `--json` defaults.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Rex)]
 pub struct JsonOptions {
     pub keys: Vec<JsonKey>,
     pub objects: Vec<String>,

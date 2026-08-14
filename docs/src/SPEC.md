@@ -320,6 +320,60 @@ type Tagged a = { tag: String, value: a };
   permits heterogeneous and nested literals such as
   `let user: { name: String, age: i32 } = { name = "Ada", age = 36 } in user`.
 
+## Default-Backed Record Construction
+
+### Syntax and Application Precedence
+
+A record-carrying ADT constructor may be followed directly by its named fields:
+
+```rex
+Config { retries = 9, enabled = true }
+```
+
+An uppercase constructor reference and its following record literal bind as one expression before
+surrounding function application. This also applies to qualified constructors, so the final
+argument below does not require parentheses:
+
+```rex
+run_tool input Tools.Options { retries = 9 }
+```
+
+### Complete Construction
+
+When every declared field is supplied, construction has the ordinary ADT semantics and does not
+require a `Default` instance:
+
+```rex
+type Config = Config { retries: i32, enabled: Bool };
+Config { retries = 9, enabled = true }
+```
+
+### Partial Construction
+
+Fields may be omitted when all of these conditions hold:
+
+1. The constructor belongs to a single-variant ADT.
+2. Its only argument is a record payload.
+3. A `Default` instance is available for the resulting ADT type.
+
+The constructor fixes the result type and complete field schema before supplied fields are
+checked. Therefore partial construction does not rely on row polymorphism or infer a smaller
+record type. Unknown fields remain errors.
+
+For a qualifying constructor `C`, this expression:
+
+```rex
+C { field = value }
+```
+
+is semantically equivalent to evaluating `default` once at `C`'s result type and updating that
+value's `field`. Omitted fields come from the whole ADT's `Default` implementation, not from
+independent `Default` instances for each field. `C {}` is an explicitly typed default value.
+
+Partial construction is rejected for multi-variant ADTs because `Default T` does not guarantee
+that it produces the named variant. Supporting such construction would require a
+constructor-specific default rather than the type-level `Default` instance.
+
 ## Top-Level `fn` Recursion
 
 Top-level `fn` declarations are mutually recursive within a module.
