@@ -5,7 +5,9 @@ documentation so an agent can apply existing QPDF knowledge without translating 
 PDF abstraction. The module owns command ordering, temporary paths, and content-addressed storage.
 
 ```rex
-Q.Pdf { content = hash }
+import artifacts (Pdf);
+
+Pdf { content = hash }
 ```
 
 `qpdf` is resolved through `PATH`. Input and output paths are never supplied by Rex code. Every

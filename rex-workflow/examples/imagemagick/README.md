@@ -6,7 +6,7 @@ inside the workflow host.
 
 The examples intentionally use a small set of consistent conventions:
 
-- `IM.Image { content = hash }` turns a CAS hash into an image value.
+- `Image { content = hash }` turns a CAS hash into a shared image artifact.
 - `IM.StoredImage image IM.AllFrames []` reads all frames with default settings.
 - operations are applied in list order.
 - `IM.AdjoinFrames` produces one encoded file, which may contain multiple frames.

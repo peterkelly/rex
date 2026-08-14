@@ -20,6 +20,7 @@
 // On success the ImageOutput contains one Image whose content field is the CAS
 // hash of the JPEG contact sheet. FFmpeg and ImageMagick failures are wrapped in
 // the workflow's FfmpegFailed and ImageMagickFailed error constructors.
+import artifacts (Image, Media);
 import tools.ffmpeg as FF;
 import tools.imagemagick as IM;
 
@@ -27,12 +28,12 @@ type WorkflowError
     = FfmpegFailed FF.FfmpegError
     | ImageMagickFailed IM.ImageMagickError;
 
-fn frame_to_image (frame: FF.Media) -> IM.Image =
-    IM.Image { content = frame.content };
+fn frame_to_image (frame: Media) -> Image =
+    Image { content = frame.content };
 
 fn main (video: Hash, font: Hash) -> Result IM.ImageOutput WorkflowError =
     match FF.extract_frames
-        (FF.Media { content = video })
+        (Media { content = video })
         (FF.AtTimes [
             FF.Time { seconds = 0.0 },
             FF.Time { seconds = 5.0 },

@@ -16,12 +16,13 @@
 //
 // On success the ImageOutput contains a single Image whose content field is the
 // CAS hash of the composited PNG.
+import artifacts (Image);
 import tools.imagemagick as IM;
 
 fn main (background: Hash) -> (logo: Hash) -> Result IM.ImageOutput IM.ImageMagickError =
     IM.composite
-        (IM.Image { content = background })
-        (IM.Image { content = logo })
+        (Image { content = background })
+        (Image { content = logo })
         None
         IM.ComposeOver
         [

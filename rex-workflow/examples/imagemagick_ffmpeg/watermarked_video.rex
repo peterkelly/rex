@@ -20,6 +20,7 @@
 // On success the one-element MediaArtifact list contains the streaming-friendly
 // MP4 with composited video and encoded audio; its Media content field is the CAS
 // hash. Image output-shape errors and failures from either tool use WorkflowError.
+import artifacts (Image, Media);
 import tools.ffmpeg as FF;
 import tools.imagemagick as IM;
 import tools.imagemagick (SingleImage, MultipleImages);
@@ -29,16 +30,16 @@ type WorkflowError
     | ImageMagickFailed IM.ImageMagickError
     | UnexpectedImageOutput;
 
-fn overlay_watermark (video: Hash, watermark: IM.Image)
+fn overlay_watermark (video: Hash, watermark: Image)
     -> Result (List FF.MediaArtifact) WorkflowError =
     match FF.render (FF.MediaProgram {
         inputs = [
             FF.MediaInput {
-                source = FF.StoredMedia (FF.Media { content = video }),
+                source = FF.StoredMedia (Media { content = video }),
                 options = []
             },
             FF.MediaInput {
-                source = FF.StoredMedia (FF.Media { content = watermark.content }),
+                source = FF.StoredMedia (Media { content = watermark.content }),
                 options = []
             }
         ],
@@ -118,7 +119,7 @@ fn main (video: Hash, watermark: Hash)
     -> Result (List FF.MediaArtifact) WorkflowError =
     match IM.transform
         (IM.StoredImage
-            (IM.Image { content = watermark })
+            (Image { content = watermark })
             IM.AllFrames
             [])
         [

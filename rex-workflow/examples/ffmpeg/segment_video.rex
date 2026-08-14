@@ -14,11 +14,12 @@
 //
 // On success the result is a chronological list of Media values. Each content
 // field is the CAS hash of one independently stored MKV segment.
+import artifacts (Media);
 import tools.ffmpeg as FF;
 
-fn main (input: Hash) -> Result (List FF.Media) FF.FfmpegError =
+fn main (input: Hash) -> Result (List Media) FF.FfmpegError =
     FF.segment
-        (FF.StoredMedia (FF.Media { content = input }))
+        (FF.StoredMedia (Media { content = input }))
         []
         (FF.Encoding {
             format = FF.ContainerFormat { name = "matroska" },

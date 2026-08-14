@@ -16,15 +16,16 @@
 //
 // On success the Media result's content field is the CAS hash of the subtitled
 // MP4. The subtitle text is part of the video pixels, not a selectable track.
+import artifacts (Media);
 import tools.ffmpeg as FF;
 
-fn main (video: Hash, subtitles: Hash) -> Result FF.Media FF.FfmpegError =
+fn main (video: Hash, subtitles: Hash) -> Result Media FF.FfmpegError =
     FF.transcode
-        (FF.StoredMedia (FF.Media { content = video }))
+        (FF.StoredMedia (Media { content = video }))
         [
             FF.VideoOperation
                 (FF.BurnSubtitles (FF.SubtitleFilter {
-                    subtitles = FF.Media { content = subtitles },
+                    subtitles = Media { content = subtitles },
                     stream_index = None,
                     fonts = [],
                     force_style = Some "FontSize=22,PrimaryColour=&H00FFFFFF"

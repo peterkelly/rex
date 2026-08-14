@@ -15,11 +15,12 @@
 //
 // Each clip must supply video and audio streams. On success the Media content
 // field is the CAS hash of the combined MP4.
+import artifacts (Media);
 import tools.ffmpeg as FF;
 
-fn to_media (hash: Hash) -> FF.Media = FF.Media { content = hash };
+fn to_media (hash: Hash) -> Media = Media { content = hash };
 
-fn main (inputs: List Hash) -> Result FF.Media FF.FfmpegError =
+fn main (inputs: List Hash) -> Result Media FF.FfmpegError =
     FF.concatenate
         (map to_media inputs)
         (FF.ConcatSpec {

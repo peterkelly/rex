@@ -1,17 +1,5 @@
-use blake3::Hash;
+pub use crate::modules::artifacts::{JsonFile, Pdf};
 use rex::Rex;
-
-/// One PDF file stored as a content-addressed blob.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
-pub struct Pdf {
-    pub content: Hash,
-}
-
-/// QPDF JSON output stored as a UTF-8 content-addressed blob.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
-pub struct JsonFile {
-    pub content: Hash,
-}
 
 /// One QPDF-produced PDF plus any recoverable warnings reported while writing it.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]

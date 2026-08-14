@@ -15,11 +15,12 @@
 // On success the PixelBuffer identifies the RGB channels and char storage type.
 // Its content field is the CAS hash of the raw byte buffer, rather than an
 // encoded image filename; the requested region determines its dimensions.
+import artifacts (Image);
 import tools.imagemagick as IM;
 
 fn main (input: Hash) -> Result IM.PixelBuffer IM.ImageMagickError =
     IM.extract_pixels
-        (IM.Image { content = input })
+        (Image { content = input })
         (IM.PixelSpec {
             region = IM.PixelRectangle
                 (IM.Rectangle { width = 128, height = 128, x = 0, y = 0 }),

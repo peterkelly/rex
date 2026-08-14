@@ -15,11 +15,12 @@
 // On success the result is a packet-ordered list of InspectionRecord values.
 // Each record's fields dictionary contains the values FFprobe reported; no new
 // CAS media object is produced.
+import artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (input: Hash) -> Result (List FF.InspectionRecord) FF.FfmpegError =
     FF.inspect
-        (FF.Media { content = input })
+        (Media { content = input })
         (FF.InspectionQuery {
             kind = FF.InspectPackets,
             stream = Some (FF.StreamRef { input = 0, kind = FF.VideoStream, index = Some 0 }),

@@ -15,8 +15,9 @@ pub fn module() -> Result<Module<State>, EngineError> {
 
 /// Semantic ImageMagick tools for content-addressed image workflows.
 ///
-/// Stored images and generated results are represented by content hashes rather than host paths.
-/// Prefer `transform`, `generate`, `compare`, `composite`, or `montage` for their focused tasks;
+/// Stored images and generated results use the shared `artifacts.Image` type, which carries a
+/// content hash rather than a host path. Prefer `transform`, `generate`, `compare`, `composite`, or
+/// `montage` for their focused tasks;
 /// use `render` when image reads, persistent settings, immediate image operators, and sequence
 /// operators must be interleaved in exact ImageMagick command-line order. Expected invalid requests
 /// and tool-process failures are returned as `Err ImageMagickError`, while storage and executor

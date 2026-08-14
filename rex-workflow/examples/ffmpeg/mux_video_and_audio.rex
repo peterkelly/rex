@@ -16,11 +16,12 @@
 //
 // The copied video codec must be valid in MP4. On success the Media content
 // field is the CAS hash of the newly muxed, streaming-friendly MP4.
+import artifacts (Media);
 import tools.ffmpeg as FF;
 
-fn main (video: Hash, audio: Hash) -> Result FF.Media FF.FfmpegError =
+fn main (video: Hash, audio: Hash) -> Result Media FF.FfmpegError =
     FF.mux
-        [FF.Media { content = video }, FF.Media { content = audio }]
+        [Media { content = video }, Media { content = audio }]
         [
             FF.MuxMapping {
                 input = 0,

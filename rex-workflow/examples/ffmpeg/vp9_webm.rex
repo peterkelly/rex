@@ -13,11 +13,12 @@
 //
 // On success the Media result's content field is the CAS hash of the encoded
 // VP9/Opus WebM file.
+import artifacts (Media);
 import tools.ffmpeg as FF;
 
-fn main (input: Hash) -> Result FF.Media FF.FfmpegError =
+fn main (input: Hash) -> Result Media FF.FfmpegError =
     FF.transcode
-        (FF.StoredMedia (FF.Media { content = input }))
+        (FF.StoredMedia (Media { content = input }))
         []
         (FF.Encoding {
             format = FF.ContainerFormat { name = "webm" },

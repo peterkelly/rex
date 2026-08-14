@@ -16,12 +16,13 @@
 //
 // On success the result is a list of Images in input order. Each Image's
 // content field is the CAS hash of one newly encoded WebP thumbnail.
+import artifacts (Image);
 import tools.imagemagick as IM;
 
-fn to_image (hash: Hash) -> IM.Image =
-    IM.Image { content = hash };
+fn to_image (hash: Hash) -> Image =
+    Image { content = hash };
 
-fn main (inputs: List Hash) -> Result (List IM.Image) IM.ImageMagickError =
+fn main (inputs: List Hash) -> Result (List Image) IM.ImageMagickError =
     IM.transform_many
         (map to_image inputs)
         [

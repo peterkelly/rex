@@ -17,6 +17,7 @@
 // On success the ImageOutput contains one Image whose content field is the CAS
 // hash of the multi-frame GIF. Failures retain whether FFmpeg frame extraction or
 // ImageMagick rendering failed.
+import artifacts (Image, Media);
 import tools.ffmpeg as FF;
 import tools.imagemagick as IM;
 
@@ -24,14 +25,14 @@ type WorkflowError
     = FfmpegFailed FF.FfmpegError
     | ImageMagickFailed IM.ImageMagickError;
 
-fn read_frame (frame: FF.Media) -> IM.ImageInstruction =
+fn read_frame (frame: Media) -> IM.ImageInstruction =
     IM.ReadImage
         (IM.StoredImage
-            (IM.Image { content = frame.content })
+            (Image { content = frame.content })
             IM.AllFrames
             []);
 
-fn render_gif (frames: List FF.Media) -> Result IM.ImageOutput WorkflowError =
+fn render_gif (frames: List Media) -> Result IM.ImageOutput WorkflowError =
     let
         reads = map read_frame frames,
         program = reads + [
@@ -58,7 +59,7 @@ fn render_gif (frames: List FF.Media) -> Result IM.ImageOutput WorkflowError =
 
 fn main (video: Hash) -> Result IM.ImageOutput WorkflowError =
     match FF.extract_frames
-        (FF.Media { content = video })
+        (Media { content = video })
         (FF.AtTimes [
             FF.Time { seconds = 0.0 },
             FF.Time { seconds = 2.0 },

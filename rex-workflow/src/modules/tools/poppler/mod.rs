@@ -16,8 +16,9 @@ pub fn module() -> Result<Module<State>, EngineError> {
 /// Poppler command-line utilities for inspecting, extracting, and rendering stored PDFs.
 ///
 /// Exported function and option names intentionally follow `pdfinfo`, `pdftotext`, `pdftocairo`,
-/// and `pdfimages` documentation. PDFs and generated files remain content-addressed; heterogeneous
-/// `pdfimages` output is preserved as a CAS tree. Expected command failures are returned as
+/// and `pdfimages` documentation. PDF inputs use the shared `artifacts.Pdf` type and generated files
+/// remain content-addressed; heterogeneous `pdfimages` output is preserved as a CAS tree. Expected
+/// command failures are returned as
 /// `Err PopplerError`, while storage and executor failures remain Rex evaluation errors.
 #[rex::module(
     name = "tools.poppler",

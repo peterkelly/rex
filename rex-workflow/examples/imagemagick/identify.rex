@@ -15,9 +15,10 @@
 // On success the result is an ordered list of ImageInfo records describing such
 // properties as format, dimensions, colorspace, depth, frame, and byte size.
 // No new image content is stored.
+import artifacts (Image);
 import tools.imagemagick as IM;
 
 fn main (input: Hash) -> Result (List IM.ImageInfo) IM.ImageMagickError =
     IM.identify
-        (IM.Image { content = input })
+        (Image { content = input })
         [IM.IdentifyPing];

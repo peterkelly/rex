@@ -82,7 +82,7 @@ data type can enumerate every expected outcome. Tool modules preserve this
 model by returning ordinary typed values such as:
 
 ```rex
-Result FF.Media FF.FfmpegError
+Result Media FF.FfmpegError
 Result Q.PdfOutput Q.QpdfError
 Result P.TextFile P.PopplerError
 ```
@@ -96,7 +96,7 @@ failures distinct from failures of the runtime itself.
 
 Tool options are represented by records and algebraic data types rather than
 unstructured maps. Once a hash is wrapped in a semantic artifact type, an
-`IM.Image` cannot accidentally be supplied where an `FF.Media` is expected; a
+`Image` cannot accidentally be supplied where a `Media` is expected; a
 codec option cannot be confused with an image operation; and a multi-file
 result must be handled as such. Raw imported hashes still have to be classified
 correctly by the workflow, and a tool reports an error if the stored bytes are
@@ -195,8 +195,19 @@ in
 ```
 
 Programs can use `put_string`, `put_bytes`, `put_tree`, `get_string`,
-`get_bytes`, and `get_tree`. Tool-specific types then wrap hashes with semantic
-meaning, such as `FF.Media`, `IM.Image`, `Q.Pdf`, or `P.TextFile`.
+`get_bytes`, and `get_tree`. The shared `artifacts` module wraps hashes with
+semantic meaning through `Media`, `Image`, `Pdf`, and `JsonFile`; tool-specific
+result types add operation metadata where needed.
+
+```rex
+import artifacts (Pdf);
+
+fn as_pdf (content: Hash) -> Pdf = Pdf { content = content };
+```
+
+Constructing an artifact classifies a CAS blob but does not inspect its bytes.
+The consuming tool remains responsible for validating that the stored content
+has a supported representation.
 
 ## Tools are typed capabilities
 

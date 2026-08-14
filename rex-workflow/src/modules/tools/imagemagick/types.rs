@@ -1,12 +1,7 @@
+pub use crate::modules::artifacts::Image;
 use blake3::Hash;
 use rex::Rex;
 use std::collections::BTreeMap;
-
-/// One encoded image file stored as a content-addressed blob; it may contain multiple frames.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
-pub struct Image {
-    pub content: Hash,
-}
 
 /// The physical result of encoding an image sequence as one adjoined file or separate files.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]

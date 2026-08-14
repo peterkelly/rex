@@ -1,10 +1,11 @@
 // Render every selected PDF page as an ordered list of 144-DPI PNG blobs.
 // Input JSON: {"input":"<pdf-hash>"}
+import artifacts (Pdf);
 import tools.poppler as P;
 
 fn main (input: Hash) -> Result P.CairoOutput P.PopplerError =
     P.pdftocairo
-        (P.Pdf { content = input })
+        (Pdf { content = input })
         P.CairoPng
         P.PdfToCairoOptions {
             resolution = Some 144.0,

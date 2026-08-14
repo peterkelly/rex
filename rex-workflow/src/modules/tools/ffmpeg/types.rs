@@ -1,12 +1,7 @@
+pub use crate::modules::artifacts::Media;
 use blake3::Hash;
 use rex::Rex;
 use std::collections::BTreeMap;
-
-/// One encoded media file stored as a content-addressed blob.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
-pub struct Media {
-    pub content: Hash,
-}
 
 /// A manifest and its referenced media segments stored together as a content-addressed tree.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]

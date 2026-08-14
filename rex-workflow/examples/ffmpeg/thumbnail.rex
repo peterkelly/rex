@@ -14,11 +14,12 @@
 //
 // On success the Media result's content field is the CAS hash of the extracted
 // JPEG thumbnail.
+import artifacts (Media);
 import tools.ffmpeg as FF;
 
-fn main (input: Hash) -> Result FF.Media FF.FfmpegError =
+fn main (input: Hash) -> Result Media FF.FfmpegError =
     FF.thumbnail
-        (FF.Media { content = input })
+        (Media { content = input })
         (FF.ThumbnailSpec {
             at = Some (FF.Time { seconds = 10.0 }),
             size = Some (FF.VideoSize { width = 640, height = 360 }),

@@ -15,11 +15,12 @@
 //
 // On success the result is an ImageOutput containing a single Image whose
 // content field is the CAS hash of the encoded, multi-frame GIF.
+import artifacts (Image);
 import tools.imagemagick as IM;
 
 fn read_frame (hash: Hash) -> IM.ImageInstruction =
     IM.ReadImage
-        (IM.StoredImage (IM.Image { content = hash }) IM.AllFrames []);
+        (IM.StoredImage (Image { content = hash }) IM.AllFrames []);
 
 fn main (frames: List Hash) -> Result IM.ImageOutput IM.ImageMagickError =
     let

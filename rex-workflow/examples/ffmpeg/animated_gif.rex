@@ -15,11 +15,12 @@
 //
 // On success the Media result's content field is the CAS hash of the encoded
 // animated GIF.
+import artifacts (Media);
 import tools.ffmpeg as FF;
 
-fn main (input: Hash) -> Result FF.Media FF.FfmpegError =
+fn main (input: Hash) -> Result Media FF.FfmpegError =
     FF.transcode
-        (FF.StoredMedia (FF.Media { content = input }))
+        (FF.StoredMedia (Media { content = input }))
         [
             FF.Trim (FF.TimeRange {
                 start = Some (FF.Time { seconds = 2.0 }),

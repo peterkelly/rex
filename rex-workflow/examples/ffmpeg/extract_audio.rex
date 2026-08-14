@@ -13,11 +13,12 @@
 //
 // On success the Media result's content field is the CAS hash of the audio-only
 // Ogg file.
+import artifacts (Media);
 import tools.ffmpeg as FF;
 
-fn main (input: Hash) -> Result FF.Media FF.FfmpegError =
+fn main (input: Hash) -> Result Media FF.FfmpegError =
     FF.extract_audio
-        (FF.Media { content = input })
+        (Media { content = input })
         (FF.AudioEncoding {
             codec = FF.Opus,
             options = [FF.AudioBitRate 128000, FF.AudioSampleRate 48000]

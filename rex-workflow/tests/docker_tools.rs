@@ -241,10 +241,11 @@ async fn docker_materializes_pdf_inputs_for_qpdf_and_poppler() {
     let inputs = Some(json!({ "input": pdf_hash.to_hex().to_string() }));
 
     let qpdf_source = r#"
+        import artifacts (Pdf);
         import tools.qpdf as Q;
 
         fn main (input: Hash) -> Result u64 Q.QpdfError =
-            Q.show_npages (Q.Pdf { content = input }) None;
+            Q.show_npages (Pdf { content = input }) None;
     "#;
     let qpdf = eval_rex(qpdf_source, inputs.clone(), fixture.state.clone())
         .await
@@ -252,11 +253,12 @@ async fn docker_materializes_pdf_inputs_for_qpdf_and_poppler() {
     assert_eq!(ok_value(&qpdf), &json!(1));
 
     let poppler_source = r#"
+        import artifacts (Pdf);
         import tools.poppler as P;
 
         fn main (input: Hash) -> Result P.PdfInfo P.PopplerError =
             P.pdfinfo
-                (P.Pdf { content = input })
+                (Pdf { content = input })
                 (P.PdfInfoOptions {
                     first_page = None,
                     last_page = None,

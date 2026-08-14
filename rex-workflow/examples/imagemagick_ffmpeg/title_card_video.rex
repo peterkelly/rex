@@ -18,6 +18,7 @@
 // On success the one-element MediaArtifact list contains the generated five-second
 // MP4, whose Media content field is its CAS hash. The workflow reports ImageMagick
 // and FFmpeg failures distinctly and rejects a non-single ImageMagick output.
+import artifacts (Image, Media);
 import tools.ffmpeg as FF;
 import tools.imagemagick as IM;
 import tools.imagemagick (SingleImage, MultipleImages);
@@ -27,12 +28,12 @@ type WorkflowError
     | ImageMagickFailed IM.ImageMagickError
     | UnexpectedImageOutput;
 
-fn encode_title_card (title: String, card: IM.Image)
+fn encode_title_card (title: String, card: Image)
     -> Result (List FF.MediaArtifact) WorkflowError =
     match FF.render (FF.MediaProgram {
         inputs = [
             FF.MediaInput {
-                source = FF.StoredMedia (FF.Media { content = card.content }),
+                source = FF.StoredMedia (Media { content = card.content }),
                 options = [
                     FF.InputStreamLoop (-1),
                     FF.InputFrameRate (FF.Rational { numerator = 30, denominator = 1 })

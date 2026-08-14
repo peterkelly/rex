@@ -16,13 +16,14 @@
 //
 // On success the one-element artifact list contains EncodedMedia whose Media
 // content field is the composited MP4's CAS hash. No audio stream is included.
+import artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (background: Hash, overlay: Hash) -> Result (List FF.MediaArtifact) FF.FfmpegError =
     FF.render (FF.MediaProgram {
         inputs = [
-            FF.MediaInput { source = FF.StoredMedia (FF.Media { content = background }), options = [] },
-            FF.MediaInput { source = FF.StoredMedia (FF.Media { content = overlay }), options = [] }
+            FF.MediaInput { source = FF.StoredMedia (Media { content = background }), options = [] },
+            FF.MediaInput { source = FF.StoredMedia (Media { content = overlay }), options = [] }
         ],
         filters = FF.FilterGraph {
             chains = [

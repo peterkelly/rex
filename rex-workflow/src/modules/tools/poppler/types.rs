@@ -1,12 +1,7 @@
+pub use crate::modules::artifacts::Pdf;
 use blake3::Hash;
 use rex::Rex;
 use std::collections::BTreeMap;
-
-/// One PDF file stored as a content-addressed blob.
-#[derive(Clone, Debug, Eq, PartialEq, Rex)]
-pub struct Pdf {
-    pub content: Hash,
-}
 
 /// One arbitrary file produced by a Poppler command-line utility.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]

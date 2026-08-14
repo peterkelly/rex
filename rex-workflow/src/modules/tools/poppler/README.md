@@ -5,7 +5,9 @@ format, and option names follow the individual Poppler programs so agents can us
 `pdfinfo`, `pdftotext`, `pdftocairo`, and `pdfimages` documentation directly.
 
 ```rex
-P.Pdf { content = hash }
+import artifacts (Pdf);
+
+Pdf { content = hash }
 ```
 
 All programs are resolved through `PATH`. The host materializes CAS inputs in a private temporary

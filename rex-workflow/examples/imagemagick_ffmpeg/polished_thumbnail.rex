@@ -20,6 +20,7 @@
 // On success the ImageOutput contains one Image whose content field is the CAS
 // hash of the finished PNG thumbnail. Either tool's expected process failure is
 // preserved inside the corresponding workflow error constructor.
+import artifacts (Image, Media);
 import tools.ffmpeg as FF;
 import tools.imagemagick as IM;
 
@@ -30,7 +31,7 @@ type WorkflowError
 fn main (video: Hash, font: Hash, title: String)
     -> Result IM.ImageOutput WorkflowError =
     match FF.thumbnail
-        (FF.Media { content = video })
+        (Media { content = video })
         (FF.ThumbnailSpec {
             at = Some (FF.Time { seconds = 10.0 }),
             size = None,
@@ -45,7 +46,7 @@ fn main (video: Hash, font: Hash, title: String)
         case Ok frame ->
             match IM.transform
                 (IM.StoredImage
-                    (IM.Image { content = frame.content })
+                    (Image { content = frame.content })
                     IM.AllFrames
                     [])
                 [

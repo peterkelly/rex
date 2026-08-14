@@ -16,8 +16,9 @@ pub fn module() -> Result<Module<State>, EngineError> {
 
 /// Headless FFmpeg and FFprobe tools for content-addressed media workflows.
 ///
-/// Media inputs and outputs are represented by content hashes rather than host paths. Prefer the
-/// narrow functions such as `transcode`, `thumbnail`, `mux`, or `probe` when they express the task;
+/// Media inputs and outputs use the shared `artifacts.Media` type, which carries a content hash
+/// rather than a host path. Prefer the narrow functions such as `transcode`, `thumbnail`, `mux`, or
+/// `probe` when they express the task;
 /// use `render` for typed multi-input filter graphs or multiple outputs. Expected invalid requests
 /// and tool-process failures are returned as `Err FfmpegError`, while storage and executor failures
 /// remain Rex evaluation errors. Available codecs, formats, devices, filters, and hardware features

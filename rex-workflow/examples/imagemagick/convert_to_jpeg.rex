@@ -15,12 +15,13 @@
 //
 // On success the ImageOutput contains a single Image whose content field is the
 // CAS hash of the converted JPEG.
+import artifacts (Image);
 import tools.imagemagick as IM;
 
 fn main (input: Hash) -> Result IM.ImageOutput IM.ImageMagickError =
     IM.transform
         (IM.StoredImage
-            (IM.Image { content = input })
+            (Image { content = input })
             IM.AllFrames
             [IM.ReadBackground (IM.Color { value = "white" })])
         [

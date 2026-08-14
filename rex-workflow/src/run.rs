@@ -1,5 +1,5 @@
 use crate::{
-    modules::{storage::storage_module, tools},
+    modules::{artifacts, storage::storage_module, tools},
     state::State,
 };
 use rex::{
@@ -66,6 +66,7 @@ async fn compile_cli_program(
     let mut builder =
         Builder::with_prelude(state).map_err(|e| format!("failed to initialize builder: {e}"))?;
 
+    builder.inject_module(artifacts::module()?)?;
     builder.inject_module(storage_module()?)?;
     builder.add_importer(tools::importer());
 
@@ -174,6 +175,63 @@ mod tests {
                 "total": 55
             })
         );
+    }
+
+    #[tokio::test]
+    async fn shared_artifacts_construct_and_roundtrip_as_json() {
+        let source = r#"
+            import artifacts (Image, JsonFile, Media, Pdf);
+
+            fn main (content: Hash) -> (Pdf, Image, Media, JsonFile) =
+                (
+                    Pdf { content = content },
+                    Image { content = content },
+                    Media { content = content },
+                    JsonFile { content = content }
+                );
+        "#;
+        let hash = "ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f";
+        let result = eval_rex(
+            source,
+            Some(json!({ "content": hash })),
+            State::local(Store::new_in_memory()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result,
+            json!([
+                { "content": hash },
+                { "content": hash },
+                { "content": hash },
+                { "content": hash }
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_pdf_composes_qpdf_and_poppler() {
+        let source = r#"
+            import artifacts (Pdf);
+            import tools.poppler as P;
+            import tools.qpdf as Q;
+
+            fn rewrite (pdf: Pdf) -> Result Q.PdfOutput Q.QpdfError =
+                Q.transform pdf None [];
+
+            fn inspect (output: Q.PdfOutput) -> Result P.PdfInfo P.PopplerError =
+                P.pdfinfo output.pdf default;
+
+            fn main (value: Bool) -> Bool = value;
+        "#;
+        let result = eval_rex(
+            source,
+            Some(json!({ "value": true })),
+            State::local(Store::new_in_memory()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, json!(true));
     }
 
     #[tokio::test]

@@ -14,12 +14,13 @@
 //
 // On success the ImageOutput contains a single Image whose content field is the
 // CAS hash of the resized WebP image.
+import artifacts (Image);
 import tools.imagemagick as IM;
 
 fn main (input: Hash) -> Result IM.ImageOutput IM.ImageMagickError =
     IM.transform
         (IM.StoredImage
-            (IM.Image { content = input })
+            (Image { content = input })
             IM.AllFrames
             [])
         [

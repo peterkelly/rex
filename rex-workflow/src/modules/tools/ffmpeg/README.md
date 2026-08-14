@@ -12,10 +12,12 @@ graphs are represented directly as Rex values.
 
 ## Content-addressed media
 
-An encoded media file is a CAS-backed value:
+An encoded media file is a shared CAS-backed artifact:
 
 ```rex
-FF.Media { content = hash }
+import artifacts (Media);
+
+Media { content = hash }
 ```
 
 FFmpeg inputs are exported to a private temporary workspace immediately before a process starts.

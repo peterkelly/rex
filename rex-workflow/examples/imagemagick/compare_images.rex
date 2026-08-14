@@ -17,11 +17,12 @@
 // On success the Comparison reports whether the images are equal, the numeric
 // distortion, and an Image whose content field is the CAS hash of the rendered
 // difference image.
+import artifacts (Image);
 import tools.imagemagick as IM;
 
 fn main (expected: Hash) -> (actual: Hash) -> Result IM.Comparison IM.ImageMagickError =
     IM.compare
-        (IM.Image { content = expected })
-        (IM.Image { content = actual })
+        (Image { content = expected })
+        (Image { content = actual })
         IM.MetricStructuralSimilarity
         [IM.CompareFuzz "1%"];

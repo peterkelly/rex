@@ -70,7 +70,7 @@ pub(crate) fn importer() -> Arc<dyn Importer<State>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::store::Store;
+    use crate::{modules::artifacts, storage::store::Store};
     use rex::{
         engine::{Builder, CompileOptions, ModuleId, Value},
         parser::parse as parse_rex,
@@ -141,7 +141,7 @@ mod tests {
         assert_documented(&ffmpeg);
         let ffmpeg_docs = ffmpeg.docs().unwrap();
         assert!(ffmpeg_docs.contains("Headless FFmpeg and FFprobe tools"));
-        assert!(ffmpeg_docs.contains("content hashes rather than host paths"));
+        assert!(ffmpeg_docs.contains("shared `artifacts.Media` type"));
 
         let imagemagick = imagemagick::module().unwrap();
         assert_documented(&imagemagick);
@@ -235,6 +235,7 @@ mod tests {
     async fn production_tool_modules_register_qualified_defaults() {
         let state = State::local(Store::new_in_memory());
         let mut builder = Builder::with_prelude(state).unwrap();
+        builder.inject_module(artifacts::module().unwrap()).unwrap();
         builder.add_importer(importer());
         let compiler = builder.build_compiler();
         let program = parse_rex(
