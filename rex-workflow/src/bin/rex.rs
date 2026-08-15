@@ -87,6 +87,10 @@ struct DockerImageOptions {
     #[arg(long, env = "REX_WORKFLOW_DOCKER_IMAGEMAGICK_IMAGE")]
     docker_imagemagick_image: Option<String>,
 
+    /// Docker image containing Graphviz.
+    #[arg(long, env = "REX_WORKFLOW_DOCKER_GRAPHVIZ_IMAGE")]
+    docker_graphviz_image: Option<String>,
+
     /// Docker image containing QPDF.
     #[arg(long, env = "REX_WORKFLOW_DOCKER_QPDF_IMAGE")]
     docker_qpdf_image: Option<String>,
@@ -117,6 +121,7 @@ impl DockerImageOptions {
 
     fn has_image_override(&self) -> bool {
         self.docker_ffmpeg_image.is_some()
+            || self.docker_graphviz_image.is_some()
             || self.docker_imagemagick_image.is_some()
             || self.docker_qpdf_image.is_some()
             || self.docker_poppler_image.is_some()
@@ -126,6 +131,7 @@ impl DockerImageOptions {
         let mut images = local_tool_images();
         for (bundle, image) in [
             (ToolBundle::Ffmpeg, self.docker_ffmpeg_image),
+            (ToolBundle::Graphviz, self.docker_graphviz_image),
             (ToolBundle::ImageMagick, self.docker_imagemagick_image),
             (ToolBundle::Qpdf, self.docker_qpdf_image),
             (ToolBundle::Poppler, self.docker_poppler_image),
@@ -147,6 +153,7 @@ impl DockerImageOptions {
 fn local_tool_images() -> DockerToolImages {
     DockerToolImages::development(
         "rex-tool-ffmpeg:local",
+        "rex-tool-graphviz:local",
         "rex-tool-imagemagick:local",
         "rex-tool-qpdf:local",
         "rex-tool-poppler:local",
@@ -218,6 +225,10 @@ const TOOL_IMAGE_SOURCES: &[(&str, &[u8])] = &[
     (
         "ffmpeg/Dockerfile",
         include_bytes!("../../tool-images/ffmpeg/Dockerfile"),
+    ),
+    (
+        "graphviz/Dockerfile",
+        include_bytes!("../../tool-images/graphviz/Dockerfile"),
     ),
     (
         "imagemagick/Dockerfile",
@@ -307,6 +318,7 @@ async fn inspect_tool_images(images: DockerToolImages) -> Result<(), Box<dyn std
 fn version_plan(bundle: ToolBundle) -> ToolExecutionPlan {
     let (program, arguments) = match bundle {
         ToolBundle::Ffmpeg => (ToolProgram::Ffmpeg, vec!["-version"]),
+        ToolBundle::Graphviz => (ToolProgram::Graphviz, vec!["-V"]),
         ToolBundle::ImageMagick => (ToolProgram::ImageMagick, vec!["-version"]),
         ToolBundle::Qpdf => (ToolProgram::Qpdf, vec!["--version"]),
         ToolBundle::Poppler => (ToolProgram::PdfInfo, vec!["-v"]),
@@ -566,6 +578,8 @@ mod tests {
             "docker",
             "--docker-ffmpeg-image",
             "registry.example/ffmpeg@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "--docker-graphviz-image",
+            "registry.example/graphviz@sha256:5555555555555555555555555555555555555555555555555555555555555555",
             "--docker-imagemagick-image",
             "registry.example/imagemagick@sha256:2222222222222222222222222222222222222222222222222222222222222222",
             "--docker-qpdf-image",
@@ -578,6 +592,10 @@ mod tests {
         assert_eq!(
             images.image(ToolBundle::Ffmpeg),
             "registry.example/ffmpeg@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        );
+        assert_eq!(
+            images.image(ToolBundle::Graphviz),
+            "registry.example/graphviz@sha256:5555555555555555555555555555555555555555555555555555555555555555"
         );
         assert_eq!(
             images.image(ToolBundle::ImageMagick),

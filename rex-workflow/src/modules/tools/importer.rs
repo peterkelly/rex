@@ -1,5 +1,5 @@
 use crate::{
-    modules::tools::{ffmpeg, imagemagick, poppler, qpdf},
+    modules::tools::{ffmpeg, graphviz, imagemagick, poppler, qpdf},
     state::State,
 };
 use futures::future::BoxFuture;
@@ -25,6 +25,7 @@ impl ToolRegistration {
 // Keep registrations sorted by module ID so ToolImporter can use binary search.
 static TOOL_REGISTRY: &[ToolRegistration] = &[
     ToolRegistration::new("tools.ffmpeg", ffmpeg::module),
+    ToolRegistration::new("tools.graphviz", graphviz::module),
     ToolRegistration::new("tools.imagemagick", imagemagick::module),
     ToolRegistration::new("tools.poppler", poppler::module),
     ToolRegistration::new("tools.qpdf", qpdf::module),
@@ -143,6 +144,12 @@ mod tests {
         assert!(ffmpeg_docs.contains("Headless FFmpeg and FFprobe tools"));
         assert!(ffmpeg_docs.contains("shared `artifacts.Media` type"));
 
+        let graphviz = graphviz::module().unwrap();
+        assert_documented(&graphviz);
+        let graphviz_docs = graphviz.docs().unwrap();
+        assert!(graphviz_docs.contains("Semantic Graphviz rendering"));
+        assert!(graphviz_docs.contains("private DOT source"));
+
         let imagemagick = imagemagick::module().unwrap();
         assert_documented(&imagemagick);
         let imagemagick_docs = imagemagick.docs().unwrap();
@@ -241,6 +248,7 @@ mod tests {
         let program = parse_rex(
             r#"
                 import tools.ffmpeg as F;
+                import tools.graphviz as G;
                 import tools.poppler as P;
                 import tools.qpdf as Q;
 
@@ -263,6 +271,10 @@ mod tests {
                         default with { brightness = Some 0.1 }
                     },
                     graph: F.FilterGraph = default,
+                    graphviz_graph: G.Graph = G.Graph {},
+                    graphviz_node_attributes: G.NodeAttributes = G.NodeAttributes {},
+                    graphviz_edge_attributes: G.EdgeAttributes = G.EdgeAttributes {},
+                    graphviz_format: G.RenderFormat = G.FormatSvg,
                     probe: F.ProbeOptions = {
                         default with { count_frames = true }
                     }

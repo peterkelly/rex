@@ -240,6 +240,7 @@ mod tests {
         let mut paths = [
             "imagemagick",
             "ffmpeg",
+            "graphviz",
             "qpdf",
             "poppler",
             "imagemagick_ffmpeg",

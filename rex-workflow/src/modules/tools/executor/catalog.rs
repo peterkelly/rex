@@ -27,6 +27,12 @@ pub(super) const fn runtime(program: ToolProgram) -> ToolRuntime {
             container_executable: "ffprobe",
             prefix_arguments: &[],
         },
+        ToolProgram::Graphviz => ToolRuntime {
+            bundle: ToolBundle::Graphviz,
+            local_executable: "dot",
+            container_executable: "dot",
+            prefix_arguments: &[],
+        },
         ToolProgram::ImageMagick => image_magick(&[]),
         ToolProgram::ImageMagickMogrify => image_magick(&["mogrify"]),
         ToolProgram::ImageMagickIdentify => image_magick(&["identify"]),
@@ -74,6 +80,7 @@ mod tests {
         let cases = [
             (ToolProgram::Ffmpeg, ToolBundle::Ffmpeg, "ffmpeg", &[][..]),
             (ToolProgram::Ffprobe, ToolBundle::Ffmpeg, "ffprobe", &[][..]),
+            (ToolProgram::Graphviz, ToolBundle::Graphviz, "dot", &[][..]),
             (
                 ToolProgram::ImageMagick,
                 ToolBundle::ImageMagick,

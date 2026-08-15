@@ -218,6 +218,7 @@ operations. The current workflow catalog contains:
 | Rex module | Runtime programs | Selected capabilities |
 |---|---|---|
 | `tools.ffmpeg` | FFmpeg, FFprobe | Transcode and remux media, extract audio or frames, create thumbnails, concatenate, mux, segment, package HLS/DASH, probe metadata, inspect packets and frames, and query capabilities |
+| `tools.graphviz` | Graphviz `dot` | Render semantic directed or undirected graphs with typed attributes, declared nodes, binary edges, ports, labels, defaults, and nested subgraphs |
 | `tools.imagemagick` | ImageMagick | Generate and transform images, batch-convert, identify, compare, composite, montage, extract pixels, and query formats and capabilities |
 | `tools.qpdf` | QPDF | Check PDFs, count pages, export structured JSON, transform or linearize, merge/split pages, and apply overlays or underlays |
 | `tools.poppler` | `pdfinfo`, `pdftotext`, `pdftocairo`, `pdfimages` | Parse PDF metadata, extract text and word geometry, render pages, extract images, and inspect embedded images |
@@ -308,7 +309,7 @@ and CLI image overrides require digests unless mutable tags are explicitly
 allowed.
 
 The repository currently builds development images locally with the tags
-`rex-tool-ffmpeg:local`, `rex-tool-imagemagick:local`,
+`rex-tool-ffmpeg:local`, `rex-tool-graphviz:local`, `rex-tool-imagemagick:local`,
 `rex-tool-qpdf:local`, and `rex-tool-poppler:local`. The executor uses
 `--pull=never`, so evaluating a workflow never contacts a registry or rebuilds
 an image as a side effect. Published multi-platform images and a release digest
@@ -432,6 +433,8 @@ and typechecked by the `rex-workflow` test suite.
 - [FFmpeg examples](rex-workflow/examples/ffmpeg/README.md): generated video
   and audio, transcoding, stream copying, probing, inspection, muxing,
   concatenation, filtering, frame extraction, segmentation, and HLS/DASH.
+- [Graphviz examples](rex-workflow/examples/graphviz/README.md): typed DOT graph
+  construction, subgraph composition, and SVG rendering.
 - [ImageMagick examples](rex-workflow/examples/imagemagick/README.md): image
   generation, resizing, thumbnails, conversion, metadata, drawing,
   composition, comparison, montage, frame extraction, batch processing, and
@@ -510,6 +513,7 @@ use rex_workflow::modules::tools::executor::DockerToolImages;
 
 let images = DockerToolImages::new(
     "registry.example/ffmpeg@sha256:<digest>",
+    "registry.example/graphviz@sha256:<digest>",
     "registry.example/imagemagick@sha256:<digest>",
     "registry.example/qpdf@sha256:<digest>",
     "registry.example/poppler@sha256:<digest>",
@@ -609,7 +613,7 @@ cargo test -p rex-workflow --test docker_tools -- \
     --nocapture --test-threads=1
 ```
 
-The suite covers all four tool bundles, recursive blob/tree transfer, output
+The suite covers all five tool bundles, recursive blob/tree transfer, output
 validation, read-only inputs and image roots, disabled networking, missing
 images, tool and infrastructure failures, cancellation cleanup, concurrent
 isolation, and container leaks.

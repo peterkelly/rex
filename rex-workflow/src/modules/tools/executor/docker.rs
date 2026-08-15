@@ -41,6 +41,7 @@ const TRUNCATION_MARKER: &[u8] = b"\n[rex: tool output truncated]\n";
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DockerToolImages {
     ffmpeg: String,
+    graphviz: String,
     image_magick: String,
     qpdf: String,
     poppler: String,
@@ -50,25 +51,28 @@ pub struct DockerToolImages {
 impl DockerToolImages {
     pub fn new(
         ffmpeg: impl Into<String>,
+        graphviz: impl Into<String>,
         image_magick: impl Into<String>,
         qpdf: impl Into<String>,
         poppler: impl Into<String>,
     ) -> Self {
-        Self::configured(ffmpeg, image_magick, qpdf, poppler, false)
+        Self::configured(ffmpeg, graphviz, image_magick, qpdf, poppler, false)
     }
 
     /// Configure mutable image tags for local image development.
     pub fn development(
         ffmpeg: impl Into<String>,
+        graphviz: impl Into<String>,
         image_magick: impl Into<String>,
         qpdf: impl Into<String>,
         poppler: impl Into<String>,
     ) -> Self {
-        Self::configured(ffmpeg, image_magick, qpdf, poppler, true)
+        Self::configured(ffmpeg, graphviz, image_magick, qpdf, poppler, true)
     }
 
     fn configured(
         ffmpeg: impl Into<String>,
+        graphviz: impl Into<String>,
         image_magick: impl Into<String>,
         qpdf: impl Into<String>,
         poppler: impl Into<String>,
@@ -76,6 +80,7 @@ impl DockerToolImages {
     ) -> Self {
         Self {
             ffmpeg: ffmpeg.into(),
+            graphviz: graphviz.into(),
             image_magick: image_magick.into(),
             qpdf: qpdf.into(),
             poppler: poppler.into(),
@@ -86,6 +91,7 @@ impl DockerToolImages {
     pub fn image(&self, bundle: ToolBundle) -> &str {
         match bundle {
             ToolBundle::Ffmpeg => &self.ffmpeg,
+            ToolBundle::Graphviz => &self.graphviz,
             ToolBundle::ImageMagick => &self.image_magick,
             ToolBundle::Qpdf => &self.qpdf,
             ToolBundle::Poppler => &self.poppler,
@@ -106,6 +112,7 @@ impl DockerToolImages {
         let image = image.into();
         match bundle {
             ToolBundle::Ffmpeg => self.ffmpeg = image,
+            ToolBundle::Graphviz => self.graphviz = image,
             ToolBundle::ImageMagick => self.image_magick = image,
             ToolBundle::Qpdf => self.qpdf = image,
             ToolBundle::Poppler => self.poppler = image,
@@ -698,6 +705,7 @@ mod tests {
     fn images() -> DockerToolImages {
         DockerToolImages::new(
             format!("example/rex-ffmpeg@sha256:{DIGEST}"),
+            format!("example/rex-graphviz@sha256:{DIGEST}"),
             format!("example/rex-imagemagick@sha256:{DIGEST}"),
             format!("example/rex-qpdf@sha256:{DIGEST}"),
             format!("example/rex-poppler@sha256:{DIGEST}"),
@@ -716,6 +724,7 @@ mod tests {
     fn mutable_image_references_are_explicitly_development_only() {
         let images = DockerToolImages::new(
             "ffmpeg:latest",
+            "graphviz:latest",
             "magick:latest",
             "qpdf:latest",
             "poppler:latest",
@@ -723,6 +732,7 @@ mod tests {
         assert!(images.validate().is_err());
         let images = DockerToolImages::development(
             "ffmpeg:latest",
+            "graphviz:latest",
             "magick:latest",
             "qpdf:latest",
             "poppler:latest",

@@ -60,6 +60,18 @@ run_tool ffmpeg ffmpeg \
     -frames:v 1 /work/outputs/ffmpeg-font.png
 test -s "$workspace/outputs/ffmpeg-font.png"
 
+printf '%s\n' \
+    'digraph workflow {' \
+    '  graph [rankdir="LR"]' \
+    '  prepare -> render' \
+    '}' \
+    >"$workspace/inputs/workflow.dot"
+run_tool graphviz dot \
+    -Kdot -Tsvg -o /work/outputs/workflow.svg \
+    /work/inputs/workflow.dot
+test -s "$workspace/outputs/workflow.svg"
+grep -q '<svg' "$workspace/outputs/workflow.svg"
+
 run_tool imagemagick magick \
     -size 16x16 'canvas:#336699' /work/outputs/imagemagick.webp
 run_tool imagemagick magick \

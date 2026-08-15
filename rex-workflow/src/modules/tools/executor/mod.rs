@@ -150,12 +150,14 @@ pub enum ToolProgram {
     PdfToText,
     PdfToCairo,
     PdfImages,
+    Graphviz,
 }
 
 /// A set of programs installed together in one tool runtime image.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ToolBundle {
     Ffmpeg,
+    Graphviz,
     ImageMagick,
     Qpdf,
     Poppler,
@@ -169,11 +171,18 @@ impl ToolProgram {
 }
 
 impl ToolBundle {
-    pub const ALL: [Self; 4] = [Self::Ffmpeg, Self::ImageMagick, Self::Qpdf, Self::Poppler];
+    pub const ALL: [Self; 5] = [
+        Self::Ffmpeg,
+        Self::Graphviz,
+        Self::ImageMagick,
+        Self::Qpdf,
+        Self::Poppler,
+    ];
 
     pub const fn name(self) -> &'static str {
         match self {
             Self::Ffmpeg => "ffmpeg",
+            Self::Graphviz => "graphviz",
             Self::ImageMagick => "imagemagick",
             Self::Qpdf => "qpdf",
             Self::Poppler => "poppler",

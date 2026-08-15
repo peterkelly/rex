@@ -19,6 +19,7 @@ use std::{
 
 const ENABLE_ENV: &str = "REX_WORKFLOW_DOCKER_TESTS";
 const FFMPEG_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_FFMPEG_IMAGE";
+const GRAPHVIZ_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_GRAPHVIZ_IMAGE";
 const IMAGEMAGICK_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_IMAGEMAGICK_IMAGE";
 const QPDF_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_QPDF_IMAGE";
 const POPPLER_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_POPPLER_IMAGE";
@@ -37,6 +38,7 @@ fn docker_fixture() -> Option<DockerFixture> {
     let store = Store::new_in_memory();
     let images = DockerToolImages::development(
         image_reference(FFMPEG_IMAGE_ENV, "rex-tool-ffmpeg:local"),
+        image_reference(GRAPHVIZ_IMAGE_ENV, "rex-tool-graphviz:local"),
         image_reference(IMAGEMAGICK_IMAGE_ENV, "rex-tool-imagemagick:local"),
         image_reference(QPDF_IMAGE_ENV, "rex-tool-qpdf:local"),
         image_reference(POPPLER_IMAGE_ENV, "rex-tool-poppler:local"),
@@ -131,11 +133,12 @@ async fn docker_reports_all_tool_versions() {
     };
     let source = r#"
         import tools.ffmpeg as FF;
+        import tools.graphviz as G;
         import tools.imagemagick as IM;
         import tools.qpdf as Q;
         import tools.poppler as P;
 
-        (FF.version, IM.version, Q.version, P.version)
+        (FF.version, G.version, IM.version, Q.version, P.version)
     "#;
 
     let result = eval_rex(source, None, fixture.state)
@@ -145,7 +148,7 @@ async fn docker_reports_all_tool_versions() {
         .as_array()
         .unwrap_or_else(|| panic!("expected a tuple of tool versions, got {result}"));
 
-    assert_eq!(versions.len(), 4);
+    assert_eq!(versions.len(), 5);
     for version in versions {
         let version = ok_value(version);
         assert!(
@@ -317,6 +320,7 @@ fn docker_executor_fixture() -> Option<(Store, DockerToolExecutor)> {
     }
     let images = DockerToolImages::development(
         image_reference(FFMPEG_IMAGE_ENV, "rex-tool-ffmpeg:local"),
+        image_reference(GRAPHVIZ_IMAGE_ENV, "rex-tool-graphviz:local"),
         image_reference(IMAGEMAGICK_IMAGE_ENV, "rex-tool-imagemagick:local"),
         image_reference(QPDF_IMAGE_ENV, "rex-tool-qpdf:local"),
         image_reference(POPPLER_IMAGE_ENV, "rex-tool-poppler:local"),
@@ -612,6 +616,7 @@ async fn docker_distinguishes_tool_failures_from_missing_images() {
 
     let missing = DockerToolExecutor::new(DockerToolImages::development(
         "rex-tool-image-that-does-not-exist:missing",
+        "rex-tool-graphviz:local",
         "rex-tool-imagemagick:local",
         "rex-tool-qpdf:local",
         "rex-tool-poppler:local",
