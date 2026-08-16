@@ -1,7 +1,6 @@
 use super::{
-    ToolBundle, ToolExecution, ToolExecutionError, ToolExecutionPlan, ToolExecutor, ToolFuture,
-    catalog::{self, ToolRuntime},
-    workspace::ToolWorkspace,
+    DEFAULT_MAX_OUTPUT_BYTES, ToolBundle, ToolExecution, ToolExecutionError, ToolExecutionPlan,
+    ToolExecutor, ToolFuture, catalog, workspace::ToolWorkspace,
 };
 use crate::storage::store::Store;
 use serde::Deserialize;
@@ -14,23 +13,18 @@ use std::{
     thread,
     time::Duration,
 };
-use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
-    process::Command,
-    task::JoinHandle,
-    time::timeout,
-};
+use tokio::{process::Command, time::timeout};
 use uuid::Uuid;
 
 const CONTAINER_WORKSPACE: &str = "/work";
+const CONTAINER_CONTROL: &str = "/work/control";
 const CONTAINER_INPUTS: &str = "/work/inputs";
 const CONTAINER_OUTPUTS: &str = "/work/outputs";
+const CONTAINER_RESULTS: &str = "/work/results";
 const CONTAINER_TMP: &str = "/work/tmp";
 const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(60 * 60);
-const DEFAULT_MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_TMPFS_BYTES: u64 = 512 * 1024 * 1024;
 const DEFAULT_PID_LIMIT: u32 = 512;
-const TRUNCATION_MARKER: &[u8] = b"\n[rex: tool output truncated]\n";
 
 /// Container image references for each supported tool bundle.
 ///
@@ -207,32 +201,31 @@ async fn execute_docker(
     let workspace = ToolWorkspace::prepare(store, &plan.inputs, &plan.outputs).await?;
     let runtime = catalog::runtime(plan.program);
     let arguments = workspace.render_arguments(&plan.arguments, Path::new(CONTAINER_WORKSPACE))?;
+    let wrapper_arguments = workspace.wrapper_arguments(
+        Path::new(CONTAINER_WORKSPACE),
+        runtime.container_executable,
+        runtime.prefix_arguments,
+        &arguments,
+    );
+    let host_control = canonical_directory(&workspace.control_dir(), "Docker control directory")?;
     let host_inputs = canonical_directory(&workspace.input_dir(), "Docker input directory")?;
     let host_outputs = canonical_directory(&workspace.output_dir(), "Docker output directory")?;
+    let host_results = canonical_directory(&workspace.result_dir(), "Docker result directory")?;
     let invocation_id = Uuid::new_v4().to_string();
     let container_name = format!("rex-tool-{invocation_id}");
     let image = executor.images.image(runtime.bundle);
     let create_arguments = create_arguments(
+        &host_control,
         &host_inputs,
         &host_outputs,
+        &host_results,
         &container_name,
         &invocation_id,
         image,
-        runtime,
-        &arguments,
+        &wrapper_arguments,
         executor.tmpfs_bytes,
         executor.pid_limit,
     );
-
-    let stdin_data = match plan.stdin {
-        Some(hash) => Some(
-            store
-                .get(hash)
-                .await
-                .map_err(|error| ToolExecutionError::new(format!("read stdin object: {error}")))?,
-        ),
-        None => None,
-    };
 
     let mut cleanup = ContainerCleanup::new(&executor.docker_binary, container_name.clone());
     let create = docker_output(
@@ -249,22 +242,18 @@ async fn execute_docker(
         ));
     }
 
-    let mut start_arguments = vec![OsString::from("start"), OsString::from("--attach")];
-    if stdin_data.is_some() {
-        start_arguments.push(OsString::from("--interactive"));
-    }
-    start_arguments.push(OsString::from(&container_name));
+    let start_arguments = [
+        OsString::from("start"),
+        OsString::from("--attach"),
+        OsString::from(&container_name),
+    ];
 
     let mut command = Command::new(&executor.docker_binary);
     command
         .args(&start_arguments)
-        .stdin(if stdin_data.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .kill_on_drop(true);
     let mut child = command.spawn().map_err(|error| {
         ToolExecutionError::new(format!(
@@ -273,31 +262,12 @@ async fn execute_docker(
         ))
     })?;
 
-    let stdin_writer = spawn_stdin_writer(&mut child, stdin_data)?;
-    let stdout_reader = spawn_output_reader(
-        child
-            .stdout
-            .take()
-            .ok_or_else(|| ToolExecutionError::new("Docker CLI has no stdout pipe"))?,
-        executor.max_output_bytes,
-    );
-    let stderr_reader = spawn_output_reader(
-        child
-            .stderr
-            .take()
-            .ok_or_else(|| ToolExecutionError::new("Docker CLI has no stderr pipe"))?,
-        executor.max_output_bytes,
-    );
-
-    let start_status = match timeout(executor.execution_timeout, child.wait()).await {
+    match timeout(executor.execution_timeout, child.wait()).await {
         Ok(result) => result
             .map_err(|error| ToolExecutionError::new(format!("wait for Docker tool: {error}")))?,
         Err(_) => {
             let _ = child.kill().await;
             let cleanup_result = cleanup.remove().await;
-            let _ = join_writer(stdin_writer).await;
-            let _ = join_reader(stdout_reader, "stdout").await;
-            let _ = join_reader(stderr_reader, "stderr").await;
             return Err(match cleanup_result {
                 Ok(()) => ToolExecutionError::new(format!(
                     "Docker tool exceeded the {:?} execution timeout",
@@ -310,21 +280,19 @@ async fn execute_docker(
             });
         }
     };
-    join_writer(stdin_writer).await?;
-    let stdout = join_reader(stdout_reader, "stdout").await?;
-    let stderr = join_reader(stderr_reader, "stderr").await?;
 
     let state_result = inspect_state(&executor.docker_binary, &container_name).await;
     let cleanup_result = cleanup.remove().await;
     let state = state_result?;
     cleanup_result?;
 
-    validate_completed_state(&state, start_status, &stderr)?;
+    validate_completed_state(&state)?;
+    let result = workspace.read_result(executor.max_output_bytes)?;
     let outputs = workspace.import_outputs(store, &plan.outputs).await?;
     Ok(ToolExecution {
-        exit_code: Some(state.exit_code),
-        stdout,
-        stderr,
+        exit_code: Some(result.exit_code),
+        stdout: result.stdout,
+        stderr: result.stderr,
         outputs,
     })
 }
@@ -338,79 +306,6 @@ fn canonical_directory(path: &Path, description: &str) -> Result<PathBuf, ToolEx
         )));
     }
     Ok(canonical)
-}
-
-fn spawn_stdin_writer(
-    child: &mut tokio::process::Child,
-    data: Option<Vec<u8>>,
-) -> Result<Option<JoinHandle<io::Result<()>>>, ToolExecutionError> {
-    let Some(data) = data else {
-        return Ok(None);
-    };
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| ToolExecutionError::new("Docker CLI has no stdin pipe"))?;
-    Ok(Some(tokio::spawn(async move {
-        stdin.write_all(&data).await?;
-        stdin.shutdown().await
-    })))
-}
-
-fn spawn_output_reader<R>(reader: R, limit: usize) -> JoinHandle<io::Result<Vec<u8>>>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    tokio::spawn(read_bounded(reader, limit))
-}
-
-async fn read_bounded<R>(mut reader: R, limit: usize) -> io::Result<Vec<u8>>
-where
-    R: AsyncRead + Unpin,
-{
-    let mut output = Vec::with_capacity(limit.min(8192));
-    let mut buffer = [0_u8; 8192];
-    let mut truncated = false;
-    loop {
-        let count = reader.read(&mut buffer).await?;
-        if count == 0 {
-            break;
-        }
-        let remaining = limit.saturating_sub(output.len());
-        output.extend_from_slice(&buffer[..count.min(remaining)]);
-        truncated |= count > remaining;
-    }
-    if truncated && limit >= TRUNCATION_MARKER.len() {
-        output.truncate(limit - TRUNCATION_MARKER.len());
-        output.extend_from_slice(TRUNCATION_MARKER);
-    }
-    Ok(output)
-}
-
-async fn join_writer(writer: Option<JoinHandle<io::Result<()>>>) -> Result<(), ToolExecutionError> {
-    let Some(writer) = writer else {
-        return Ok(());
-    };
-    match writer.await {
-        Err(error) => Err(ToolExecutionError::new(format!(
-            "join Docker stdin writer: {error}"
-        ))),
-        Ok(Err(error)) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-        Ok(Err(error)) => Err(ToolExecutionError::new(format!(
-            "write Docker tool stdin: {error}"
-        ))),
-        Ok(Ok(())) => Ok(()),
-    }
-}
-
-async fn join_reader(
-    reader: JoinHandle<io::Result<Vec<u8>>>,
-    stream: &str,
-) -> Result<Vec<u8>, ToolExecutionError> {
-    reader
-        .await
-        .map_err(|error| ToolExecutionError::new(format!("join Docker {stream} reader: {error}")))?
-        .map_err(|error| ToolExecutionError::new(format!("read Docker {stream}: {error}")))
 }
 
 pub(super) fn validate_image_reference(
@@ -445,18 +340,21 @@ fn has_sha256_digest(image: &str) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 fn create_arguments(
+    host_control: &Path,
     host_inputs: &Path,
     host_outputs: &Path,
+    host_results: &Path,
     container_name: &str,
     invocation_id: &str,
     image: &str,
-    runtime: ToolRuntime,
-    arguments: &[String],
+    wrapper_arguments: &[OsString],
     tmpfs_bytes: u64,
     pid_limit: u32,
 ) -> Vec<OsString> {
+    let control_mount = bind_mount(host_control, CONTAINER_CONTROL, true);
     let input_mount = bind_mount(host_inputs, CONTAINER_INPUTS, true);
     let output_mount = bind_mount(host_outputs, CONTAINER_OUTPUTS, false);
+    let result_mount = bind_mount(host_results, CONTAINER_RESULTS, false);
     let user = host_user();
     let mut docker_arguments = vec![
         OsString::from("create"),
@@ -477,9 +375,13 @@ fn create_arguments(
         OsString::from("--label"),
         OsString::from(format!("rex.workflow.invocation={invocation_id}")),
         OsString::from("--mount"),
+        control_mount,
+        OsString::from("--mount"),
         input_mount,
         OsString::from("--mount"),
         output_mount,
+        OsString::from("--mount"),
+        result_mount,
         OsString::from("--tmpfs"),
         OsString::from(format!(
             "{CONTAINER_TMP}:rw,noexec,nosuid,nodev,mode=1777,size={tmpfs_bytes}"
@@ -499,11 +401,10 @@ fn create_arguments(
         OsString::from("--env"),
         OsString::from("TZ=UTC"),
         OsString::from("--entrypoint"),
-        OsString::from(runtime.container_executable),
+        OsString::from("/bin/sh"),
         OsString::from(image),
     ];
-    docker_arguments.extend(runtime.prefix_arguments.iter().map(OsString::from));
-    docker_arguments.extend(arguments.iter().map(OsString::from));
+    docker_arguments.extend(wrapper_arguments.iter().cloned());
     docker_arguments
 }
 
@@ -574,7 +475,6 @@ struct ContainerState {
     #[serde(rename = "OOMKilled")]
     oom_killed: bool,
     dead: bool,
-    exit_code: i32,
     error: String,
 }
 
@@ -603,11 +503,7 @@ async fn inspect_state(
         .map_err(|error| ToolExecutionError::new(format!("parse Docker container state: {error}")))
 }
 
-fn validate_completed_state(
-    state: &ContainerState,
-    start_status: ExitStatus,
-    start_stderr: &[u8],
-) -> Result<(), ToolExecutionError> {
+fn validate_completed_state(state: &ContainerState) -> Result<(), ToolExecutionError> {
     if state.running {
         return Err(ToolExecutionError::new(
             "Docker attach ended while the tool container was still running",
@@ -628,13 +524,6 @@ fn validate_completed_state(
             "Docker reported a container runtime error: {}",
             state.error
         )));
-    }
-    if !start_status.success() && start_status.code() != Some(state.exit_code) {
-        return Err(docker_failure(
-            "attach to Docker tool container",
-            start_status,
-            start_stderr,
-        ));
     }
     Ok(())
 }
@@ -769,14 +658,24 @@ mod tests {
     #[test]
     fn docker_create_is_offline_hardened_and_separates_mounts() {
         let runtime = catalog::runtime(ToolProgram::ImageMagickIdentify);
+        let wrapper_arguments = [
+            OsString::from("/work/control/invoke.sh"),
+            OsString::from("/work/results/stdout"),
+            OsString::from("/work/results/stderr"),
+            OsString::from("/work/results/exit-code"),
+            OsString::from(runtime.container_executable),
+            OsString::from("identify"),
+            OsString::from("/work/inputs/input.png"),
+        ];
         let arguments = create_arguments(
+            Path::new("/host/control"),
             Path::new("/host/inputs"),
             Path::new("/host/outputs"),
+            Path::new("/host/results"),
             "rex-tool-test",
             "invocation-id",
             images().image(runtime.bundle),
-            runtime,
-            &["/work/inputs/input.png".to_owned()],
+            &wrapper_arguments,
             1024,
             12,
         );
@@ -795,9 +694,16 @@ mod tests {
             "--user",
             "rex.workflow=true",
             "rex.workflow.invocation=invocation-id",
+            "type=bind,source=/host/control,destination=/work/control,readonly",
             "type=bind,source=/host/inputs,destination=/work/inputs,readonly",
             "type=bind,source=/host/outputs,destination=/work/outputs",
+            "type=bind,source=/host/results,destination=/work/results",
             "/work/tmp:rw,noexec,nosuid,nodev,mode=1777,size=1024",
+            "/bin/sh",
+            "/work/control/invoke.sh",
+            "/work/results/stdout",
+            "/work/results/stderr",
+            "/work/results/exit-code",
         ] {
             assert!(
                 arguments.iter().any(|argument| argument == required),
@@ -820,14 +726,6 @@ mod tests {
 
         let error = canonical_directory(&directory, "test directory").unwrap_err();
         assert!(error.to_string().contains("contains a comma"));
-    }
-
-    #[tokio::test]
-    async fn bounded_reader_drains_and_marks_truncated_output() {
-        let data = vec![b'x'; 128];
-        let output = read_bounded(std::io::Cursor::new(data), 64).await.unwrap();
-        assert_eq!(output.len(), 64);
-        assert!(output.ends_with(TRUNCATION_MARKER));
     }
 
     #[cfg(unix)]
@@ -864,7 +762,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn executor_preserves_io_exit_status_and_removes_container() {
+    async fn executor_reads_file_result_and_ignores_transport_io_and_status() {
         use std::os::unix::fs::PermissionsExt;
 
         let temporary = tempfile::tempdir().unwrap();
@@ -878,26 +776,35 @@ mod tests {
                  shift\n\
                  while [ $# -gt 0 ]; do\n\
                    if [ \"$1\" = '--mount' ]; then\n\
-                     case $2 in *destination=/work/outputs*) printf '%s' \"$2\" > \"$state\";; esac\n\
+                     case $2 in\n\
+                       *destination=/work/outputs*) printf '%s' \"$2\" > \"$state.outputs\";;\n\
+                       *destination=/work/results*) printf '%s' \"$2\" > \"$state.results\";;\n\
+                     esac\n\
                      shift 2\n\
                    else shift; fi\n\
                  done\n\
                  printf 'container-id\\n'\n\
                  ;;\n\
                start)\n\
-                 mount=$(cat \"$state\")\n\
-                 output=${mount#type=bind,source=}\n\
+                 output=$(cat \"$state.outputs\")\n\
+                 output=${output#type=bind,source=}\n\
                  output=${output%,destination=/work/outputs}\n\
+                 results=$(cat \"$state.results\")\n\
+                 results=${results#type=bind,source=}\n\
+                 results=${results%,destination=/work/results}\n\
                  printf 'fake output' > \"$output/output-0000.bin\"\n\
-                 printf 'fake diagnostic' >&2\n\
-                 cat\n\
-                 exit 7\n\
+                 printf 'recorded stdout' > \"$results/stdout\"\n\
+                 printf 'recorded stderr' > \"$results/stderr\"\n\
+                 printf '7\\n' > \"$results/exit-code\"\n\
+                 printf 'ignored transport stdout'\n\
+                 printf 'ignored transport stderr' >&2\n\
+                 exit 99\n\
                  ;;\n\
                inspect)\n\
-                 printf '{\"Running\":false,\"OOMKilled\":false,\"Dead\":false,\"ExitCode\":7,\"Error\":\"\"}\\n'\n\
+                 printf '{\"Running\":false,\"OOMKilled\":false,\"Dead\":false,\"ExitCode\":99,\"Error\":\"\"}\\n'\n\
                  ;;\n\
                container)\n\
-                 rm -f \"$state\"\n\
+                 rm -f \"$state.outputs\" \"$state.results\"\n\
                  ;;\n\
              esac\n",
         )
@@ -905,9 +812,7 @@ mod tests {
         let mut permissions = std::fs::metadata(&fake_docker).unwrap().permissions();
         permissions.set_mode(0o700);
         std::fs::set_permissions(&fake_docker, permissions).unwrap();
-
         let store = Store::new_in_memory();
-        let stdin = store.put(b"fake stdin".to_vec()).await.unwrap();
         let executor = DockerToolExecutor::new(images()).with_docker_binary(&fake_docker);
         let execution = executor
             .execute(
@@ -920,18 +825,18 @@ mod tests {
                         kind: OutputKind::Single,
                         extension: "bin".to_string(),
                     }],
-                    stdin: Some(stdin),
                 },
             )
             .await
             .unwrap();
 
         assert_eq!(execution.exit_code, Some(7));
-        assert_eq!(execution.stdout, b"fake stdin");
-        assert_eq!(execution.stderr, b"fake diagnostic");
+        assert_eq!(execution.stdout, b"recorded stdout");
+        assert_eq!(execution.stderr, b"recorded stderr");
         let output = execution.outputs.get(&0).unwrap();
         assert_eq!(store.get(output[0]).await.unwrap(), b"fake output");
-        assert!(!fake_docker.with_extension("state").exists());
+        assert!(!fake_docker.with_extension("state.outputs").exists());
+        assert!(!fake_docker.with_extension("state.results").exists());
     }
 
     #[cfg(unix)]
@@ -967,7 +872,6 @@ mod tests {
                     arguments: Vec::new(),
                     inputs: Vec::new(),
                     outputs: Vec::new(),
-                    stdin: None,
                 },
             )
             .await

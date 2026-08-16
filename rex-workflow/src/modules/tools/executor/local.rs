@@ -1,10 +1,10 @@
 use super::{
-    ToolExecution, ToolExecutionError, ToolExecutionPlan, ToolExecutor, ToolFuture, catalog,
-    workspace::ToolWorkspace,
+    DEFAULT_MAX_OUTPUT_BYTES, ToolExecution, ToolExecutionError, ToolExecutionPlan, ToolExecutor,
+    ToolFuture, catalog, workspace::ToolWorkspace,
 };
 use crate::storage::store::Store;
 use std::{process::Stdio, sync::Arc};
-use tokio::{io::AsyncWriteExt, process::Command};
+use tokio::process::Command;
 
 #[derive(Clone, Default)]
 pub struct LocalToolExecutor;
@@ -28,64 +28,34 @@ async fn execute_local(
 
     let runtime = catalog::runtime(plan.program);
     let executable = runtime.local_executable;
-    let mut command = Command::new(executable);
+    let wrapper_arguments = workspace.wrapper_arguments(
+        workspace.root(),
+        executable,
+        runtime.prefix_arguments,
+        &arguments,
+    );
+    let mut command = Command::new("/bin/sh");
     command
-        .args(runtime.prefix_arguments)
-        .args(arguments)
+        .args(wrapper_arguments)
         .current_dir(workspace.root())
         .env("MAGICK_TEMPORARY_PATH", workspace.scratch_dir())
         .env("TMPDIR", workspace.scratch_dir())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .kill_on_drop(true);
 
-    let stdin_data = match plan.stdin {
-        Some(hash) => Some(
-            store
-                .get(hash)
-                .await
-                .map_err(|error| ToolExecutionError::new(format!("read stdin object: {error}")))?,
-        ),
-        None => None,
-    };
-    command.stdin(if stdin_data.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    });
-
-    let mut child = command
-        .spawn()
-        .map_err(|error| ToolExecutionError::new(format!("spawn `{executable}`: {error}")))?;
-    let stdin_writer = if let Some(data) = stdin_data {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| ToolExecutionError::new("spawned tool has no stdin pipe"))?;
-        Some(tokio::spawn(async move {
-            stdin.write_all(&data).await?;
-            stdin.shutdown().await
-        }))
-    } else {
-        None
-    };
-
-    let process_output = child
-        .wait_with_output()
+    let _ = command
+        .status()
         .await
         .map_err(|error| ToolExecutionError::new(format!("wait for tool: {error}")))?;
-    if let Some(writer) = stdin_writer {
-        writer
-            .await
-            .map_err(|error| ToolExecutionError::new(format!("join stdin writer: {error}")))?
-            .map_err(|error| ToolExecutionError::new(format!("write tool stdin: {error}")))?;
-    }
 
+    let result = workspace.read_result(DEFAULT_MAX_OUTPUT_BYTES)?;
     let outputs = workspace.import_outputs(store, &plan.outputs).await?;
     Ok(ToolExecution {
-        exit_code: process_output.status.code(),
-        stdout: process_output.stdout,
-        stderr: process_output.stderr,
+        exit_code: Some(result.exit_code),
+        stdout: result.stdout,
+        stderr: result.stderr,
         outputs,
     })
 }

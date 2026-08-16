@@ -1,6 +1,6 @@
 use super::types::*;
 use crate::modules::tools::executor::{
-    ExpectedOutput, OutputKind, ToolArgument, ToolExecutionPlan, ToolProgram,
+    CasInput, ExpectedOutput, InputKind, OutputKind, ToolArgument, ToolExecutionPlan, ToolProgram,
 };
 use blake3::Hash;
 use chrono::{DateTime, Utc};
@@ -36,13 +36,17 @@ pub(crate) fn render_plan(source: Hash, terminal: RenderTerminal) -> ToolExecuti
                 ToolArgument::output(0),
                 ToolArgument::literal("\""),
             ]),
+            ToolArgument::input(0),
         ],
-        inputs: Vec::new(),
+        inputs: vec![CasInput {
+            hash: source,
+            extension: "gp".to_owned(),
+            kind: InputKind::Blob,
+        }],
         outputs: vec![ExpectedOutput {
             kind: OutputKind::Single,
             extension: terminal.extension().to_owned(),
         }],
-        stdin: Some(source),
     }
 }
 
@@ -52,7 +56,6 @@ pub(crate) fn version_plan() -> ToolExecutionPlan {
         arguments: vec![ToolArgument::literal("--version")],
         inputs: Vec::new(),
         outputs: Vec::new(),
-        stdin: None,
     }
 }
 
@@ -1925,6 +1928,18 @@ mod tests {
         assert!(source.contains("set output output_file"));
         assert!(!source.contains("system "));
         assert!(!source.contains("load "));
+    }
+
+    #[test]
+    fn render_plan_reads_the_program_from_a_declared_input() {
+        let source = blake3::hash(b"gnuplot program");
+        let plan = render_plan(source, RenderTerminal::Svg(SvgOptions::default()));
+
+        assert_eq!(plan.inputs.len(), 1);
+        assert_eq!(plan.inputs[0].hash, source);
+        assert_eq!(plan.inputs[0].extension, "gp");
+        assert_eq!(plan.inputs[0].kind, InputKind::Blob);
+        assert_eq!(plan.arguments.last(), Some(&ToolArgument::input(0)));
     }
 
     #[test]

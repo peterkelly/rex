@@ -1,6 +1,6 @@
 use super::types::*;
 use crate::modules::tools::executor::{
-    ExpectedOutput, OutputKind, ToolArgument, ToolExecutionPlan, ToolProgram,
+    CasInput, ExpectedOutput, InputKind, OutputKind, ToolArgument, ToolExecutionPlan, ToolProgram,
 };
 use blake3::Hash;
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,13 +19,17 @@ pub(crate) fn render_plan(
             ToolArgument::literal(format!("-T{}", format_name(format))),
             ToolArgument::literal("-o"),
             ToolArgument::output(0),
+            ToolArgument::input(0),
         ],
-        inputs: Vec::new(),
+        inputs: vec![CasInput {
+            hash: source,
+            extension: "dot".to_owned(),
+            kind: InputKind::Blob,
+        }],
         outputs: vec![ExpectedOutput {
             kind: OutputKind::Single,
             extension: format_extension(format).to_owned(),
         }],
-        stdin: Some(source),
     }
 }
 
@@ -35,7 +39,6 @@ pub(crate) fn version_plan() -> ToolExecutionPlan {
         arguments: vec![ToolArgument::literal("-V")],
         inputs: Vec::new(),
         outputs: Vec::new(),
-        stdin: None,
     }
 }
 
@@ -1211,6 +1214,18 @@ mod tests {
         assert!(source.contains("\"inside\" [\"label\"=<<B>inside</B>>]"));
         assert!(source.contains("\"inside\" -> \"outside\""));
         assert_dot_accepts(&source);
+    }
+
+    #[test]
+    fn render_plan_reads_the_program_from_a_declared_input() {
+        let source = blake3::hash(b"DOT program");
+        let plan = render_plan(source, LayoutEngine::LayoutDot, RenderFormat::FormatSvg);
+
+        assert_eq!(plan.inputs.len(), 1);
+        assert_eq!(plan.inputs[0].hash, source);
+        assert_eq!(plan.inputs[0].extension, "dot");
+        assert_eq!(plan.inputs[0].kind, InputKind::Blob);
+        assert_eq!(plan.arguments.last(), Some(&ToolArgument::input(0)));
     }
 
     #[test]

@@ -58,7 +58,6 @@ impl PlanBuilder {
             arguments: self.arguments,
             inputs: self.inputs,
             outputs: self.outputs,
-            stdin: None,
         }
     }
 }

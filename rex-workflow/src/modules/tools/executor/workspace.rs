@@ -7,12 +7,41 @@ use crate::storage::{store::Store, transfer};
 use blake3::Hash;
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
+    io::{self, Read},
     path::{Path, PathBuf},
 };
 
+const CONTROL_DIRECTORY: &str = "control";
 const INPUT_DIRECTORY: &str = "inputs";
 const OUTPUT_DIRECTORY: &str = "outputs";
+const RESULT_DIRECTORY: &str = "results";
 const SCRATCH_DIRECTORY: &str = "scratch";
+const WRAPPER_FILE: &str = "invoke.sh";
+const STDOUT_FILE: &str = "stdout";
+const STDERR_FILE: &str = "stderr";
+const EXIT_CODE_FILE: &str = "exit-code";
+const TRUNCATION_MARKER: &[u8] = b"\n[rex: tool output truncated]\n";
+const WRAPPER: &str = r#"#!/bin/sh
+stdout_path=$1
+stderr_path=$2
+exit_code_path=$3
+shift 3
+
+"$@" >"$stdout_path" 2>"$stderr_path"
+tool_status=$?
+exit_code_tmp="${exit_code_path}.tmp"
+printf '%s\n' "$tool_status" >"$exit_code_tmp" || exit 125
+mv "$exit_code_tmp" "$exit_code_path" || exit 125
+exit 0
+"#;
+
+#[derive(Debug)]
+pub(super) struct RecordedToolResult {
+    pub(super) exit_code: i32,
+    pub(super) stdout: Vec<u8>,
+    pub(super) stderr: Vec<u8>,
+}
 
 pub(super) struct ToolWorkspace {
     temporary: tempfile::TempDir,
@@ -28,12 +57,23 @@ impl ToolWorkspace {
     ) -> Result<Self, ToolExecutionError> {
         let temporary = tempfile::tempdir()
             .map_err(|error| ToolExecutionError::new(format!("create tool workspace: {error}")))?;
-        for directory in [INPUT_DIRECTORY, OUTPUT_DIRECTORY, SCRATCH_DIRECTORY] {
+        for directory in [
+            CONTROL_DIRECTORY,
+            INPUT_DIRECTORY,
+            OUTPUT_DIRECTORY,
+            RESULT_DIRECTORY,
+            SCRATCH_DIRECTORY,
+        ] {
             let path = temporary.path().join(directory);
             std::fs::create_dir_all(&path).map_err(|error| {
                 ToolExecutionError::new(format!("create `{}`: {error}", path.display()))
             })?;
         }
+        std::fs::write(
+            temporary.path().join(CONTROL_DIRECTORY).join(WRAPPER_FILE),
+            WRAPPER,
+        )
+        .map_err(|error| ToolExecutionError::new(format!("write tool wrapper: {error}")))?;
 
         let input_paths = materialize_inputs(store, temporary.path(), inputs).await?;
         let output_paths = prepare_outputs(temporary.path(), outputs)?;
@@ -52,8 +92,16 @@ impl ToolWorkspace {
         self.root().join(INPUT_DIRECTORY)
     }
 
+    pub(super) fn control_dir(&self) -> PathBuf {
+        self.root().join(CONTROL_DIRECTORY)
+    }
+
     pub(super) fn output_dir(&self) -> PathBuf {
         self.root().join(OUTPUT_DIRECTORY)
+    }
+
+    pub(super) fn result_dir(&self) -> PathBuf {
+        self.root().join(RESULT_DIRECTORY)
     }
 
     pub(super) fn scratch_dir(&self) -> PathBuf {
@@ -70,6 +118,58 @@ impl ToolWorkspace {
         render_arguments(arguments, &input_paths, &output_paths)
     }
 
+    pub(super) fn wrapper_arguments(
+        &self,
+        execution_root: &Path,
+        executable: &str,
+        prefix_arguments: &[&str],
+        arguments: &[String],
+    ) -> Vec<OsString> {
+        let control = execution_root.join(CONTROL_DIRECTORY);
+        let results = execution_root.join(RESULT_DIRECTORY);
+        let mut wrapper_arguments = vec![
+            control.join(WRAPPER_FILE).into_os_string(),
+            results.join(STDOUT_FILE).into_os_string(),
+            results.join(STDERR_FILE).into_os_string(),
+            results.join(EXIT_CODE_FILE).into_os_string(),
+            OsString::from(executable),
+        ];
+        wrapper_arguments.extend(prefix_arguments.iter().map(OsString::from));
+        wrapper_arguments.extend(arguments.iter().map(OsString::from));
+        wrapper_arguments
+    }
+
+    pub(super) fn read_result(
+        &self,
+        max_output_bytes: usize,
+    ) -> Result<RecordedToolResult, ToolExecutionError> {
+        let result_dir = self.result_dir();
+        let exit_code_path = result_dir.join(EXIT_CODE_FILE);
+        let exit_code_bytes = read_regular_file(&exit_code_path, 32).map_err(|error| {
+            ToolExecutionError::new(format!(
+                "read tool completion record `{}`: {error}",
+                exit_code_path.display()
+            ))
+        })?;
+        let exit_code = std::str::from_utf8(&exit_code_bytes)
+            .ok()
+            .and_then(|value| value.trim().parse::<i32>().ok())
+            .filter(|value| (0..=255).contains(value))
+            .ok_or_else(|| {
+                ToolExecutionError::new(format!(
+                    "invalid tool exit code in `{}`",
+                    exit_code_path.display()
+                ))
+            })?;
+        let stdout = read_result_stream(&result_dir.join(STDOUT_FILE), max_output_bytes, "stdout")?;
+        let stderr = read_result_stream(&result_dir.join(STDERR_FILE), max_output_bytes, "stderr")?;
+        Ok(RecordedToolResult {
+            exit_code,
+            stdout,
+            stderr,
+        })
+    }
+
     pub(super) async fn import_outputs(
         &self,
         store: &Store,
@@ -78,6 +178,47 @@ impl ToolWorkspace {
         let output_paths = resolve_paths(self.root(), &self.output_paths);
         import_outputs(store, outputs, &output_paths).await
     }
+}
+
+fn read_result_stream(
+    path: &Path,
+    limit: usize,
+    stream: &str,
+) -> Result<Vec<u8>, ToolExecutionError> {
+    read_regular_file(path, limit).map_err(|error| {
+        ToolExecutionError::new(format!(
+            "read recorded tool {stream} `{}`: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn read_regular_file(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "result is not a regular file",
+        ));
+    }
+    let mut file = std::fs::File::open(path)?;
+    let mut output = Vec::with_capacity(limit.min(8192));
+    let mut buffer = [0_u8; 8192];
+    let mut truncated = false;
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        let remaining = limit.saturating_sub(output.len());
+        output.extend_from_slice(&buffer[..count.min(remaining)]);
+        truncated |= count > remaining;
+    }
+    if truncated && limit >= TRUNCATION_MARKER.len() {
+        output.truncate(limit - TRUNCATION_MARKER.len());
+        output.extend_from_slice(TRUNCATION_MARKER);
+    }
+    Ok(output)
 }
 
 fn resolve_paths(root: &Path, paths: &[PathBuf]) -> Vec<PathBuf> {
@@ -275,6 +416,7 @@ fn clean_extension(extension: &str) -> String {
 mod tests {
     use super::super::OutputKind;
     use super::*;
+    use std::process::Stdio;
 
     #[test]
     fn symbolic_paths_are_rendered_only_by_executor() {
@@ -335,6 +477,52 @@ mod tests {
             ),
             [PathBuf::from("/work/outputs/output-0000.mp3")]
         );
+    }
+
+    #[test]
+    fn recorded_stream_reads_are_bounded_and_marked() {
+        let temporary = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temporary.path(), vec![b'x'; 128]).unwrap();
+
+        let output = read_regular_file(temporary.path(), 64).unwrap();
+        assert_eq!(output.len(), 64);
+        assert!(output.ends_with(TRUNCATION_MARKER));
+    }
+
+    #[tokio::test]
+    async fn wrapper_records_streams_and_publishes_exit_code_last() {
+        let workspace = ToolWorkspace::prepare(&Store::new_in_memory(), &[], &[])
+            .await
+            .unwrap();
+        let tool_arguments = [
+            "-c".to_owned(),
+            "printf recorded-out; printf recorded-err >&2; exit 7".to_owned(),
+        ];
+        let wrapper_arguments =
+            workspace.wrapper_arguments(workspace.root(), "/bin/sh", &[], &tool_arguments);
+
+        let _ = std::process::Command::new("/bin/sh")
+            .args(wrapper_arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+
+        let result = workspace.read_result(1024).unwrap();
+        assert_eq!(result.exit_code, 7);
+        assert_eq!(result.stdout, b"recorded-out");
+        assert_eq!(result.stderr, b"recorded-err");
+    }
+
+    #[tokio::test]
+    async fn missing_completion_record_is_an_infrastructure_error() {
+        let workspace = ToolWorkspace::prepare(&Store::new_in_memory(), &[], &[])
+            .await
+            .unwrap();
+
+        let error = workspace.read_result(1024).unwrap_err();
+        assert!(error.to_string().contains("completion record"));
     }
 
     #[cfg(unix)]

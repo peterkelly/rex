@@ -10,6 +10,8 @@ use std::{collections::BTreeMap, error::Error, fmt, future::Future, pin::Pin};
 pub use docker::{DockerToolExecutor, DockerToolImages, docker_executor};
 pub use local::{LocalToolExecutor, local_executor};
 
+const DEFAULT_MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
 pub type InputId = usize;
 pub type OutputId = usize;
 
@@ -124,13 +126,16 @@ pub struct ExpectedOutput {
     pub extension: String,
 }
 
+/// An executor-neutral tool invocation expressed only through arguments and files.
+///
+/// Standard input is always closed. Executors stage `inputs`, resolve symbolic paths in
+/// `arguments`, and collect `outputs` after the backend reports that the job has finished.
 #[derive(Clone, Debug)]
 pub struct ToolExecutionPlan {
     pub program: ToolProgram,
     pub arguments: Vec<ToolArgument>,
     pub inputs: Vec<CasInput>,
     pub outputs: Vec<ExpectedOutput>,
-    pub stdin: Option<Hash>,
 }
 
 /// One headless external program that the workflow host may execute.
@@ -200,6 +205,7 @@ impl fmt::Display for ToolBundle {
     }
 }
 
+/// A completed tool result reconstructed from backend-produced result and output files.
 #[derive(Clone, Debug)]
 pub struct ToolExecution {
     pub exit_code: Option<i32>,
@@ -228,6 +234,10 @@ impl Error for ToolExecutionError {}
 pub type ToolFuture<'a> =
     Pin<Box<dyn Future<Output = Result<ToolExecution, ToolExecutionError>> + Send + 'a>>;
 
+/// Execute tool plans without using tool process streams or process status as result data.
+///
+/// Implementations may use backend-specific APIs for dispatch and lifecycle monitoring, but tool
+/// stdout, stderr, and exit code must be recorded as files and retrieved after completion.
 pub trait ToolExecutor: Send + Sync {
     fn execute<'a>(&'a self, store: &'a Store, plan: ToolExecutionPlan) -> ToolFuture<'a>;
 }

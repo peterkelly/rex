@@ -340,7 +340,6 @@ fn version_plan(bundle: ToolBundle) -> ToolExecutionPlan {
         arguments: arguments.into_iter().map(ToolArgument::literal).collect(),
         inputs: Vec::new(),
         outputs: Vec::<ExpectedOutput>::new(),
-        stdin: None,
     }
 }
 

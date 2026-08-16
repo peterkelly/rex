@@ -203,6 +203,47 @@ async fn docker_gnuplot_renders_inline_data_as_svg() {
 }
 
 #[tokio::test]
+async fn docker_graphviz_renders_declared_input_as_svg() {
+    let Some(fixture) = docker_fixture() else {
+        return;
+    };
+    let source = r#"
+        import tools.graphviz as G;
+
+        G.render
+            (G.Graph {
+                nodes = {
+                    prepare = G.NodeAttributes {},
+                    render = G.NodeAttributes {}
+                },
+                edges = [
+                    G.Edge {
+                        from = G.Endpoint { node = "prepare", port = None },
+                        to = G.Endpoint { node = "render", port = None },
+                        attributes = G.EdgeAttributes {}
+                    }
+                ]
+            })
+            G.LayoutDot
+            G.FormatSvg
+    "#;
+
+    let result = eval_rex(source, None, fixture.state)
+        .await
+        .expect("render Graphviz SVG in Docker");
+    let svg_hash = content_hash(ok_value(&result));
+    let svg = fixture
+        .store
+        .get(svg_hash)
+        .await
+        .expect("read Graphviz SVG");
+    assert!(
+        svg.windows(b"<svg".len()).any(|window| window == b"<svg"),
+        "Graphviz output is not SVG"
+    );
+}
+
+#[tokio::test]
 async fn docker_reimports_generated_media_and_images() {
     let Some(fixture) = docker_fixture() else {
         return;
@@ -409,7 +450,6 @@ fn ffmpeg_png_plan(kind: OutputKind, color: &str) -> ToolExecutionPlan {
             kind,
             extension: "png".to_owned(),
         }],
-        stdin: None,
     }
 }
 
@@ -423,7 +463,6 @@ fn literal_plan(program: ToolProgram, arguments: &[&str]) -> ToolExecutionPlan {
             .collect(),
         inputs: Vec::new(),
         outputs: Vec::new(),
-        stdin: None,
     }
 }
 
@@ -582,7 +621,6 @@ async fn docker_uses_packaged_and_cas_supplied_fonts() {
             kind: OutputKind::Single,
             extension: "png".to_owned(),
         }],
-        stdin: None,
     };
     let execution = executor.execute(&store, fallback).await.unwrap();
     assert_eq!(
@@ -633,7 +671,6 @@ async fn docker_uses_packaged_and_cas_supplied_fonts() {
             kind: OutputKind::Single,
             extension: "png".to_owned(),
         }],
-        stdin: None,
     };
     let execution = executor.execute(&store, cas_font).await.unwrap();
     assert_eq!(
