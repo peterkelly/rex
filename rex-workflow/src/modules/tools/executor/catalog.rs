@@ -33,6 +33,12 @@ pub(super) const fn runtime(program: ToolProgram) -> ToolRuntime {
             container_executable: "dot",
             prefix_arguments: &[],
         },
+        ToolProgram::Gnuplot => ToolRuntime {
+            bundle: ToolBundle::Gnuplot,
+            local_executable: "gnuplot",
+            container_executable: "gnuplot",
+            prefix_arguments: &[],
+        },
         ToolProgram::ImageMagick => image_magick(&[]),
         ToolProgram::ImageMagickMogrify => image_magick(&["mogrify"]),
         ToolProgram::ImageMagickIdentify => image_magick(&["identify"]),
@@ -81,6 +87,12 @@ mod tests {
             (ToolProgram::Ffmpeg, ToolBundle::Ffmpeg, "ffmpeg", &[][..]),
             (ToolProgram::Ffprobe, ToolBundle::Ffmpeg, "ffprobe", &[][..]),
             (ToolProgram::Graphviz, ToolBundle::Graphviz, "dot", &[][..]),
+            (
+                ToolProgram::Gnuplot,
+                ToolBundle::Gnuplot,
+                "gnuplot",
+                &[][..],
+            ),
             (
                 ToolProgram::ImageMagick,
                 ToolBundle::ImageMagick,

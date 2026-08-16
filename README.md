@@ -218,6 +218,7 @@ operations. The current workflow catalog contains:
 | Rex module | Runtime programs | Selected capabilities |
 |---|---|---|
 | `tools.ffmpeg` | FFmpeg, FFprobe | Transcode and remux media, extract audio or frames, create thumbnails, concatenate, mux, segment, package HLS/DASH, probe metadata, inspect packets and frames, and query capabilities |
+| `tools.gnuplot` | Gnuplot | Render typed figures from inline curves, error bars, bands, bars, histograms, heatmaps, vectors, labels, point clouds, paths, surfaces, and annotations |
 | `tools.graphviz` | Graphviz `dot` | Render semantic directed or undirected graphs with typed attributes, declared nodes, binary edges, ports, labels, defaults, and nested subgraphs |
 | `tools.imagemagick` | ImageMagick | Generate and transform images, batch-convert, identify, compare, composite, montage, extract pixels, and query formats and capabilities |
 | `tools.qpdf` | QPDF | Check PDFs, count pages, export structured JSON, transform or linearize, merge/split pages, and apply overlays or underlays |
@@ -309,7 +310,7 @@ and CLI image overrides require digests unless mutable tags are explicitly
 allowed.
 
 The repository currently builds development images locally with the tags
-`rex-tool-ffmpeg:local`, `rex-tool-graphviz:local`, `rex-tool-imagemagick:local`,
+`rex-tool-ffmpeg:local`, `rex-tool-gnuplot:local`, `rex-tool-graphviz:local`, `rex-tool-imagemagick:local`,
 `rex-tool-qpdf:local`, and `rex-tool-poppler:local`. The executor uses
 `--pull=never`, so evaluating a workflow never contacts a registry or rebuilds
 an image as a side effect. Published multi-platform images and a release digest
@@ -333,7 +334,7 @@ cargo build -p rex-workflow
 mkdir -p store
 ```
 
-Build and inspect the four native-architecture Docker tool images:
+Build and inspect the six native-architecture Docker tool images:
 
 ```sh
 target/debug/rex tools build
@@ -433,6 +434,9 @@ and typechecked by the `rex-workflow` test suite.
 - [FFmpeg examples](rex-workflow/examples/ffmpeg/README.md): generated video
   and audio, transcoding, stream copying, probing, inspection, muxing,
   concatenation, filtering, frame extraction, segmentation, and HLS/DASH.
+- [Gnuplot examples](rex-workflow/examples/gnuplot/README.md): curves, error
+  bars, bands, categorical bars, histograms, heatmaps, vectors, labels, point
+  clouds, paths, and surface representations built from inline values.
 - [Graphviz examples](rex-workflow/examples/graphviz/README.md): typed DOT graph
   construction, subgraph composition, and SVG rendering.
 - [ImageMagick examples](rex-workflow/examples/imagemagick/README.md): image
@@ -513,6 +517,7 @@ use rex_workflow::modules::tools::executor::DockerToolImages;
 
 let images = DockerToolImages::new(
     "registry.example/ffmpeg@sha256:<digest>",
+    "registry.example/gnuplot@sha256:<digest>",
     "registry.example/graphviz@sha256:<digest>",
     "registry.example/imagemagick@sha256:<digest>",
     "registry.example/qpdf@sha256:<digest>",
@@ -613,7 +618,7 @@ cargo test -p rex-workflow --test docker_tools -- \
     --nocapture --test-threads=1
 ```
 
-The suite covers all five tool bundles, recursive blob/tree transfer, output
+The suite covers all six tool bundles, recursive blob/tree transfer, output
 validation, read-only inputs and image roots, disabled networking, missing
 images, tool and infrastructure failures, cancellation cleanup, concurrent
 isolation, and container leaks.

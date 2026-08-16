@@ -10,6 +10,7 @@ The current catalog has one image per `ToolBundle`:
 | Bundle | Programs | Local development image |
 |---|---|---|
 | FFmpeg | `ffmpeg`, `ffprobe` | `rex-tool-ffmpeg:local` |
+| Gnuplot | `gnuplot` | `rex-tool-gnuplot:local` |
 | Graphviz | `dot` | `rex-tool-graphviz:local` |
 | ImageMagick | `magick` and selected subcommands | `rex-tool-imagemagick:local` |
 | QPDF | `qpdf` | `rex-tool-qpdf:local` |
@@ -33,7 +34,7 @@ environment are acceptable.
 
 ### Docker with locally built images
 
-Rex currently builds the five tool images on each machine and tags them
+Rex currently builds the six tool images on each machine and tags them
 `rex-tool-*:local`. This gives amd64 and arm64 hosts native code without
 requiring a public image registry. Image publication and a checked-in digest
 lock are deliberately deferred until the tool catalog and Rex releases are
@@ -98,9 +99,9 @@ MSL, and MVG coders while preserving the documented headless formats.
 ## Build local images
 
 The Dockerfiles use the digest-pinned Alpine 3.24 multi-platform base and
-multi-stage capability checks. FFmpeg/Graphviz/ImageMagick/Poppler include DejaVu as a
-small fallback font set. ImageMagick installs its selected codec delegates;
-QPDF remains minimal.
+multi-stage capability checks. FFmpeg/Gnuplot/Graphviz/ImageMagick/Poppler
+include DejaVu as a small fallback font set. ImageMagick installs its selected
+codec delegates; QPDF remains minimal.
 
 The normal one-command build works from any directory:
 
@@ -129,6 +130,7 @@ Embedders make the same policy explicit:
 ```rust,ignore
 let images = DockerToolImages::development(
     "rex-tool-ffmpeg:local",
+    "rex-tool-gnuplot:local",
     "rex-tool-graphviz:local",
     "rex-tool-imagemagick:local",
     "rex-tool-qpdf:local",
@@ -144,6 +146,7 @@ CLI image overrides also require digests unless `--allow-image-tags` is
 supplied explicitly. The image override environment variables are:
 
 - `REX_WORKFLOW_DOCKER_FFMPEG_IMAGE`
+- `REX_WORKFLOW_DOCKER_GNUPLOT_IMAGE`
 - `REX_WORKFLOW_DOCKER_GRAPHVIZ_IMAGE`
 - `REX_WORKFLOW_DOCKER_IMAGEMAGICK_IMAGE`
 - `REX_WORKFLOW_DOCKER_QPDF_IMAGE`
@@ -164,7 +167,7 @@ Unset the variable or use `0`, `false`, `off`, or `no` to disable the suite.
 Use `1`, `true`, `on`, or `yes` to enable it. Other values are rejected rather
 than silently skipping tests because of a typo.
 
-The suite covers all five tools, all output kinds, recursive CAS input/output
+The suite covers all six tools, all output kinds, recursive CAS input/output
 transfer, read-only inputs and image root, an invisible host sentinel, disabled
 networking, fallback and CAS-supplied fonts, tool versus infrastructure
 failures, missing images, cancellation cleanup, concurrent isolation, and

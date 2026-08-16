@@ -19,6 +19,7 @@ use std::{
 
 const ENABLE_ENV: &str = "REX_WORKFLOW_DOCKER_TESTS";
 const FFMPEG_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_FFMPEG_IMAGE";
+const GNUPLOT_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_GNUPLOT_IMAGE";
 const GRAPHVIZ_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_GRAPHVIZ_IMAGE";
 const IMAGEMAGICK_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_IMAGEMAGICK_IMAGE";
 const QPDF_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_QPDF_IMAGE";
@@ -38,6 +39,7 @@ fn docker_fixture() -> Option<DockerFixture> {
     let store = Store::new_in_memory();
     let images = DockerToolImages::development(
         image_reference(FFMPEG_IMAGE_ENV, "rex-tool-ffmpeg:local"),
+        image_reference(GNUPLOT_IMAGE_ENV, "rex-tool-gnuplot:local"),
         image_reference(GRAPHVIZ_IMAGE_ENV, "rex-tool-graphviz:local"),
         image_reference(IMAGEMAGICK_IMAGE_ENV, "rex-tool-imagemagick:local"),
         image_reference(QPDF_IMAGE_ENV, "rex-tool-qpdf:local"),
@@ -133,12 +135,13 @@ async fn docker_reports_all_tool_versions() {
     };
     let source = r#"
         import tools.ffmpeg as FF;
+        import tools.gnuplot as GP;
         import tools.graphviz as G;
         import tools.imagemagick as IM;
         import tools.qpdf as Q;
         import tools.poppler as P;
 
-        (FF.version, G.version, IM.version, Q.version, P.version)
+        (FF.version, GP.version, G.version, IM.version, Q.version, P.version)
     "#;
 
     let result = eval_rex(source, None, fixture.state)
@@ -148,7 +151,7 @@ async fn docker_reports_all_tool_versions() {
         .as_array()
         .unwrap_or_else(|| panic!("expected a tuple of tool versions, got {result}"));
 
-    assert_eq!(versions.len(), 5);
+    assert_eq!(versions.len(), 6);
     for version in versions {
         let version = ok_value(version);
         assert!(
@@ -156,6 +159,47 @@ async fn docker_reports_all_tool_versions() {
             "tool returned no parsed version: {version}"
         );
     }
+}
+
+#[tokio::test]
+async fn docker_gnuplot_renders_inline_data_as_svg() {
+    let Some(fixture) = docker_fixture() else {
+        return;
+    };
+    let source = r##"
+        import tools.gnuplot as G;
+
+        G.render_svg
+            (G.Figure {
+                panels = [
+                    Some (G.Panel2D (G.Plot2D {
+                        title = Some "Docker smoke test",
+                        series = [
+                            G.CurveSeries (G.Curve2D {
+                                data = G.NumericXY [
+                                    (0.0, 0.0),
+                                    (1.0, 1.0),
+                                    (2.0, 0.5)
+                                ],
+                                title = Some "values",
+                                mode = G.LinesPoints
+                            })
+                        ]
+                    }))
+                ]
+            })
+            G.SvgOptions {}
+    "##;
+
+    let result = eval_rex(source, None, fixture.state)
+        .await
+        .expect("render gnuplot SVG in Docker");
+    let svg_hash = content_hash(ok_value(&result));
+    let svg = fixture.store.get(svg_hash).await.expect("read gnuplot SVG");
+    assert!(
+        svg.windows(b"<svg".len()).any(|window| window == b"<svg"),
+        "gnuplot output is not SVG"
+    );
 }
 
 #[tokio::test]
@@ -320,6 +364,7 @@ fn docker_executor_fixture() -> Option<(Store, DockerToolExecutor)> {
     }
     let images = DockerToolImages::development(
         image_reference(FFMPEG_IMAGE_ENV, "rex-tool-ffmpeg:local"),
+        image_reference(GNUPLOT_IMAGE_ENV, "rex-tool-gnuplot:local"),
         image_reference(GRAPHVIZ_IMAGE_ENV, "rex-tool-graphviz:local"),
         image_reference(IMAGEMAGICK_IMAGE_ENV, "rex-tool-imagemagick:local"),
         image_reference(QPDF_IMAGE_ENV, "rex-tool-qpdf:local"),
@@ -616,6 +661,7 @@ async fn docker_distinguishes_tool_failures_from_missing_images() {
 
     let missing = DockerToolExecutor::new(DockerToolImages::development(
         "rex-tool-image-that-does-not-exist:missing",
+        "rex-tool-gnuplot:local",
         "rex-tool-graphviz:local",
         "rex-tool-imagemagick:local",
         "rex-tool-qpdf:local",

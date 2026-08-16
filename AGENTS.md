@@ -95,7 +95,7 @@ Before creating or amending any commit:
 1. Read `CONTRIBUTING.md`.
 2. Run `./build.sh` and ensure it completes successfully.
 3. Leave untracked files untouched unless explicitly told otherwise.
-4. Create signed commits.
+4. Create signed commits (unless explicitly instructed otherwise).
 5. Follow `CONTRIBUTING.md` commit-message rules exactly.
 
 Commit subject format:

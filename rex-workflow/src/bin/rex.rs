@@ -83,13 +83,17 @@ struct DockerImageOptions {
     #[arg(long, env = "REX_WORKFLOW_DOCKER_FFMPEG_IMAGE")]
     docker_ffmpeg_image: Option<String>,
 
-    /// Docker image containing ImageMagick.
-    #[arg(long, env = "REX_WORKFLOW_DOCKER_IMAGEMAGICK_IMAGE")]
-    docker_imagemagick_image: Option<String>,
+    /// Docker image containing gnuplot.
+    #[arg(long, env = "REX_WORKFLOW_DOCKER_GNUPLOT_IMAGE")]
+    docker_gnuplot_image: Option<String>,
 
     /// Docker image containing Graphviz.
     #[arg(long, env = "REX_WORKFLOW_DOCKER_GRAPHVIZ_IMAGE")]
     docker_graphviz_image: Option<String>,
+
+    /// Docker image containing ImageMagick.
+    #[arg(long, env = "REX_WORKFLOW_DOCKER_IMAGEMAGICK_IMAGE")]
+    docker_imagemagick_image: Option<String>,
 
     /// Docker image containing QPDF.
     #[arg(long, env = "REX_WORKFLOW_DOCKER_QPDF_IMAGE")]
@@ -121,6 +125,7 @@ impl DockerImageOptions {
 
     fn has_image_override(&self) -> bool {
         self.docker_ffmpeg_image.is_some()
+            || self.docker_gnuplot_image.is_some()
             || self.docker_graphviz_image.is_some()
             || self.docker_imagemagick_image.is_some()
             || self.docker_qpdf_image.is_some()
@@ -131,6 +136,7 @@ impl DockerImageOptions {
         let mut images = local_tool_images();
         for (bundle, image) in [
             (ToolBundle::Ffmpeg, self.docker_ffmpeg_image),
+            (ToolBundle::Gnuplot, self.docker_gnuplot_image),
             (ToolBundle::Graphviz, self.docker_graphviz_image),
             (ToolBundle::ImageMagick, self.docker_imagemagick_image),
             (ToolBundle::Qpdf, self.docker_qpdf_image),
@@ -153,6 +159,7 @@ impl DockerImageOptions {
 fn local_tool_images() -> DockerToolImages {
     DockerToolImages::development(
         "rex-tool-ffmpeg:local",
+        "rex-tool-gnuplot:local",
         "rex-tool-graphviz:local",
         "rex-tool-imagemagick:local",
         "rex-tool-qpdf:local",
@@ -225,6 +232,10 @@ const TOOL_IMAGE_SOURCES: &[(&str, &[u8])] = &[
     (
         "ffmpeg/Dockerfile",
         include_bytes!("../../tool-images/ffmpeg/Dockerfile"),
+    ),
+    (
+        "gnuplot/Dockerfile",
+        include_bytes!("../../tool-images/gnuplot/Dockerfile"),
     ),
     (
         "graphviz/Dockerfile",
@@ -318,6 +329,7 @@ async fn inspect_tool_images(images: DockerToolImages) -> Result<(), Box<dyn std
 fn version_plan(bundle: ToolBundle) -> ToolExecutionPlan {
     let (program, arguments) = match bundle {
         ToolBundle::Ffmpeg => (ToolProgram::Ffmpeg, vec!["-version"]),
+        ToolBundle::Gnuplot => (ToolProgram::Gnuplot, vec!["--version"]),
         ToolBundle::Graphviz => (ToolProgram::Graphviz, vec!["-V"]),
         ToolBundle::ImageMagick => (ToolProgram::ImageMagick, vec!["-version"]),
         ToolBundle::Qpdf => (ToolProgram::Qpdf, vec!["--version"]),
@@ -578,6 +590,8 @@ mod tests {
             "docker",
             "--docker-ffmpeg-image",
             "registry.example/ffmpeg@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "--docker-gnuplot-image",
+            "registry.example/gnuplot@sha256:6666666666666666666666666666666666666666666666666666666666666666",
             "--docker-graphviz-image",
             "registry.example/graphviz@sha256:5555555555555555555555555555555555555555555555555555555555555555",
             "--docker-imagemagick-image",
@@ -592,6 +606,10 @@ mod tests {
         assert_eq!(
             images.image(ToolBundle::Ffmpeg),
             "registry.example/ffmpeg@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        );
+        assert_eq!(
+            images.image(ToolBundle::Gnuplot),
+            "registry.example/gnuplot@sha256:6666666666666666666666666666666666666666666666666666666666666666"
         );
         assert_eq!(
             images.image(ToolBundle::Graphviz),

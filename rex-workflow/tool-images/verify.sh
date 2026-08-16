@@ -72,6 +72,15 @@ run_tool graphviz dot \
 test -s "$workspace/outputs/workflow.svg"
 grep -q '<svg' "$workspace/outputs/workflow.svg"
 
+printf '%s\n' \
+    'set terminal svg size 128,96 font "DejaVu Sans,10"' \
+    'set output "/work/outputs/gnuplot.svg"' \
+    'plot x*x with lines title "Rex"' \
+    >"$workspace/inputs/gnuplot.gp"
+run_tool gnuplot gnuplot /work/inputs/gnuplot.gp
+test -s "$workspace/outputs/gnuplot.svg"
+grep -q '<svg' "$workspace/outputs/gnuplot.svg"
+
 run_tool imagemagick magick \
     -size 16x16 'canvas:#336699' /work/outputs/imagemagick.webp
 run_tool imagemagick magick \

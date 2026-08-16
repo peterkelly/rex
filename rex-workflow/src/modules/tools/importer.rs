@@ -1,5 +1,5 @@
 use crate::{
-    modules::tools::{ffmpeg, graphviz, imagemagick, poppler, qpdf},
+    modules::tools::{ffmpeg, gnuplot, graphviz, imagemagick, poppler, qpdf},
     state::State,
 };
 use futures::future::BoxFuture;
@@ -25,6 +25,7 @@ impl ToolRegistration {
 // Keep registrations sorted by module ID so ToolImporter can use binary search.
 static TOOL_REGISTRY: &[ToolRegistration] = &[
     ToolRegistration::new("tools.ffmpeg", ffmpeg::module),
+    ToolRegistration::new("tools.gnuplot", gnuplot::module),
     ToolRegistration::new("tools.graphviz", graphviz::module),
     ToolRegistration::new("tools.imagemagick", imagemagick::module),
     ToolRegistration::new("tools.poppler", poppler::module),
@@ -150,6 +151,12 @@ mod tests {
         assert!(graphviz_docs.contains("Semantic Graphviz rendering"));
         assert!(graphviz_docs.contains("private DOT source"));
 
+        let gnuplot = gnuplot::module().unwrap();
+        assert_documented(&gnuplot);
+        let gnuplot_docs = gnuplot.docs().unwrap();
+        assert!(gnuplot_docs.contains("Semantic, headless plotting"));
+        assert!(gnuplot_docs.contains("Raw gnuplot commands"));
+
         let imagemagick = imagemagick::module().unwrap();
         assert_documented(&imagemagick);
         let imagemagick_docs = imagemagick.docs().unwrap();
@@ -184,6 +191,19 @@ mod tests {
                 .variants
                 .iter()
                 .all(|variant| variant.name.as_str() != "CaptureDevice")
+        }));
+
+        let gnuplot = gnuplot::module().unwrap();
+        assert!(
+            gnuplot.exports().iter().all(|export| {
+                !matches!(export.name.as_str(), "run" | "script" | "render_table")
+            })
+        );
+        assert!(gnuplot.adts().iter().all(|staged| {
+            !matches!(
+                staged.adt.name.as_str(),
+                "Table" | "DataFile" | "Script" | "Command"
+            )
         }));
 
         let imagemagick = imagemagick::module().unwrap();
@@ -248,6 +268,7 @@ mod tests {
         let program = parse_rex(
             r#"
                 import tools.ffmpeg as F;
+                import tools.gnuplot as GP;
                 import tools.graphviz as G;
                 import tools.poppler as P;
                 import tools.qpdf as Q;
@@ -272,6 +293,9 @@ mod tests {
                     },
                     graph: F.FilterGraph = default,
                     graphviz_graph: G.Graph = G.Graph {},
+                    gnuplot_figure: GP.Figure = GP.Figure {},
+                    gnuplot_plot: GP.Plot2D = GP.Plot2D {},
+                    gnuplot_svg: GP.SvgOptions = GP.SvgOptions {},
                     graphviz_node_attributes: G.NodeAttributes = G.NodeAttributes {},
                     graphviz_edge_attributes: G.EdgeAttributes = G.EdgeAttributes {},
                     graphviz_format: G.RenderFormat = G.FormatSvg,

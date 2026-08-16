@@ -11,7 +11,7 @@ variable "IMAGE_TAG" {
 }
 
 group "default" {
-  targets = ["ffmpeg", "graphviz", "imagemagick", "qpdf", "poppler"]
+  targets = ["ffmpeg", "gnuplot", "graphviz", "imagemagick", "qpdf", "poppler"]
 }
 
 target "common" {
@@ -25,6 +25,13 @@ target "ffmpeg" {
   context    = "./ffmpeg"
   dockerfile = "Dockerfile"
   tags       = ["${IMAGE_PREFIX}-ffmpeg:${IMAGE_TAG}"]
+}
+
+target "gnuplot" {
+  inherits   = ["common"]
+  context    = "./gnuplot"
+  dockerfile = "Dockerfile"
+  tags       = ["${IMAGE_PREFIX}-gnuplot:${IMAGE_TAG}"]
 }
 
 target "graphviz" {

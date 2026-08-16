@@ -150,6 +150,7 @@ pub enum ToolProgram {
     PdfToText,
     PdfToCairo,
     PdfImages,
+    Gnuplot,
     Graphviz,
 }
 
@@ -157,6 +158,7 @@ pub enum ToolProgram {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ToolBundle {
     Ffmpeg,
+    Gnuplot,
     Graphviz,
     ImageMagick,
     Qpdf,
@@ -171,8 +173,9 @@ impl ToolProgram {
 }
 
 impl ToolBundle {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Ffmpeg,
+        Self::Gnuplot,
         Self::Graphviz,
         Self::ImageMagick,
         Self::Qpdf,
@@ -182,6 +185,7 @@ impl ToolBundle {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Ffmpeg => "ffmpeg",
+            Self::Gnuplot => "gnuplot",
             Self::Graphviz => "graphviz",
             Self::ImageMagick => "imagemagick",
             Self::Qpdf => "qpdf",

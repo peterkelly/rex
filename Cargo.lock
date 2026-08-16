@@ -1176,6 +1176,7 @@ name = "rex-workflow"
 version = "3.9.14"
 dependencies = [
  "blake3",
+ "chrono",
  "clap",
  "futures",
  "nix",
