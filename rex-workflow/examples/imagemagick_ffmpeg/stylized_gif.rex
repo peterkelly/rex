@@ -17,7 +17,7 @@
 // On success the ImageOutput contains one Image whose content field is the CAS
 // hash of the multi-frame GIF. Failures retain whether FFmpeg frame extraction or
 // ImageMagick rendering failed.
-import artifacts (Image, Media);
+import std.artifacts (Image, Media);
 import tools.ffmpeg as FF;
 import tools.imagemagick as IM;
 

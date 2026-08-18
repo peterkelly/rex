@@ -5,7 +5,7 @@ documentation so an agent can apply existing QPDF knowledge without translating 
 PDF abstraction. The module owns command ordering, temporary paths, and content-addressed storage.
 
 ```rex
-import artifacts (Pdf);
+import std.artifacts (Pdf);
 
 Pdf { content = hash }
 ```

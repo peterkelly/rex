@@ -329,7 +329,7 @@ async fn docker_materializes_pdf_inputs_for_qpdf_and_poppler() {
     let inputs = Some(json!({ "input": pdf_hash.to_hex().to_string() }));
 
     let qpdf_source = r#"
-        import artifacts (Pdf);
+        import std.artifacts (Pdf);
         import tools.qpdf as Q;
 
         fn main (input: Hash) -> Result u64 Q.QpdfError =
@@ -341,7 +341,7 @@ async fn docker_materializes_pdf_inputs_for_qpdf_and_poppler() {
     assert_eq!(ok_value(&qpdf), &json!(1));
 
     let poppler_source = r#"
-        import artifacts (Pdf);
+        import std.artifacts (Pdf);
         import tools.poppler as P;
 
         fn main (input: Hash) -> Result P.PdfInfo P.PopplerError =

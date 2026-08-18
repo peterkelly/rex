@@ -16,7 +16,7 @@
 //
 // On success the result is a list of Images in input order. Each Image's
 // content field is the CAS hash of one newly encoded WebP thumbnail.
-import artifacts (Image);
+import std.artifacts (Image);
 import tools.imagemagick as IM;
 
 fn to_image (hash: Hash) -> Image =

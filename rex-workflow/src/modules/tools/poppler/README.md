@@ -5,7 +5,7 @@ format, and option names follow the individual Poppler programs so agents can us
 `pdfinfo`, `pdftotext`, `pdftocairo`, and `pdfimages` documentation directly.
 
 ```rex
-import artifacts (Pdf);
+import std.artifacts (Pdf);
 
 Pdf { content = hash }
 ```
@@ -31,7 +31,8 @@ TIFF settings correspond to Poppler flags.
 
 `pdfimages` returns one CAS tree because a single invocation may create a heterogeneous collection
 of JPEG, JPEG 2000, JBIG2, CCITT, PNG, TIFF, and mask files. Preserving the filenames and extensions
-also preserves relationships between auxiliary files. Use `storage.get_tree` to inspect the tree.
+also preserves relationships between auxiliary files. Use `std.storage.get_tree` to inspect the
+tree.
 
 Invalid requests and expected nonzero exits are returned as `Err PopplerError`. Missing binaries,
 storage failures, and executor failures remain host evaluation errors.

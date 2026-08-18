@@ -16,7 +16,7 @@
 //
 // The copied video codec must be valid in MP4. On success the Media content
 // field is the CAS hash of the newly muxed, streaming-friendly MP4.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (video: Hash, audio: Hash) -> Result Media FF.FfmpegError =

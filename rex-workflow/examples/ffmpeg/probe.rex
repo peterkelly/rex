@@ -14,7 +14,7 @@
 //
 // On success the MediaInfo result contains optional container information plus
 // lists of stream, chapter, and program records. No new CAS content is produced.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (input: Hash) -> Result FF.MediaInfo FF.FfmpegError =

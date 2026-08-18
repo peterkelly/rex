@@ -15,7 +15,7 @@
 //
 // Each clip must supply video and audio streams. On success the Media content
 // field is the CAS hash of the combined MP4.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn to_media (hash: Hash) -> Media = Media { content = hash };

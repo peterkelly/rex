@@ -15,7 +15,7 @@
 // On success the result is a two-element list of EncodedMedia artifacts in the
 // declared order. Their Media content hashes identify the MP4 and WebM bytes in
 // the CAS, respectively.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (input: Hash) -> Result (List FF.MediaArtifact) FF.FfmpegError =

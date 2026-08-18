@@ -15,7 +15,7 @@ pub(crate) fn storage_module() -> Result<Module<State>, EngineError> {
 /// Hashes returned by `put_string`, `put_bytes`, and `put_tree` can be passed to the corresponding
 /// `get_*` functions and to workflow tools. Equal content produces the same hash. Trees map child
 /// names to immutable blob or tree hashes and can be traversed recursively with `get_tree`.
-#[rex::module(name = "storage")]
+#[rex::module(name = "std.storage")]
 mod storage_api {
     use super::*;
 
@@ -130,7 +130,7 @@ mod tests {
             .unwrap();
 
         let source = r#"
-            import storage (*);
+            import std.storage (*);
 
             fn main (root: Hash) -> Dict Entry =
                 get_tree root;
@@ -184,7 +184,7 @@ mod tests {
     #[tokio::test]
     async fn store_put_functions() {
         let source = r#"
-            import storage(*);
+            import std.storage(*);
 
             let
                 text_hash = put_string "hello",

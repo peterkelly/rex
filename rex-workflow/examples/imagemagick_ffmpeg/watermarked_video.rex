@@ -20,7 +20,7 @@
 // On success the one-element MediaArtifact list contains the streaming-friendly
 // MP4 with composited video and encoded audio; its Media content field is the CAS
 // hash. Image output-shape errors and failures from either tool use WorkflowError.
-import artifacts (Image, Media);
+import std.artifacts (Image, Media);
 import tools.ffmpeg as FF;
 import tools.imagemagick as IM;
 import tools.imagemagick (SingleImage, MultipleImages);

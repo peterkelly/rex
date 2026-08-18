@@ -14,7 +14,7 @@
 //
 // On success the result is a chronological list of Media values. Each content
 // field is the CAS hash of one independently stored MKV segment.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (input: Hash) -> Result (List Media) FF.FfmpegError =

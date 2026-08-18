@@ -13,7 +13,7 @@
 //
 // On success the Media result's content field is the CAS hash of the encoded
 // VP9/Opus WebM file.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (input: Hash) -> Result Media FF.FfmpegError =

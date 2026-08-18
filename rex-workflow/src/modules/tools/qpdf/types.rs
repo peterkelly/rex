@@ -1,4 +1,4 @@
-pub use crate::modules::artifacts::{JsonFile, Pdf};
+pub use crate::modules::std::artifacts::{JsonFile, Pdf};
 use rex::Rex;
 
 /// One QPDF-produced PDF plus any recoverable warnings reported while writing it.

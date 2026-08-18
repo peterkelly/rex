@@ -19,7 +19,7 @@
 //   cargo run -p rex-workflow -- --store-path ./store store export \
 //     <tree-hash> output-directory
 //
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (input: Hash) -> Result FF.MediaPackage FF.FfmpegError =

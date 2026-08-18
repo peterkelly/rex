@@ -20,7 +20,7 @@
 // On success the ImageOutput contains one Image whose content field is the CAS
 // hash of the JPEG contact sheet. FFmpeg and ImageMagick failures are wrapped in
 // the workflow's FfmpegFailed and ImageMagickFailed error constructors.
-import artifacts (Image, Media);
+import std.artifacts (Image, Media);
 import tools.ffmpeg as FF;
 import tools.imagemagick as IM;
 

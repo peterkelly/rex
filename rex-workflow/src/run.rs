@@ -1,5 +1,8 @@
 use crate::{
-    modules::{artifacts, storage::storage_module, tools},
+    modules::{
+        std::{artifacts, storage::storage_module},
+        tools,
+    },
     state::State,
 };
 use rex::{
@@ -180,7 +183,7 @@ mod tests {
     #[tokio::test]
     async fn shared_artifacts_construct_and_roundtrip_as_json() {
         let source = r#"
-            import artifacts (Image, JsonFile, Media, Pdf);
+            import std.artifacts (Image, JsonFile, Media, Pdf);
 
             fn main (content: Hash) -> (Pdf, Image, Media, JsonFile) =
                 (
@@ -212,7 +215,7 @@ mod tests {
     #[tokio::test]
     async fn shared_pdf_composes_qpdf_and_poppler() {
         let source = r#"
-            import artifacts (Pdf);
+            import std.artifacts (Pdf);
             import tools.poppler as P;
             import tools.qpdf as Q;
 

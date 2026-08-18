@@ -7,7 +7,7 @@ use rex::{
 
 use crate::state::State;
 
-const MODULE_NAME: &str = "artifacts";
+const MODULE_NAME: &str = "std.artifacts";
 
 macro_rules! artifact_type {
     ($name:ident, $docs:literal) => {
@@ -23,9 +23,9 @@ macro_rules! artifact_type {
                 Type::user_con(virtual_export_name(MODULE_NAME, stringify!($name)), 0)
             }
 
-            // The declaration is owned and eagerly installed by `artifacts::module`. Leaving the
-            // default family collection empty prevents a tool signature from recreating this ADT
-            // as a tool-local type.
+            // The declaration is owned and eagerly installed by `std::artifacts::module`. Leaving
+            // the default family collection empty prevents a tool signature from recreating this
+            // ADT as a tool-local type.
         }
 
         impl RexAdt for $name {

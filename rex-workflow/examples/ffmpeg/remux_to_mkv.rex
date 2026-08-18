@@ -14,7 +14,7 @@
 //     rex-workflow/examples/ffmpeg/remux_to_mkv.rex --inputs inputs.json
 //
 // On success the Media result's content field is the CAS hash of the remuxed MKV.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (input: Hash) -> Result Media FF.FfmpegError =

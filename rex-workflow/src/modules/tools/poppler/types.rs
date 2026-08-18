@@ -1,4 +1,4 @@
-pub use crate::modules::artifacts::Pdf;
+pub use crate::modules::std::artifacts::Pdf;
 use blake3::Hash;
 use rex::Rex;
 use std::collections::BTreeMap;

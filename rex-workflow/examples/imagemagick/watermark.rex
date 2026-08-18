@@ -18,7 +18,7 @@
 //
 // On success the ImageOutput contains a single Image whose content field is the
 // CAS hash of the watermarked PNG.
-import artifacts (Image);
+import std.artifacts (Image);
 import tools.imagemagick as IM;
 
 fn main (input: Hash, font: Hash) -> Result IM.ImageOutput IM.ImageMagickError =

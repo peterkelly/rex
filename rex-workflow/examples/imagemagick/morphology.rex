@@ -15,7 +15,7 @@
 //
 // On success the ImageOutput contains a single Image whose content field is the
 // CAS hash of the morphologically cleaned PNG mask.
-import artifacts (Image);
+import std.artifacts (Image);
 import tools.imagemagick as IM;
 
 fn main (input: Hash) -> Result IM.ImageOutput IM.ImageMagickError =

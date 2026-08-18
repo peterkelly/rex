@@ -1,6 +1,6 @@
 // Render every selected PDF page as an ordered list of 144-DPI PNG blobs.
 // Input JSON: {"input":"<pdf-hash>"}
-import artifacts (Pdf);
+import std.artifacts (Pdf);
 import tools.poppler as P;
 
 fn main (input: Hash) -> Result P.CairoOutput P.PopplerError =

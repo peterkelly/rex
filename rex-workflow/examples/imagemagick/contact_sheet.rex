@@ -17,7 +17,7 @@
 //
 // On success the ImageOutput contains a single Image whose content field is the
 // CAS hash of the complete JPEG contact sheet.
-import artifacts (Image);
+import std.artifacts (Image);
 import tools.imagemagick as IM;
 
 fn to_image (hash: Hash) -> Image =

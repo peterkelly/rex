@@ -11,7 +11,7 @@ cargo run -p rex-workflow -- --store-path ./store run \
 
 For one-input examples use `{"input":"<hash>"}`. The merge example expects
 `{"first":"<hash>","second":"<hash>"}`. Generated PDFs and JSON remain in the CAS; use the
-workflow store commands or `storage` module to retrieve their hashes.
+workflow store commands or `std.storage` module to retrieve their hashes.
 
 - `check.rex` checks PDF structure without rewriting it.
 - `linearize.rex` performs a web-optimized deterministic rewrite.

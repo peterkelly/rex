@@ -1,6 +1,6 @@
 // Rewrite a PDF for fast web view while making generated IDs reproducible.
 // Input JSON: {"input":"<pdf-hash>"}
-import artifacts (Pdf);
+import std.artifacts (Pdf);
 import tools.qpdf as Q;
 
 fn main (input: Hash) -> Result Q.PdfOutput Q.QpdfError =

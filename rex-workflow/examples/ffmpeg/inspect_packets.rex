@@ -15,7 +15,7 @@
 // On success the result is a packet-ordered list of InspectionRecord values.
 // Each record's fields dictionary contains the values FFprobe reported; no new
 // CAS media object is produced.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (input: Hash) -> Result (List FF.InspectionRecord) FF.FfmpegError =

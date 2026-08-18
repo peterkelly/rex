@@ -16,7 +16,7 @@
 //
 // On success the one-element artifact list contains EncodedMedia whose Media
 // content field is the composited MP4's CAS hash. No audio stream is included.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (background: Hash, overlay: Hash) -> Result (List FF.MediaArtifact) FF.FfmpegError =

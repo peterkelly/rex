@@ -14,11 +14,11 @@ file-backed tables.
 - A `Plot3D` owns the corresponding three-dimensional settings and supports point clouds,
   segmented paths, wireframes, colored surfaces, contour lines, and filled contours.
 - Numeric samples, categories, grids, errors, and labels are values inside their series. The API
-  deliberately has no shared `artifacts.Table` input at this stage.
+  deliberately has no shared `std.artifacts.Table` input at this stage.
 - Numeric and timestamped x data are distinct constructors, so their domains cannot be mixed
   accidentally. Disconnected paths and bands are represented explicitly as lists of segments.
 - Output options describe the artifact, not gnuplot terminal syntax. Rendering returns the shared
-  `artifacts.Image` or `artifacts.Pdf` type.
+  `std.artifacts.Image` or `std.artifacts.Pdf` type.
 
 Defaults are registered for figure, panel-setting, series-setting, and output-option records. Rex
 code can therefore specify only fields that differ from the semantic defaults. Color ranges are

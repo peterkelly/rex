@@ -13,7 +13,7 @@
 //
 // On success the result is a time-ordered list of Media values, one for each
 // sampled frame. Every content field is the CAS hash of an individual PNG.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (input: Hash) -> Result (List Media) FF.FfmpegError =

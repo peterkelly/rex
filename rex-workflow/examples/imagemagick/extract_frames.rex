@@ -14,7 +14,7 @@
 //
 // On success the ImageOutput is MultipleImages. Its ordered image list has one
 // entry per decoded frame, and each content field is that PNG frame's CAS hash.
-import artifacts (Image);
+import std.artifacts (Image);
 import tools.imagemagick as IM;
 
 fn main (animation: Hash) -> Result IM.ImageOutput IM.ImageMagickError =

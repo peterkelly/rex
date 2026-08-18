@@ -14,7 +14,7 @@
 //     rex-workflow/examples/ffmpeg/resize_video.rex --inputs inputs.json
 //
 // On success the Media result's content field is the resized MP4's CAS hash.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (input: Hash) -> Result Media FF.FfmpegError =

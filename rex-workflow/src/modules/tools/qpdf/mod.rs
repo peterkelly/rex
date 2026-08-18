@@ -15,8 +15,8 @@ pub fn module() -> Result<Module<State>, EngineError> {
 /// QPDF structural transformations and inspection for content-addressed PDF workflows.
 ///
 /// Function and option names intentionally follow QPDF's command-line documentation. PDF inputs,
-/// JSON reports, and generated PDFs use shared `artifacts` types backed by content hashes rather
-/// than host paths.
+/// JSON reports, and generated PDFs use shared `std.artifacts` types backed by content hashes
+/// rather than host paths.
 /// Exit status 3 is preserved as a successful result with `warnings`; invalid requests and fatal
 /// QPDF failures are returned as `Err QpdfError`. The available behavior depends on the installed
 /// `qpdf` executable.

@@ -18,7 +18,7 @@
 // On success the one-element MediaArtifact list contains the generated five-second
 // MP4, whose Media content field is its CAS hash. The workflow reports ImageMagick
 // and FFmpeg failures distinctly and rejects a non-single ImageMagick output.
-import artifacts (Image, Media);
+import std.artifacts (Image, Media);
 import tools.ffmpeg as FF;
 import tools.imagemagick as IM;
 import tools.imagemagick (SingleImage, MultipleImages);

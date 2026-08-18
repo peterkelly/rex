@@ -1,4 +1,4 @@
-pub use crate::modules::artifacts::{Image, Pdf};
+pub use crate::modules::std::artifacts::{Image, Pdf};
 use chrono::{DateTime, Utc};
 use rex::Rex;
 

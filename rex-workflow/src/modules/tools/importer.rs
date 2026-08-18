@@ -72,7 +72,7 @@ pub(crate) fn importer() -> Arc<dyn Importer<State>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{modules::artifacts, storage::store::Store};
+    use crate::{modules::std::artifacts, storage::store::Store};
     use rex::{
         engine::{Builder, CompileOptions, ModuleId, Value},
         parser::parse as parse_rex,
@@ -143,7 +143,7 @@ mod tests {
         assert_documented(&ffmpeg);
         let ffmpeg_docs = ffmpeg.docs().unwrap();
         assert!(ffmpeg_docs.contains("Headless FFmpeg and FFprobe tools"));
-        assert!(ffmpeg_docs.contains("shared `artifacts.Media` type"));
+        assert!(ffmpeg_docs.contains("shared `std.artifacts.Media` type"));
 
         let graphviz = graphviz::module().unwrap();
         assert_documented(&graphviz);

@@ -15,7 +15,7 @@ graphs are represented directly as Rex values.
 An encoded media file is a shared CAS-backed artifact:
 
 ```rex
-import artifacts (Media);
+import std.artifacts (Media);
 
 Media { content = hash }
 ```

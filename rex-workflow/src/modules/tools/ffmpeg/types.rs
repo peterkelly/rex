@@ -1,4 +1,4 @@
-pub use crate::modules::artifacts::Media;
+pub use crate::modules::std::artifacts::Media;
 use blake3::Hash;
 use rex::Rex;
 use std::collections::BTreeMap;

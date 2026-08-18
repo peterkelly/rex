@@ -15,5 +15,5 @@ cargo run -p rex-workflow -- --store-path ./store run \
 - `extract_images.rex` preserves extracted native images in a CAS tree.
 - `version.rex` reports the Poppler version selected through `PATH`.
 
-Use `storage.get_string` for text output, `storage.get_bytes` for rendered files, or
-`storage.get_tree` to inspect extracted images in a larger workflow.
+Use `std.storage.get_string` for text output, `std.storage.get_bytes` for rendered files, or
+`std.storage.get_tree` to inspect extracted images in a larger workflow.

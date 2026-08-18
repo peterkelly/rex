@@ -16,7 +16,7 @@
 //
 // On success the Media result's content field is the CAS hash of the subtitled
 // MP4. The subtitle text is part of the video pixels, not a selectable track.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (video: Hash, subtitles: Hash) -> Result Media FF.FfmpegError =

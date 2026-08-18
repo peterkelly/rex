@@ -181,10 +181,10 @@ built rigorously instead of inferred from mutable paths.
 
 ### Store operations available to Rex programs
 
-The built-in `storage` module exposes immutable data directly:
+The built-in `std.storage` module exposes immutable data directly:
 
 ```rex
-import storage (*);
+import std.storage (*);
 
 let
     report = put_string "analysis complete",
@@ -195,12 +195,12 @@ in
 ```
 
 Programs can use `put_string`, `put_bytes`, `put_tree`, `get_string`,
-`get_bytes`, and `get_tree`. The shared `artifacts` module wraps hashes with
+`get_bytes`, and `get_tree`. The shared `std.artifacts` module wraps hashes with
 semantic meaning through `Media`, `Image`, `Pdf`, and `JsonFile`; tool-specific
 result types add operation metadata where needed.
 
 ```rex
-import artifacts (Pdf);
+import std.artifacts (Pdf);
 
 fn as_pdf (content: Hash) -> Pdf = Pdf { content = content };
 ```

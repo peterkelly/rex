@@ -22,5 +22,5 @@ cargo run -p rex-workflow -- --store-path ./store run \
   rex-workflow/examples/gnuplot/curves.rex
 ```
 
-Replace the final path with any other example. The result is an `artifacts.Image` whose `content`
+Replace the final path with any other example. The result is a `std.artifacts.Image` whose `content`
 field is the CAS hash of the generated SVG.

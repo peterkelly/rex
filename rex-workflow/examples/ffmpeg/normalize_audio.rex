@@ -14,7 +14,7 @@
 //
 // On success the Media result's content field is the CAS hash of the normalized
 // M4A audio file.
-import artifacts (Media);
+import std.artifacts (Media);
 import tools.ffmpeg as FF;
 
 fn main (input: Hash) -> Result Media FF.FfmpegError =

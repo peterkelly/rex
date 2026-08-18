@@ -5,7 +5,7 @@ generated sources, transcoding, filtering, probing, stream inspection, muxing, c
 image extraction, segmented output, and HLS and DASH packages.
 
 Most examples accept one or more `Hash` values through `main` and wrap them as shared `Media`
-values from the `artifacts` module.
+values from the `std.artifacts` module.
 The hashes must identify blobs in workflow's content-addressable store. HLS and DASH functions
 instead return `FF.MediaPackage`, whose hash identifies a CAS tree containing the manifest and all
 segments.

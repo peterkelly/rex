@@ -20,7 +20,7 @@
 // On success the ImageOutput contains one Image whose content field is the CAS
 // hash of the finished PNG thumbnail. Either tool's expected process failure is
 // preserved inside the corresponding workflow error constructor.
-import artifacts (Image, Media);
+import std.artifacts (Image, Media);
 import tools.ffmpeg as FF;
 import tools.imagemagick as IM;
 
