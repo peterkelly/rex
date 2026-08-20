@@ -207,7 +207,7 @@ fn unexpected(message: impl Into<String>) -> GnuplotError {
 mod tests {
     use super::api::*;
     use super::*;
-    use crate::storage::store::Store;
+    use rex::storage::Store;
 
     fn simple_figure() -> Figure {
         Figure {

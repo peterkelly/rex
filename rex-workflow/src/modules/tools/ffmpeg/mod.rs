@@ -815,7 +815,7 @@ fn unexpected(message: impl Into<String>) -> FfmpegError {
 mod tests {
     use super::api::*;
     use super::*;
-    use crate::storage::store::Store;
+    use rex::storage::Store;
 
     #[test]
     fn ffprobe_json_is_decoded_semantically() {

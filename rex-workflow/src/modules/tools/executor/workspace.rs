@@ -3,10 +3,11 @@ use super::{
     OutputKind::{Directory, Numbered, Single, Tree},
     PathSlot, ToolArgument, ToolExecutionError,
 };
-use crate::storage::{store::Store, transfer};
 use blake3::Hash;
+use rex::storage::{Store, export_blob, export_tree, import_path};
 use std::{
     collections::BTreeMap,
+    error::Error,
     ffi::OsString,
     io::{self, Read},
     path::{Path, PathBuf},
@@ -241,12 +242,12 @@ async fn materialize_inputs(
         };
         let path = workspace_root.join(&relative_path);
         match input.kind {
-            InputKind::Blob => transfer::export_blob(store, input.hash, &path).await,
+            InputKind::Blob => export_blob(store, input.hash, &path).await,
             InputKind::Tree => {
                 std::fs::create_dir_all(&path).map_err(|error| {
                     ToolExecutionError::new(format!("create input directory: {error}"))
                 })?;
-                transfer::export_tree(store, input.hash, &path).await
+                export_tree(store, input.hash, &path).await
             }
         }
         .map_err(|error| ToolExecutionError::new(format!("materialize input {id}: {error}")))?;
@@ -353,7 +354,7 @@ async fn import_outputs(
             },
             Numbered => {
                 let prefix = format!("output-{id:04}-");
-                let mut files = transfer::regular_files(path.parent().ok_or_else(|| {
+                let mut files = regular_files(path.parent().ok_or_else(|| {
                     ToolExecutionError::new("numbered output has no parent directory")
                 })?)
                 .map_err(|error| ToolExecutionError::new(format!("scan output: {error}")))?;
@@ -365,10 +366,10 @@ async fn import_outputs(
                 });
                 files
             }
-            Directory => transfer::regular_files(path)
+            Directory => regular_files(path)
                 .map_err(|error| ToolExecutionError::new(format!("scan output: {error}")))?,
             Tree => {
-                let (_, hash) = transfer::import_path(store, path).await.map_err(|error| {
+                let (_, hash) = import_path(store, path).await.map_err(|error| {
                     ToolExecutionError::new(format!("import output tree: {error}"))
                 })?;
                 imported.insert(id, vec![hash]);
@@ -398,6 +399,54 @@ async fn import_outputs(
         imported.insert(id, hashes);
     }
     Ok(imported)
+}
+
+fn regular_files(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error + Send + Sync>> {
+    let mut files = Vec::new();
+    collect_regular_files(root, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn collect_regular_files(
+    path: &Path,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(format!("tool output contains a symbolic link: `{}`", path.display()).into());
+    }
+    if !file_type.is_dir() {
+        return Err(format!("tool output path is not a directory: `{}`", path.display()).into());
+    }
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            return Err(format!(
+                "tool output contains a symbolic link: `{}`",
+                entry.path().display()
+            )
+            .into());
+        }
+        if file_type.is_dir() {
+            collect_regular_files(&entry.path(), files)?;
+        } else if file_type.is_file() {
+            files.push(entry.path());
+        } else {
+            return Err(format!(
+                "tool output contains a special file: `{}`",
+                entry.path().display()
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 fn clean_extension(extension: &str) -> String {

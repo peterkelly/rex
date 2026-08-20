@@ -11,6 +11,7 @@ version.workspace = true
 [dependencies]
 blake3 = { workspace = true }
 clap = { workspace = true }
+object_store = { workspace = true }
 rex-ast = { path = "../rex-ast", version = "3.9.14" }
 rex-engine = { path = "../rex-engine", version = "3.9.14" }
 rex-parser = { path = "../rex-parser", version = "3.9.14" }
@@ -19,6 +20,7 @@ rex-typesystem = { path = "../rex-typesystem", version = "3.9.14" }
 rex-util = { path = "../rex-util", version = "3.9.14" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = "3.27.0"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 uuid = { workspace = true }
 

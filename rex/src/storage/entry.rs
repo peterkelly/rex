@@ -1,5 +1,5 @@
+use crate::Rex;
 use blake3::Hash;
-use rex::Rex;
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{Error as DeserializeError, MapAccess, Visitor},

@@ -1,4 +1,4 @@
-use crate::storage::{
+use super::{
     entry::{Entry, EntryKind},
     filesystem::FilesystemStoreImpl,
     memory::MemoryStoreImpl,
@@ -16,17 +16,30 @@ use std::{
     sync::Arc,
 };
 
+/// Coarse classification of failures reported by a storage backend.
 pub enum StoreError {
+    /// The requested object does not exist.
     NotFound,
+    /// A backend-specific failure with a human-readable description.
     Other(String),
 }
 
+/// Boxed asynchronous result returned by [`StoreImpl`] operations.
 pub type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 
+/// Backend interface used by [`Store`].
 pub trait StoreImpl: Send + Sync {
+    /// Retrieves the bytes stored under `hash`.
     fn get(&self, hash: Hash) -> StoreFuture<'_, Vec<u8>>;
-    fn size(&self, hash: Hash) -> StoreFuture<'_, u64>;
+    /// Stores `data` and returns its content hash.
     fn put<'a>(&'a self, data: &'a [u8]) -> StoreFuture<'a, Hash>;
+    /// Returns the byte length of the object stored under `hash`.
+    ///
+    /// The default implementation retrieves the object and measures its data.
+    /// Backends may override this method with a metadata-only operation.
+    fn size(&self, hash: Hash) -> StoreFuture<'_, u64> {
+        Box::pin(async move { Ok(self.get(hash).await?.len() as u64) })
+    }
 }
 
 /// Content-addressable storage for Rex
@@ -41,7 +54,7 @@ pub trait StoreImpl: Send + Sync {
 /// starting at a given root hash, using get_tree to retrieve its contents, and recursing
 /// through child entries whose kind is Tree.
 ///
-/// The primary reason for using content-addressible storage is to give Rex a way of reading
+/// The primary reason for using content-addressable storage is to give Rex a way of reading
 /// and writing files that does not involve mutation. Calling one of the put methods does not
 /// have any side effects if an object with the same content already exists, because the result
 /// is a hash, and that's always going to be the same for a given piece of content.
@@ -56,15 +69,23 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn new_with_filesystem(path: PathBuf) -> Store {
-        Store::from_impl(FilesystemStoreImpl::new(path))
-    }
-
+    /// Creates an empty store that keeps all objects in memory.
+    ///
+    /// Clones of the returned store share the same in-memory objects.
     pub fn new_in_memory() -> Store {
         Store::from_impl(MemoryStoreImpl::new())
     }
 
-    /// Create a store backed by an [`object_store::ObjectStore`].
+    /// Creates a store backed by files in `path`.
+    ///
+    /// Each object is stored in a file named by its hexadecimal BLAKE3 hash.
+    /// This constructor does not create `path`; the directory must already
+    /// exist before objects can be written.
+    pub fn new_with_filesystem(path: PathBuf) -> Store {
+        Store::from_impl(FilesystemStoreImpl::new(path))
+    }
+
+    /// Creates a store backed by an [`object_store::ObjectStore`].
     ///
     /// `prefix` is concatenated directly with each object's hexadecimal hash to
     /// form its location. For example, `"rex/objects/"` stores an object at
@@ -76,12 +97,21 @@ impl Store {
         Store::from_impl(ObjectStoreImpl::new(store, prefix))
     }
 
+    /// Creates a store backed by a custom [`StoreImpl`].
+    ///
+    /// Reads through the resulting store verify that the backend returns bytes
+    /// matching the requested hash.
     pub fn from_impl(store: impl StoreImpl + 'static) -> Store {
         Store {
             inner: Arc::new(store),
         }
     }
 
+    /// Retrieves the object identified by `hash`.
+    ///
+    /// The returned bytes are hashed before being returned. A backend response
+    /// whose content does not match `hash` produces an
+    /// [`ErrorKind::InvalidData`] error.
     pub async fn get(&self, hash: Hash) -> Result<Vec<u8>, Error> {
         let data = self.inner.get(hash).await?;
         let data_hash = blake3::hash(&data);
@@ -94,14 +124,24 @@ impl Store {
         Ok(data)
     }
 
+    /// Returns the stored byte length of the object identified by `hash`.
     pub async fn size(&self, hash: Hash) -> Result<u64, Error> {
         self.inner.size(hash).await
     }
 
+    /// Stores `data` and returns its BLAKE3 content hash.
+    ///
+    /// Storing the same bytes more than once returns the same hash and does not
+    /// create a distinct content-addressed object.
     pub async fn put(&self, data: impl AsRef<[u8]>) -> Result<Hash, Error> {
         self.inner.put(data.as_ref()).await
     }
 
+    /// Resolves a slash-separated path beginning with a root tree hash.
+    ///
+    /// For example, `<root-hash>/images/result.png` traverses two tree entries
+    /// and returns the hash stored for `result.png`. A malformed root hash or a
+    /// missing path component produces an [`ErrorKind::NotFound`] error.
     pub async fn resolve_path(&self, path: impl AsRef<str>) -> Result<Hash, Error> {
         let components: Vec<String> = path.as_ref().split('/').map(|x| x.to_string()).collect();
 
@@ -130,6 +170,11 @@ impl Store {
         Ok(hash)
     }
 
+    /// Retrieves and decodes the directory tree identified by `hash`.
+    ///
+    /// The map contains each immediate child's name and [`Entry`] metadata. An
+    /// object that is not a valid encoded tree produces an
+    /// [`ErrorKind::NotADirectory`] error.
     pub async fn get_tree(&self, hash: Hash) -> Result<BTreeMap<String, Entry>, Error> {
         let data = self.get(hash).await?;
         match serde_json::from_slice::<BTreeMap<String, Entry>>(&data) {
@@ -144,6 +189,11 @@ impl Store {
         }
     }
 
+    /// Encodes and stores a directory tree, returning its content hash.
+    ///
+    /// Each map value specifies the child's [`EntryKind`] and existing object
+    /// hash. The method looks up every child to record its size; tree sizes
+    /// include their encoded tree object and descendants.
     pub async fn put_tree(
         &self,
         creations: BTreeMap<String, (EntryKind, Hash)>,

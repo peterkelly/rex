@@ -139,7 +139,7 @@ fn unexpected(message: impl Into<String>) -> GraphvizError {
 mod tests {
     use super::api::*;
     use super::*;
-    use crate::storage::store::Store;
+    use rex::storage::Store;
     use std::collections::BTreeMap;
 
     fn simple_graph() -> Graph {

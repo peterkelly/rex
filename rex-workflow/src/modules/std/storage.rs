@@ -1,9 +1,7 @@
-use crate::{
-    state::State,
-    storage::entry::{Entry, EntryKind},
-};
+use crate::state::State;
 use blake3::Hash;
 use rex::engine::{EngineError, Module};
+use rex::storage::{Entry, EntryKind};
 use std::collections::BTreeMap;
 
 pub(crate) fn storage_module() -> Result<Module<State>, EngineError> {
@@ -104,12 +102,9 @@ mod storage_api {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        run::eval_rex,
-        state::State,
-        storage::{entry::EntryKind, store::Store},
-    };
+    use crate::{run::eval_rex, state::State};
     use blake3::Hash;
+    use rex::storage::{EntryKind, Store};
     use serde_json::{Value, json};
     use std::{collections::BTreeMap, str::FromStr};
 

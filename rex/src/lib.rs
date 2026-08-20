@@ -56,6 +56,8 @@
 //! register host modules, set parallelism policy, inspect type information,
 //! and handle compile and evaluation errors separately.
 
+extern crate self as rex;
+
 /// Rex abstract syntax tree types produced by the parser.
 pub mod ast;
 
@@ -67,6 +69,9 @@ pub mod json;
 
 /// Source parser entry points and parse diagnostics.
 pub mod parser;
+
+/// Content-addressed storage and filesystem transfer utilities.
+pub mod storage;
 
 /// Hindley-Milner type inference, type representations, ADTs, and type classes.
 pub mod typesystem;

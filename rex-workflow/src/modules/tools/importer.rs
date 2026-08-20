@@ -72,7 +72,8 @@ pub(crate) fn importer() -> Arc<dyn Importer<State>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{modules::std::artifacts, storage::store::Store};
+    use crate::modules::std::artifacts;
+    use rex::storage::Store;
     use rex::{
         engine::{Builder, CompileOptions, ModuleId, Value},
         parser::parse as parse_rex,

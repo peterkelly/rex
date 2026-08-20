@@ -105,7 +105,7 @@ pub fn render_result_json(value: &serde_json::Value, raw_output: bool) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::store::Store;
+    use rex::storage::Store;
     use serde_json::json;
 
     #[tokio::test]

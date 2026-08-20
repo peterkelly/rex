@@ -1,4 +1,5 @@
 use blake3::Hash;
+use rex::storage::Store;
 use rex_workflow::{
     modules::tools::executor::{
         CasInput, DockerToolExecutor, DockerToolImages, ExpectedOutput, InputKind, OutputKind,
@@ -6,7 +7,6 @@ use rex_workflow::{
     },
     run::eval_rex,
     state::State,
-    storage::store::Store,
 };
 use serde_json::{Value, json};
 use std::{

@@ -1014,6 +1014,7 @@ version = "3.9.14"
 dependencies = [
  "blake3",
  "clap",
+ "object_store",
  "rex-ast",
  "rex-engine",
  "rex-parser",
@@ -1022,6 +1023,7 @@ dependencies = [
  "rex-util",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
 ]
@@ -1180,7 +1182,6 @@ dependencies = [
  "clap",
  "futures",
  "nix",
- "object_store",
  "rex",
  "serde",
  "serde_json",

@@ -119,8 +119,9 @@ eventually needs an external templating language.
 ## Content-addressable data
 
 Scientific workflows are easier to reason about when artifacts are values,
-not mutable locations. `rex-workflow` includes a content-addressable store in
-which every object is named by the BLAKE3 hash of its bytes.
+not mutable locations. `rex::storage` provides the content-addressable store
+used by `rex-workflow`, in which every object is named by the BLAKE3 hash of
+its bytes.
 
 The data model has two object kinds:
 
@@ -490,8 +491,8 @@ choose its store and executor, provide JSON inputs, and evaluate Rex source:
 use rex_workflow::{
     run::eval_rex,
     state::State,
-    storage::store::Store,
 };
+use rex::storage::Store;
 
 let store = Store::new_with_filesystem("./store".into());
 let state = State::local(store);
@@ -582,9 +583,11 @@ reference](docs/src/LANGUAGE.md), [semantics](docs/src/SPEC.md), and
 
 This repository is a Cargo workspace. Its main crates are:
 
-- `rex-workflow`: content-addressable workflow runtime, typed tool modules,
-  local/Docker executors, and the workflow `rex` CLI.
-- `rex`: entry point for embedding the core language in Rust applications.
+- `rex-workflow`: workflow runtime, typed tool modules, local/Docker executors,
+  and the workflow `rex` CLI.
+- `rex`: entry point for embedding the core language in Rust applications,
+  including content-addressable storage with memory, filesystem, and
+  `object_store` backends.
 - `rex-parser`: parser producing a `CompilationUnit { decls, body }`.
 - `rex-ast`: shared syntax tree nodes, symbols, and spans.
 - `rex-typesystem`: Hindley–Milner inference, ADTs, higher-kinded types, and

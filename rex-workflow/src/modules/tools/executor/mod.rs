@@ -3,8 +3,8 @@ mod docker;
 mod local;
 mod workspace;
 
-use crate::storage::store::Store;
 use blake3::Hash;
+use rex::storage::Store;
 use std::{collections::BTreeMap, error::Error, fmt, future::Future, pin::Pin};
 
 pub use docker::{DockerToolExecutor, DockerToolImages, docker_executor};

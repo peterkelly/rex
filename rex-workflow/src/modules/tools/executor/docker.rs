@@ -2,7 +2,7 @@ use super::{
     DEFAULT_MAX_OUTPUT_BYTES, ToolBundle, ToolExecution, ToolExecutionError, ToolExecutionPlan,
     ToolExecutor, ToolFuture, catalog, workspace::ToolWorkspace,
 };
-use crate::storage::store::Store;
+use rex::storage::Store;
 use serde::Deserialize;
 use std::{
     ffi::{OsStr, OsString},

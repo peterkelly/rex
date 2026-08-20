@@ -1,5 +1,6 @@
 use blake3::Hash;
 use clap::{Args as ClapArgs, CommandFactory, Parser, ValueEnum};
+use rex::storage::{EntryKind, Store, export_blob, export_tree, import_path};
 use rex_workflow::{
     config::Config,
     modules::tools::executor::{
@@ -8,7 +9,6 @@ use rex_workflow::{
     },
     run::{eval_rex, render_result_json},
     state::State,
-    storage::{entry::EntryKind, store::Store, transfer},
 };
 use std::{
     ffi::OsStr,
@@ -456,16 +456,16 @@ impl StoreSubCommand {
                 println!("{}", hash);
             }
             StoreSubCommand::Import { path } => {
-                let (_kind, hash) = transfer::import_path(&store, path.as_path())
+                let (_kind, hash) = import_path(&store, path.as_path())
                     .await
                     .map_err(|error| error.to_string())?;
                 println!("{}", hash);
             }
             StoreSubCommand::Export { hash, path } => {
                 let result = match store.get_tree(hash).await {
-                    Ok(_) => transfer::export_tree(&store, hash, &path).await,
+                    Ok(_) => export_tree(&store, hash, &path).await,
                     Err(error) if error.kind() == ErrorKind::NotADirectory => {
-                        transfer::export_blob(&store, hash, &path).await
+                        export_blob(&store, hash, &path).await
                     }
                     Err(error) => return Err(Box::new(error)),
                 };

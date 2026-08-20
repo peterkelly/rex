@@ -1,4 +1,4 @@
-use crate::storage::store::{StoreFuture, StoreImpl};
+use super::store::{StoreFuture, StoreImpl};
 use blake3::Hash;
 use std::{
     io::{Error, ErrorKind, Write},
@@ -32,15 +32,6 @@ impl StoreImpl for FilesystemStoreImpl {
         })
     }
 
-    fn size(&self, hash: Hash) -> StoreFuture<'_, u64> {
-        Box::pin(async move {
-            let mut object_path = self.path.clone();
-            object_path.push(hash.to_hex().as_ref());
-            let metadata = std::fs::metadata(object_path)?;
-            Ok(metadata.len())
-        })
-    }
-
     fn put<'a>(&'a self, data: &'a [u8]) -> StoreFuture<'a, Hash> {
         Box::pin(async move {
             let hash = blake3::hash(data);
@@ -58,6 +49,15 @@ impl StoreImpl for FilesystemStoreImpl {
                 Err(e) if e.error.kind() == ErrorKind::AlreadyExists => Ok(hash),
                 Err(e) => Err(e.error),
             }
+        })
+    }
+
+    fn size(&self, hash: Hash) -> StoreFuture<'_, u64> {
+        Box::pin(async move {
+            let mut object_path = self.path.clone();
+            object_path.push(hash.to_hex().as_ref());
+            let metadata = std::fs::metadata(object_path)?;
+            Ok(metadata.len())
         })
     }
 }

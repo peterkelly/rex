@@ -2,7 +2,7 @@ use super::{
     DEFAULT_MAX_OUTPUT_BYTES, ToolExecution, ToolExecutionError, ToolExecutionPlan, ToolExecutor,
     ToolFuture, catalog, workspace::ToolWorkspace,
 };
-use crate::storage::store::Store;
+use rex::storage::Store;
 use std::{process::Stdio, sync::Arc};
 use tokio::process::Command;
 

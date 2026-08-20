@@ -1,9 +1,10 @@
 mod compile;
 pub mod types;
 
-use crate::{modules::tools::executor::ToolExecution, state::State, storage::entry::EntryKind};
+use crate::{modules::tools::executor::ToolExecution, state::State};
 use compile::*;
 use rex::engine::{EngineError, Module};
+use rex::storage::EntryKind;
 use std::collections::BTreeMap;
 use types::*;
 
@@ -507,7 +508,7 @@ fn unexpected(message: impl Into<String>) -> PopplerError {
 mod tests {
     use super::api::*;
     use super::*;
-    use crate::storage::store::Store;
+    use rex::storage::Store;
 
     #[test]
     fn pdfinfo_output_is_decoded_semantically() {

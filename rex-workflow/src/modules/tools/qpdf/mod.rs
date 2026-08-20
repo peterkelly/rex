@@ -320,7 +320,7 @@ fn unexpected(message: impl Into<String>) -> QpdfError {
 mod tests {
     use super::api::*;
     use super::*;
-    use crate::storage::store::Store;
+    use rex::storage::Store;
 
     #[tokio::test]
     async fn real_qpdf_checks_transforms_merges_splits_and_exports_json_when_available() {

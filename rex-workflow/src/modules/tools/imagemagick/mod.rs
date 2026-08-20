@@ -436,7 +436,7 @@ fn unexpected(message: impl Into<String>) -> ImageMagickError {
 mod tests {
     use super::api::*;
     use super::*;
-    use crate::storage::store::Store;
+    use rex::storage::Store;
 
     #[test]
     fn identify_protocol_is_parsed_semantically() {

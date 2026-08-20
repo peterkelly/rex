@@ -1,4 +1,4 @@
-use crate::storage::store::{StoreFuture, StoreImpl};
+use super::store::{StoreFuture, StoreImpl};
 use blake3::Hash;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload, path::Path};
 
@@ -33,10 +33,6 @@ impl<T: ObjectStore> StoreImpl for ObjectStoreImpl<T> {
         })
     }
 
-    fn size(&self, hash: Hash) -> StoreFuture<'_, u64> {
-        Box::pin(async move { Ok(self.store.head(&self.object_path(hash)).await?.size) })
-    }
-
     fn put<'a>(&'a self, data: &'a [u8]) -> StoreFuture<'a, Hash> {
         let hash = blake3::hash(data);
         let location = self.object_path(hash);
@@ -51,5 +47,9 @@ impl<T: ObjectStore> StoreImpl for ObjectStoreImpl<T> {
             self.store.put(&location, payload).await?;
             Ok(hash)
         })
+    }
+
+    fn size(&self, hash: Hash) -> StoreFuture<'_, u64> {
+        Box::pin(async move { Ok(self.store.head(&self.object_path(hash)).await?.size) })
     }
 }
