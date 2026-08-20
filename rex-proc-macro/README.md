@@ -8,9 +8,11 @@ The derive generates:
 
 - `rex::typesystem::RexType`
 - `rex::typesystem::RexAdt`
+- `rex::Rex`
 - `rex::engine::IntoRex`
 - `rex::engine::FromRex`
-- inherent helper methods such as `inject_rex`, `rex_adt_decl`, and `rex_adt_family`
+- injection helpers through `rex::Rex`
+- ADT declaration helpers through `rex::typesystem::RexAdt`
 - an ADT declaration suitable for injection through a `Builder`
 - ADT-family discovery so `inject_rex` registers all reachable acyclic derived dependencies
 

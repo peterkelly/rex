@@ -1000,9 +1000,11 @@ let program = parse("(((1)))")
 The derive:
 - implements `RexType`
 - implements `RexAdt`
+- implements `Rex`
 - implements `IntoRex`
 - implements `FromRex`
-- adds inherent helper methods such as `inject_rex`, `rex_adt_decl`, and `rex_adt_family`
+- provides injection helpers through `Rex`
+- provides ADT declaration helpers through `RexAdt`
 - declares an ADT in the Rex type system
 - injects runtime constructors (so Rex can *build* values)
 - discovers and registers the full acyclic ADT family needed by the root type

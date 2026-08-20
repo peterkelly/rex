@@ -77,14 +77,21 @@ pub mod typesystem;
 ///
 /// - [`RexType`](typesystem::RexType)
 /// - [`RexAdt`](typesystem::RexAdt)
+/// - [`Rex`](trait@Rex)
 /// - [`IntoRex`](engine::IntoRex)
 /// - [`FromRex`](engine::FromRex)
 ///
-/// The derive also adds inherent helper methods such as `inject_rex`,
-/// `rex_adt_decl`, and `rex_adt_family`. It does not implement
-/// [`RexDefault`](engine::RexDefault); use `inject_rex_with_default` only for
-/// types that already provide that trait.
+/// [`Rex`](trait@Rex) provides the `inject_rex`, `inject_rex_with_default`, and
+/// `inject_rex_with_constructor` helpers. [`RexAdt`](typesystem::RexAdt)
+/// provides `rex_adt_decl` and `rex_adt_family`. The derive does not implement
+/// [`RexDefault`](engine::RexDefault); use `inject_rex_with_default` only for a
+/// type that already provides that trait.
 pub use rex_proc_macro::Rex;
+
+/// Registration helpers implemented for Rust types derived with [`Rex`](macro@Rex).
+///
+/// Importing `rex::Rex` brings both this trait and the derive macro into scope.
+pub use rex_engine::Rex;
 
 /// Register a Rust function as a documented Rex export.
 ///

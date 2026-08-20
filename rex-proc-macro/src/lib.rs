@@ -385,25 +385,23 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
             fn rex_adt_decl() -> Result<::rex::typesystem::AdtDecl, ::rex::typesystem::TypeError> {
                 #adt_decl_fn
             }
+
+            fn rex_adt_family() -> Result<::std::vec::Vec<::rex::typesystem::AdtDecl>, ::rex::typesystem::TypeError> {
+                let mut out = ::std::vec::Vec::new();
+                <Self as ::rex::typesystem::RexType>::collect_rex_family(&mut out)?;
+                Ok(out)
+            }
         }
     };
     let inject_fn = quote! {
-        impl #rex_adt_impl_generics #rust_ident #rex_adt_ty_generics #rex_adt_where_clause {
-            pub fn inject_rex<State: Clone + Send + Sync + 'static>(
+        impl #rex_adt_impl_generics ::rex::Rex for #rust_ident #rex_adt_ty_generics #rex_adt_where_clause {
+            fn inject_rex<State: Clone + Send + Sync + 'static>(
                 builder: &mut ::rex::engine::Builder<State>,
             ) -> Result<(), ::rex::engine::EngineError> {
                 builder.inject_rex_adt::<Self>()
             }
 
-            pub fn rex_adt_decl() -> Result<::rex::typesystem::AdtDecl, ::rex::engine::EngineError> {
-                Ok(<Self as ::rex::typesystem::RexAdt>::rex_adt_decl()?)
-            }
-
-            pub fn rex_adt_family() -> Result<::std::vec::Vec<::rex::typesystem::AdtDecl>, ::rex::engine::EngineError> {
-                Ok(<Self as ::rex::typesystem::RexAdt>::rex_adt_family()?)
-            }
-
-            pub fn inject_rex_with_default<State: Clone + Send + Sync + 'static>(
+            fn inject_rex_with_default<State: Clone + Send + Sync + 'static>(
                 builder: &mut ::rex::engine::Builder<State>,
             ) -> Result<(), ::rex::engine::EngineError>
             where
@@ -413,7 +411,7 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
                 builder.inject_rex_default_instance::<Self>()
             }
 
-            pub fn inject_rex_with_constructor<State, Sig, H>(
+            fn inject_rex_with_constructor<State, Sig, H>(
                 builder: &mut ::rex::engine::Builder<State>,
                 constructor: H,
             ) -> Result<(), ::rex::engine::EngineError>

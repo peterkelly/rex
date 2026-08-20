@@ -22,10 +22,38 @@ use futures::{FutureExt, future::BoxFuture};
 use rex_ast::Span;
 use rex_ast::{DeclareFnDecl, NameRef, Symbol, TypeConstraint, Var};
 use rex_typesystem::{
-    types::{RexType, Scheme, Type, Types},
+    types::{RexAdt, RexType, Scheme, Type, Types},
     unification::unify,
 };
 use std::{future::Future, sync::Arc};
+
+/// Registration helpers implemented for Rust types derived with `#[derive(Rex)]`.
+///
+/// The derive macro supplies this implementation alongside [`RexAdt`],
+/// [`IntoRex`], and [`FromRex`]. Importing this trait makes its associated
+/// functions available as `Type::inject_rex(...)` and related helpers.
+pub trait Rex: RexAdt + Sized {
+    /// Register this type's complete Rex ADT family in a builder.
+    fn inject_rex<State: Clone + Send + Sync + 'static>(
+        builder: &mut crate::Builder<State>,
+    ) -> Result<(), EngineError>;
+
+    /// Register this type's ADT family and its host-backed `Default` instance.
+    fn inject_rex_with_default<State: Clone + Send + Sync + 'static>(
+        builder: &mut crate::Builder<State>,
+    ) -> Result<(), EngineError>
+    where
+        Self: RexDefault<State> + IntoRex;
+
+    /// Register this type's ADT family and a global constructor function.
+    fn inject_rex_with_constructor<State, Sig, H>(
+        builder: &mut crate::Builder<State>,
+        constructor: H,
+    ) -> Result<(), EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+        H: HostFnSync<State, Sig>;
+}
 
 pub trait RexDefault<State>: Sized
 where

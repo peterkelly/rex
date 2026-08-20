@@ -6,7 +6,7 @@ use rex::{
     engine::{Builder, EngineError, FromRex, IntoRex, Module, Value, virtual_export_name},
     json::rex_to_json,
     parser::parse as parse_rex,
-    typesystem::{BuiltinTypeId, RexType, Type},
+    typesystem::{BuiltinTypeId, RexAdt, RexType, Type},
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -510,6 +510,9 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
 
 #[tokio::test]
 async fn derive_types_implement_rex_adt_trait() {
+    fn assert_derived_traits<T: Rex + RexAdt>() {}
+    assert_derived_traits::<Shape>();
+
     let mut builder = Builder::with_prelude(()).unwrap();
     builder.inject_rex_adt::<Shape>().unwrap();
 

@@ -87,6 +87,9 @@ pub use rex_engine::NativeRegistration;
 /// Convert a Rust value into a Rex runtime value.
 pub use rex_engine::IntoRex;
 
+/// Registration helpers implemented for Rust types derived with [`crate::Rex`].
+pub use rex_engine::Rex;
+
 /// Request passed to a module importer.
 pub use rex_engine::ImportRequest;
 
