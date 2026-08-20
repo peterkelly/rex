@@ -1,11 +1,26 @@
-use crate::state::State;
 use blake3::Hash;
 use rex::engine::{EngineError, Module};
-use rex::storage::{Entry, EntryKind};
+use rex::storage::{Entry, EntryKind, Store};
 use std::collections::BTreeMap;
 
-pub(crate) fn storage_module() -> Result<Module<State>, EngineError> {
-    storage_api::rex_module()
+/// Provides the content-addressed store used by the standard storage module.
+pub trait StateStore {
+    /// Return the configured store, or `None` when storage is unavailable.
+    fn store(&self) -> Option<&Store>;
+}
+
+/// Build the standard storage module for a compatible host state.
+pub fn storage_module<T>() -> Result<Module<T>, EngineError>
+where
+    T: StateStore + Clone + Send + Sync + 'static,
+{
+    storage_api::rex_module::<T>()
+}
+
+fn configured_store<T: StateStore>(state: &T) -> Result<&Store, EngineError> {
+    state
+        .store()
+        .ok_or_else(|| EngineError::from("Storage not configured"))
 }
 
 /// Content-addressed storage for immutable blobs and directory trees.
@@ -22,9 +37,11 @@ mod storage_api {
     /// `hash` must identify a stored blob whose bytes are valid UTF-8. Use `get_bytes` for arbitrary
     /// binary content.
     #[rex::export]
-    async fn get_string(state: State, hash: Hash) -> Result<String, EngineError> {
-        let data = state
-            .store
+    async fn get_string<T>(state: T, hash: Hash) -> Result<String, EngineError>
+    where
+        T: StateStore,
+    {
+        let data = configured_store(&state)?
             .get(hash)
             .await
             .map_err(|x| format!("get: {}", x))?;
@@ -36,9 +53,11 @@ mod storage_api {
     ///
     /// `hash` must identify a stored blob. Tree hashes should be read with `get_tree`.
     #[rex::export]
-    async fn get_bytes(state: State, hash: Hash) -> Result<Vec<u8>, EngineError> {
-        let data = state
-            .store
+    async fn get_bytes<T>(state: T, hash: Hash) -> Result<Vec<u8>, EngineError>
+    where
+        T: StateStore,
+    {
+        let data = configured_store(&state)?
             .get(hash)
             .await
             .map_err(|x| format!("get: {}", x))?;
@@ -50,9 +69,11 @@ mod storage_api {
     /// `hash` must identify a stored tree. The returned dictionary maps each child name to its hash,
     /// kind, and byte size; nested trees can be traversed with additional `get_tree` calls.
     #[rex::export]
-    async fn get_tree(state: State, hash: Hash) -> Result<BTreeMap<String, Entry>, EngineError> {
-        let entries = state
-            .store
+    async fn get_tree<T>(state: T, hash: Hash) -> Result<BTreeMap<String, Entry>, EngineError>
+    where
+        T: StateStore,
+    {
+        let entries = configured_store(&state)?
             .get_tree(hash)
             .await
             .map_err(|x| format!("get_tree: {}", x))?;
@@ -63,9 +84,11 @@ mod storage_api {
     ///
     /// Storing identical `data` returns the same hash.
     #[rex::export]
-    async fn put_string(state: State, data: String) -> Result<Hash, EngineError> {
-        state
-            .store
+    async fn put_string<T>(state: T, data: String) -> Result<Hash, EngineError>
+    where
+        T: StateStore,
+    {
+        configured_store(&state)?
             .put(data.as_bytes())
             .await
             .map_err(|e| e.to_string().into())
@@ -75,9 +98,11 @@ mod storage_api {
     ///
     /// Storing identical `data` returns the same hash.
     #[rex::export]
-    async fn put_bytes(state: State, data: Vec<u8>) -> Result<Hash, EngineError> {
-        state
-            .store
+    async fn put_bytes<T>(state: T, data: Vec<u8>) -> Result<Hash, EngineError>
+    where
+        T: StateStore,
+    {
+        configured_store(&state)?
             .put(data)
             .await
             .map_err(|e| e.to_string().into())
@@ -88,25 +113,81 @@ mod storage_api {
     /// `entries` maps each child name to an `(EntryKind, Hash)` pair. Every referenced hash must
     /// already exist with the declared kind. The resulting tree is deterministic for the same map.
     #[rex::export]
-    async fn put_tree(
-        state: State,
+    async fn put_tree<T>(
+        state: T,
         entries: BTreeMap<String, (EntryKind, Hash)>,
-    ) -> Result<Hash, EngineError> {
-        state
-            .store
+    ) -> Result<Hash, EngineError>
+    where
+        T: StateStore,
+    {
+        configured_store(&state)?
             .put_tree(entries)
             .await
             .map_err(|e| e.to_string().into())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        struct UnconfiguredState;
+
+        impl StateStore for UnconfiguredState {
+            fn store(&self) -> Option<&Store> {
+                None
+            }
+        }
+
+        fn assert_storage_not_configured<T>(result: Result<T, EngineError>) {
+            let Err(error) = result else {
+                panic!("expected unconfigured storage to fail");
+            };
+            assert_eq!(error.to_string(), "Storage not configured");
+        }
+
+        #[tokio::test]
+        async fn all_functions_reject_unconfigured_storage() {
+            let hash = blake3::hash(b"missing");
+
+            assert_storage_not_configured(get_string(UnconfiguredState, hash).await);
+            assert_storage_not_configured(get_bytes(UnconfiguredState, hash).await);
+            assert_storage_not_configured(get_tree(UnconfiguredState, hash).await);
+            assert_storage_not_configured(put_string(UnconfiguredState, String::new()).await);
+            assert_storage_not_configured(put_bytes(UnconfiguredState, Vec::new()).await);
+            assert_storage_not_configured(put_tree(UnconfiguredState, BTreeMap::new()).await);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::{StateStore, configured_store, storage_module};
     use crate::{run::eval_rex, state::State};
     use blake3::Hash;
     use rex::storage::{EntryKind, Store};
     use serde_json::{Value, json};
     use std::{collections::BTreeMap, str::FromStr};
+
+    #[derive(Clone)]
+    struct OptionalStoreState(Option<Store>);
+
+    impl StateStore for OptionalStoreState {
+        fn store(&self) -> Option<&Store> {
+            self.0.as_ref()
+        }
+    }
+
+    #[test]
+    fn storage_module_supports_generic_optional_store_state() {
+        let module = storage_module::<OptionalStoreState>().unwrap();
+        assert_eq!(module.exports().len(), 6);
+
+        let state = OptionalStoreState(None);
+        let Err(error) = configured_store(&state) else {
+            panic!("expected unconfigured storage to fail");
+        };
+        assert_eq!(error.to_string(), "Storage not configured");
+    }
 
     #[tokio::test]
     async fn store_get_functions() {
