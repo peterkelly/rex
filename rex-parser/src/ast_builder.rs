@@ -1284,7 +1284,7 @@ fn make_binary_expr(lhs: Expr, operator: &Token, rhs: Expr) -> Expr {
             outer_span,
             Arc::new(Expr::App(
                 cons_span,
-                Arc::new(Expr::Var(Var::with_span(op_span, "Cons"))),
+                Arc::new(Expr::Var(Var::with_span(op_span, "List.Cons"))),
                 Arc::new(lhs),
             )),
             Arc::new(rhs),

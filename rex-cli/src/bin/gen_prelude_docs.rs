@@ -34,8 +34,15 @@ const FUNCTION_SECTIONS: &[FunctionSection] = &[
     },
     FunctionSection {
         title: "Ordering Values",
-        introduction: "`cmp` returns one of these `Ordering` values.",
-        functions: &["Less", "Equal", "Greater"],
+        introduction: "`cmp` returns one of these `Ordering` values. The bare names are convenient aliases for the type-qualified constructors.",
+        functions: &[
+            "Ordering.Less",
+            "Ordering.Equal",
+            "Ordering.Greater",
+            "Less",
+            "Equal",
+            "Greater",
+        ],
     },
     FunctionSection {
         title: "Arithmetic and Aggregation",
@@ -70,6 +77,8 @@ const FUNCTION_SECTIONS: &[FunctionSection] = &[
         title: "List Functions",
         introduction: "Construct, index, slice, and combine `List` values.",
         functions: &[
+            "List.Empty",
+            "List.Cons",
             "Empty",
             "Cons",
             "list_get",
@@ -138,9 +147,21 @@ const FUNCTION_SECTIONS: &[FunctionSection] = &[
     },
     FunctionSection {
         title: "Option and Result Functions",
-        introduction: "Construct, inspect, and extract optional values and success-or-error results.",
+        introduction: "Construct, inspect, and extract optional values and success-or-error results. The bare constructor names are convenient aliases for the type-qualified forms.",
         functions: &[
-            "None", "Some", "is_none", "is_some", "Err", "Ok", "is_err", "is_ok", "unwrap",
+            "Option.None",
+            "Option.Some",
+            "None",
+            "Some",
+            "is_none",
+            "is_some",
+            "Result.Err",
+            "Result.Ok",
+            "Err",
+            "Ok",
+            "is_err",
+            "is_ok",
+            "unwrap",
         ],
     },
 ];
@@ -384,7 +405,10 @@ fn build_types(ts: &TypeSystem, type_arity: &BTreeMap<String, usize>) -> Vec<Typ
     for (type_name, adt) in &ts.adts {
         constructors_by_type.insert(
             type_name.to_string(),
-            adt.variants.iter().map(|v| v.name.to_string()).collect(),
+            adt.variants
+                .iter()
+                .map(|variant| format!("{type_name}.{}", variant.name))
+                .collect(),
         );
     }
 

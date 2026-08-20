@@ -6,10 +6,9 @@
 //     "root": "SOME_HASH"
 // }
 
-import std.storage (Blob, Tree);
-import std.storage;
+import std.storage (get_tree, Entry, EntryKind);
 
-fn traverse (dir: Dict storage.Entry) -> (path: String) -> List String =
+fn traverse (dir: Dict Entry) -> (path: String) -> List String =
     let
         entries: List (List String) =
             map
@@ -19,16 +18,16 @@ fn traverse (dir: Dict storage.Entry) -> (path: String) -> List String =
     in
         foldl add_lists [] entries;
 
-fn transform_entry (path: String) -> (x: (String, storage.Entry)) -> List String =
+fn transform_entry (path: String) -> (x: (String, Entry)) -> List String =
     let
         (key, entry) = x
     in
         match entry.kind with {
-            case Blob ->
+            case EntryKind.Blob ->
                 ["blob " + (show entry.hash) + " " + path + key];
-            case Tree ->
+            case EntryKind.Tree ->
                 let
-                    dir = storage.get_tree entry.hash,
+                    dir = get_tree entry.hash,
                     child_path = path + key + "/",
                     line = "tree " + (show entry.hash) + " " + path + key
                 in
@@ -37,6 +36,6 @@ fn transform_entry (path: String) -> (x: (String, storage.Entry)) -> List String
 
 fn main (root: Hash) -> String =
     let
-        dir = storage.get_tree root
+        dir = get_tree root
     in
         string_join "\n" (traverse dir "/");

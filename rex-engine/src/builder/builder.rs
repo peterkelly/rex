@@ -44,7 +44,8 @@ use rex_typesystem::{
     inference::infer,
     types::{
         AdtDecl, Instance, Predicate, RexAdt, RexType, Scheme, Type, TypeKind, TypeVar, TypedExpr,
-        TypedExprKind, Types, adt_shape, adt_shape_eq, order_adt_family,
+        TypedExprKind, Types, adt_shape, adt_shape_eq, compatibility_constructor_name,
+        order_adt_family,
     },
     typesystem::{PreparedInstanceDecl, TypeSystem, TypeVarSupply, entails, instantiate},
     unification::unify,
@@ -1037,24 +1038,30 @@ where
         None => {}
     }
     type_system.register_adt(&adt)?;
-    for (ctor, scheme) in adt.constructor_schemes() {
-        if runtime.natives.contains_scheme(&ctor, &scheme) {
-            continue;
-        }
-        let ctor_name = ctor.clone();
-        let func: SchedulerNativeCallable = Arc::new(move |scope, _typ, args| {
-            let value = scope.alloc_root_adt(runtime_ctor_symbol(&ctor_name), args.to_vec())?;
-            Ok(SchedulerNativeResult::Ready(value))
-        });
-        let arity = type_arity(&scheme.typ);
-        register_native_parts(
-            type_system,
-            runtime,
+    for ((ctor, scheme), variant) in adt.constructor_schemes().into_iter().zip(&adt.variants) {
+        let aliases = [
             ctor,
-            scheme,
-            arity,
-            NativeCallable::Scheduler(func),
-        )?;
+            compatibility_constructor_name(&adt.name, &variant.name),
+        ];
+        for name in aliases {
+            if runtime.natives.contains_scheme(&name, &scheme) {
+                continue;
+            }
+            let ctor_name = name.clone();
+            let func: SchedulerNativeCallable = Arc::new(move |scope, _typ, args| {
+                let value = scope.alloc_root_adt(runtime_ctor_symbol(&ctor_name), args.to_vec())?;
+                Ok(SchedulerNativeResult::Ready(value))
+            });
+            let arity = type_arity(&scheme.typ);
+            register_native_parts(
+                type_system,
+                runtime,
+                name,
+                scheme.clone(),
+                arity,
+                NativeCallable::Scheduler(func),
+            )?;
+        }
     }
     Ok(())
 }

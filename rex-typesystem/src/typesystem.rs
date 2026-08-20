@@ -16,7 +16,7 @@ use crate::{
     types::{
         AdtArgument, AdtDecl, AdtField, AdtParam, BuiltinTypeId, ClassEnv, Instance, Predicate,
         RegisteredValue, Scheme, Type, TypeAlias, TypeEnv, TypeKind, TypeVar, TypeVarId, TypedExpr,
-        Types, merge_adt_docs,
+        Types, compatibility_constructor_name, merge_adt_docs,
     },
     unification::scheme_compatible,
 };
@@ -1208,8 +1208,9 @@ impl TypeSystem {
     }
 
     /// Register constructor schemes for an ADT in the type environment.
-    /// This makes constructors (e.g. `Some`, `None`, `Ok`, `Err`) available
-    /// to the type checker as normal values.
+    /// Constructors are registered under their type-owned names (for example,
+    /// `Option.Some` and `Result.Err`). An unqualified compatibility alias is
+    /// also retained so existing Rex programs continue to compile.
     pub fn register_adt(&mut self, adt: &AdtDecl) -> Result<(), TypeError> {
         if let Some(existing) = self.adts.get_mut(&adt.name) {
             // Declaration batches install an empty header first so recursive
@@ -1244,21 +1245,29 @@ impl TypeSystem {
                     .collect(),
                 docs: variant.docs.clone(),
             };
-            if let Some(existing) = self.env.lookup(&name) {
-                let mut values = existing.to_vec();
-                if let Some(current) = values
-                    .iter_mut()
-                    .find(|current| scheme_compatible(&current.scheme, &value.scheme))
-                {
-                    current.params = value.params;
-                    current.docs = value.docs;
-                    self.env.values = self.env.values.insert(name, values);
-                    continue;
-                }
-            }
-            self.register_value_scheme(&name, value);
+            self.register_constructor_value(name, value.clone());
+            self.register_constructor_value(
+                compatibility_constructor_name(&registered.name, &variant.name),
+                value,
+            );
         }
         Ok(())
+    }
+
+    fn register_constructor_value(&mut self, name: Symbol, value: RegisteredValue) {
+        if let Some(existing) = self.env.lookup(&name) {
+            let mut values = existing.to_vec();
+            if let Some(current) = values
+                .iter_mut()
+                .find(|current| scheme_compatible(&current.scheme, &value.scheme))
+            {
+                current.params = value.params;
+                current.docs = value.docs;
+                self.env.values = self.env.values.insert(name, values);
+                return;
+            }
+        }
+        self.register_value_scheme(&name, value);
     }
 
     fn register_type_decl_header(&mut self, decl: &TypeDecl) -> Result<(), TypeError> {

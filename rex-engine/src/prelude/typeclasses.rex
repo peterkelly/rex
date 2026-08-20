@@ -493,15 +493,15 @@ instance<a> Eq (List a) <= Eq a where {
 instance<a> Eq (Option a) <= Eq a where {
     == = \x y ->
         match x with {
-            case Some a0 ->
+            case Option.Some a0 ->
                 (match y with {
-                    case Some b0 -> a0 == b0;
-                    case None -> false;
+                    case Option.Some b0 -> a0 == b0;
+                    case Option.None -> false;
                 });
-            case None ->
+            case Option.None ->
                 (match y with {
-                    case None -> true;
-                    case Some _ -> false;
+                    case Option.None -> true;
+                    case Option.Some _ -> false;
                 });
         };
     != = \x y -> if x == y then false else true;
@@ -510,15 +510,15 @@ instance<a> Eq (Option a) <= Eq a where {
 instance<a,e> Eq (Result a e) <= Eq a, Eq e where {
     == = \x y ->
         match x with {
-            case Ok a0 ->
+            case Result.Ok a0 ->
                 (match y with {
-                    case Ok b0 -> a0 == b0;
-                    case Err _ -> false;
+                    case Result.Ok b0 -> a0 == b0;
+                    case Result.Err _ -> false;
                 });
-            case Err e0 ->
+            case Result.Err e0 ->
                 (match y with {
-                    case Err e1 -> e0 == e1;
-                    case Ok _ -> false;
+                    case Result.Err e1 -> e0 == e1;
+                    case Result.Ok _ -> false;
                 });
         };
     != = \x y -> if x == y then false else true;
@@ -805,11 +805,11 @@ instance<a> Default (List a) where {
 }
 
 instance<a> Default (Option a) where {
-    default = None;
+    default = Option.None;
 }
 
 instance<a,e> Default (Result a e) <= Default a where {
-    default = Ok default;
+    default = Result.Ok default;
 }
 
 instance<a> Show (List a) <= Show a where {
@@ -827,16 +827,16 @@ instance<a> Show (List a) <= Show a where {
 instance<a> Show (Option a) <= Show a where {
     show = \x ->
         match x with {
-            case Some a0 -> "Some(" + show a0 + ")";
-            case None -> "None";
+            case Option.Some a0 -> "Some(" + show a0 + ")";
+            case Option.None -> "None";
         };
 }
 
 instance<a,e> Show (Result a e) <= Show a, Show e where {
     show = \x ->
         match x with {
-            case Ok a0 -> "Ok(" + show a0 + ")";
-            case Err e0 -> "Err(" + show e0 + ")";
+            case Result.Ok a0 -> "Ok(" + show a0 + ")";
+            case Result.Err e0 -> "Err(" + show e0 + ")";
         };
 }
 
@@ -863,20 +863,20 @@ instance Applicative List <= Functor List where {
 }
 
 instance Applicative Option <= Functor Option where {
-    pure = \x -> Some x;
+    pure = \x -> Option.Some x;
     ap = \ff xx ->
         match ff with {
-            case Some f -> map f xx;
-            case None -> None;
+            case Option.Some f -> map f xx;
+            case Option.None -> Option.None;
         };
 }
 
 instance<e> Applicative (Result e) <= Functor (Result e) where {
-    pure = \x -> Ok x;
+    pure = \x -> Result.Ok x;
     ap = \rf rx ->
         match rf with {
-            case Ok f -> map f rx;
-            case Err err -> Err err;
+            case Result.Ok f -> map f rx;
+            case Result.Err err -> Result.Err err;
         };
 }
 

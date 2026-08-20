@@ -1471,6 +1471,78 @@ async fn module_import_selected_clause_can_import_type_exports() {
 }
 
 #[tokio::test]
+async fn module_imported_types_own_overlapping_constructor_names() {
+    let dir = temp_dir("module_imported_types_own_overlapping_constructor_names");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type LeftStatus = Ready | Waiting;
+        pub type RightStatus = Ready | Stopped;
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep (LeftStatus, RightStatus);
+
+        let left = LeftStatus.Ready in
+        let right = RightStatus.Ready in
+        (
+            match left with {
+                case LeftStatus.Ready -> true;
+                case LeftStatus.Waiting -> false;
+            },
+            match right with {
+                case RightStatus.Ready -> true;
+                case RightStatus.Stopped -> false;
+            }
+        )
+"#,
+    );
+
+    let builder = builder_with_prelude();
+    let (value, _) = eval_module_via_fs(builder, &main).await.unwrap();
+    let Value::Tuple(items) = value else {
+        panic!("expected tuple value");
+    };
+    assert!(matches!(items[0], Value::Bool(true)));
+    assert!(matches!(items[1], Value::Bool(true)));
+}
+
+#[tokio::test]
+async fn module_alias_qualifies_type_owned_constructors() {
+    let dir = temp_dir("module_alias_qualifies_type_owned_constructors");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type LeftStatus = Ready | Waiting;
+        pub type RightStatus = Ready | Stopped;
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D;
+
+        match D.RightStatus.Ready with {
+            case D.RightStatus.Ready -> true;
+            case D.RightStatus.Stopped -> false;
+        }
+"#,
+    );
+
+    let builder = builder_with_prelude();
+    let (value, _) = eval_module_via_fs(builder, &main).await.unwrap();
+    assert!(matches!(value, Value::Bool(true)));
+}
+
+#[tokio::test]
 async fn module_import_selected_clause_single_name_can_bind_type_and_constructor() {
     let dir = temp_dir("module_import_selected_clause_single_name_can_bind_type_and_constructor");
     let main = dir.join("main.rex");

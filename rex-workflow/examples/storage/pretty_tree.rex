@@ -6,7 +6,6 @@
 //     "root": "SOME_HASH"
 // }
 
-import std.storage (Blob, Tree);
 import std.storage;
 
 fn traverse (dir: Dict storage.Entry) -> (prefix: String) -> (indent: String) -> List String =
@@ -33,7 +32,7 @@ fn enumerate<a> (items: List a) -> List (u64, a) =
     let rec
         loop : List a -> u64 -> List (u64, a) = \items n ->
             match items with {
-                case Empty -> [];
+                case List.Empty -> [];
                 case x::xs -> (n, x) :: (loop xs (n + 1));
             }
     in
@@ -41,8 +40,8 @@ fn enumerate<a> (items: List a) -> List (u64, a) =
 
 fn transform_entry (last: Bool) -> (key: String) -> (entry: storage.Entry) -> (prefix: String) -> (indent: String) -> List String =
     match entry.kind with {
-        case Blob -> [prefix + key];
-        case Tree ->
+        case storage.EntryKind.Blob -> [prefix + key];
+        case storage.EntryKind.Tree ->
             let
                 dir = storage.get_tree entry.hash,
                 line = prefix + key

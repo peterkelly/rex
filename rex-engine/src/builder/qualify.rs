@@ -73,7 +73,7 @@ fn qualify_package_with_renames(
 
 fn qualify_type_decl(
     td: &TypeDecl,
-    value_renames: &BTreeMap<Symbol, Symbol>,
+    _value_renames: &BTreeMap<Symbol, Symbol>,
     type_renames: &BTreeMap<Symbol, Symbol>,
     class_renames: &BTreeMap<Symbol, Symbol>,
 ) -> TypeDecl {
@@ -89,10 +89,7 @@ fn qualify_type_decl(
             variants
                 .iter()
                 .map(|v| TypeVariant {
-                    name: value_renames
-                        .get(&v.name)
-                        .cloned()
-                        .unwrap_or_else(|| v.name.clone()),
+                    name: v.name.clone(),
                     args: v
                         .args
                         .iter()
@@ -397,17 +394,30 @@ fn rename_expr(
                 class_renames,
             )),
         ),
-        Expr::Project(span, base, field) => Expr::Project(
-            *span,
-            Arc::new(rename_expr(
-                base,
-                bound,
-                value_renames,
-                type_renames,
-                class_renames,
-            )),
-            field.clone(),
-        ),
+        Expr::Project(span, base, field) => {
+            if let Expr::Var(v) = base.as_ref()
+                && !bound.contains(&v.name)
+            {
+                let constructor = Symbol::intern(&format!("{}.{}", v.name, field));
+                if let Some(new) = value_renames.get(&constructor) {
+                    return Expr::Var(Var {
+                        span: *span,
+                        name: new.clone(),
+                    });
+                }
+            }
+            Expr::Project(
+                *span,
+                Arc::new(rename_expr(
+                    base,
+                    bound,
+                    value_renames,
+                    type_renames,
+                    class_renames,
+                )),
+                field.clone(),
+            )
+        }
         Expr::Lam(span, scope, param, ann, constraints, body) => {
             bound.insert(param.name.clone());
             let out = Expr::Lam(
@@ -699,6 +709,8 @@ pub(crate) fn collect_local_renames_from_declarations(
         types.insert(td.name.clone(), qualify(prefix, &td.name));
         if let TypeDeclKind::Adt(variants) = &td.kind {
             for variant in variants {
+                let constructor = Symbol::intern(&format!("{}.{}", td.name, variant.name));
+                values.insert(constructor.clone(), qualify(prefix, &constructor));
                 values.insert(variant.name.clone(), qualify(prefix, &variant.name));
             }
         }

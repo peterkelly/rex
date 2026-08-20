@@ -2,7 +2,7 @@ use crate::{
     error::TypeError,
     types::{
         AdtDecl, AdtVariant, BuiltinTypeId, Predicate, Scheme, Type, TypeAlias, TypeEnv, TypeKind,
-        TypeVar, TypeVarId, TypedExpr, TypedExprKind, Types,
+        TypeVar, TypeVarId, TypedExpr, TypedExprKind, Types, compatibility_constructor_name,
     },
     typesystem::{
         TypeSystem, TypeVarSupply, extend_type_params, instantiate,
@@ -11,7 +11,7 @@ use crate::{
     },
     unification::{Subst, Unifier, subst_is_empty, unify},
 };
-use rex_ast::{Expr, LetRecBinding, Pattern, Symbol, TypeConstraint, TypeExpr};
+use rex_ast::{Expr, LetRecBinding, Pattern, Symbol, TypeConstraint, TypeExpr, Var};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -1356,6 +1356,21 @@ fn infer_expr_type_inner(
             Ok((preds, func_ty))
         }
         Expr::Project(_, base, field) => {
+            if let Some(constructor) = constructor_project_symbol(env, adts, base, field) {
+                let constructor = Expr::Var(Var {
+                    span: *expr.span(),
+                    name: constructor,
+                });
+                return infer_expr_type_inner(
+                    unifier,
+                    supply,
+                    env,
+                    adts,
+                    aliases,
+                    known,
+                    &constructor,
+                );
+            }
             let (p1, t1) = infer_expr_type(unifier, supply, env, adts, aliases, known, base)?;
             let base_ty = unifier.apply_type(&t1);
             let known_variant = known_variant_from_expr_with_known(base, &base_ty, adts, known);
@@ -1618,12 +1633,12 @@ fn infer_expr_type_inner(
                     match pat {
                         Pattern::Named(_, name, _) => {
                             let name_sym = name.to_dotted_symbol();
-                            if let Some((adt, _variant)) = ctor_lookup(adts, &name_sym) {
+                            if let Some((adt, variant)) = ctor_lookup(adts, &name_sym) {
                                 known_arm.insert(
                                     var.name.clone(),
                                     KnownVariant {
                                         adt: adt.name.clone(),
-                                        variant: name_sym,
+                                        variant: variant.name.clone(),
                                     },
                                 );
                             } else {
@@ -1863,6 +1878,13 @@ fn infer_expr(
                 Ok((state.preds, state.func_ty, state.typed))
             }
             Expr::Project(_, base, field) => {
+                if let Some(constructor) = constructor_project_symbol(env, adts, base, field) {
+                    let constructor = Expr::Var(Var {
+                        span: *expr.span(),
+                        name: constructor,
+                    });
+                    return infer_expr(unifier, supply, env, adts, aliases, known, &constructor);
+                }
                 let (p1, t1, typed_base) =
                     infer_expr(unifier, supply, env, adts, aliases, known, base)?;
                 let base_ty = unifier.apply_type(&t1);
@@ -2188,12 +2210,12 @@ fn infer_expr(
                         match pat {
                             Pattern::Named(_, name, _) => {
                                 let name_sym = name.to_dotted_symbol();
-                                if let Some((adt, _variant)) = ctor_lookup(adts, &name_sym) {
+                                if let Some((adt, variant)) = ctor_lookup(adts, &name_sym) {
                                     known_arm.insert(
                                         var.name.clone(),
                                         KnownVariant {
                                             adt: adt.name.clone(),
-                                            variant: name_sym,
+                                            variant: variant.name.clone(),
                                         },
                                     );
                                 } else {
@@ -2255,7 +2277,13 @@ fn ctor_lookup<'a>(
 ) -> Option<(&'a AdtDecl, &'a AdtVariant)> {
     let mut found = None;
     for adt in adts.values() {
-        if let Some(variant) = adt.variants.iter().find(|v| &v.name == name) {
+        if let Some(variant) = adt.variants.iter().find(|variant| {
+            qualified_constructor_name(&adt.name, &variant.name) == *name
+                || compatibility_constructor_name(&adt.name, &variant.name) == *name
+        }) {
+            if qualified_constructor_name(&adt.name, &variant.name) == *name {
+                return Some((adt, variant));
+            }
             if found.is_some() {
                 return None;
             }
@@ -2263,6 +2291,32 @@ fn ctor_lookup<'a>(
         }
     }
     found
+}
+
+fn constructor_project_symbol(
+    env: &TypeEnv,
+    adts: &BTreeMap<Symbol, AdtDecl>,
+    base: &Expr,
+    variant: &Symbol,
+) -> Option<Symbol> {
+    let Expr::Var(typ) = base else {
+        return None;
+    };
+    if env.lookup(&typ.name).is_some() {
+        return None;
+    }
+    let adt = adts.get(&typ.name)?;
+    let constructor = qualified_constructor_name(&adt.name, variant);
+    ctor_lookup(adts, &constructor).map(|_| constructor)
+}
+
+fn qualified_constructor_name(adt: &Symbol, variant: &Symbol) -> Symbol {
+    let variant = variant
+        .as_ref()
+        .rsplit('.')
+        .next()
+        .unwrap_or(variant.as_ref());
+    Symbol::intern(&format!("{adt}.{variant}"))
 }
 
 type PartialRecordConstructor<'a, 'e> =
@@ -2911,7 +2965,11 @@ fn check_match_exhaustive(
         Some(adt) => adt,
         None => return Ok(()),
     };
-    let ctor_names: BTreeSet<Symbol> = adt.variants.iter().map(|v| v.name.clone()).collect();
+    let ctor_names: BTreeSet<Symbol> = adt
+        .variants
+        .iter()
+        .map(|v| qualified_constructor_name(&adt.name, &v.name))
+        .collect();
     if ctor_names.is_empty() {
         return Ok(());
     }
@@ -2920,20 +2978,25 @@ fn check_match_exhaustive(
         match pat {
             Pattern::Named(_, name, _) => {
                 let name_sym = name.to_dotted_symbol();
-                if ctor_names.contains(&name_sym) {
-                    covered.insert(name_sym);
+                if let Some((matched_adt, variant)) = ctor_lookup(adts, &name_sym)
+                    && matched_adt.name == adt.name
+                {
+                    covered.insert(qualified_constructor_name(&adt.name, &variant.name));
                 }
             }
             Pattern::List(_, elems) if adt_name.as_ref() == "List" && elems.is_empty() => {
-                covered.insert(Symbol::intern("Empty"));
+                covered.insert(Symbol::intern("List.Empty"));
             }
             Pattern::Cons(..) if adt_name.as_ref() == "List" => {
-                covered.insert(Symbol::intern("Cons"));
+                covered.insert(Symbol::intern("List.Cons"));
             }
             _ => {}
         }
     }
-    let mut missing: Vec<Symbol> = ctor_names.difference(&covered).cloned().collect();
+    let mut missing: Vec<Symbol> = ctor_names
+        .difference(&covered)
+        .map(|name| Symbol::intern(name.as_ref().rsplit('.').next().unwrap_or(name.as_ref())))
+        .collect();
     if missing.is_empty() {
         return Ok(());
     }

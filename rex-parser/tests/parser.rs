@@ -1032,7 +1032,7 @@ fn test_projection_can_be_applied_without_parens() {
 #[test]
 fn test_list_cons_expr() {
     let expr = parse("x::xs");
-    let expected = app!(app!(v!("Cons"), v!("x")), v!("xs"));
+    let expected = app!(app!(v!("List.Cons"), v!("x")), v!("xs"));
     assert_expr_eq!(expr, expected; ignore span);
 }
 
@@ -1040,8 +1040,8 @@ fn test_list_cons_expr() {
 fn test_list_cons_expr_right_associative() {
     let expr = parse("x::y::zs");
     let expected = app!(
-        app!(v!("Cons"), v!("x")),
-        app!(app!(v!("Cons"), v!("y")), v!("zs"))
+        app!(v!("List.Cons"), v!("x")),
+        app!(app!(v!("List.Cons"), v!("y")), v!("zs"))
     );
     assert_expr_eq!(expr, expected; ignore span);
 }

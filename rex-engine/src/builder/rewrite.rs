@@ -228,6 +228,16 @@ fn validate_import_uses_expr(
 ) -> Result<(), ImportUseError> {
     match expr {
         Expr::Project(span, base, field) => {
+            if let Expr::Project(_, module, type_name) = base.as_ref()
+                && let Expr::Var(alias) = module.as_ref()
+                && alias_is_visible(&alias.name, bound, shadowed_values)
+                && let Some(exports) = aliases.get(&alias.name)
+                && exports.typ(type_name).is_some()
+            {
+                // `Module.Type.Variant` selects an ADT constructor. The type
+                // checker validates the final variant after import rewriting.
+                return Ok(());
+            }
             if let Expr::Var(v) = base.as_ref()
                 && alias_is_visible(&v.name, bound, shadowed_values)
                 && let Some(exports) = aliases.get(&v.name)
@@ -1174,6 +1184,26 @@ fn rewrite_import_uses_expr(
         Expr::Hole(span) => Expr::Hole(*span),
         Expr::Project(span, base, field) => {
             if let Expr::Var(v) = base.as_ref()
+                && !bound.contains(&v.name)
+                && let Some(imported_type) = scope.imported_types.get(&v.name)
+            {
+                return Expr::Var(Var {
+                    span: *span,
+                    name: qualified_constructor_symbol(imported_type.symbol(), field),
+                });
+            }
+            if let Expr::Project(_, module, type_name) = base.as_ref()
+                && let Expr::Var(alias) = module.as_ref()
+                && alias_is_visible(&alias.name, bound, scope.shadowed_values)
+                && let Some(exports) = scope.aliases.get(&alias.name)
+                && let Some(imported_type) = exports.typ(type_name)
+            {
+                return Expr::Var(Var {
+                    span: *span,
+                    name: qualified_constructor_symbol(imported_type.symbol(), field),
+                });
+            }
+            if let Expr::Var(v) = base.as_ref()
                 && alias_is_visible(&v.name, bound, scope.shadowed_values)
                 && let Some(exports) = scope.aliases.get(&v.name)
                 && let Some(internal) = exports.value(field)
@@ -1277,7 +1307,7 @@ fn rewrite_import_uses_expr(
             let scrutinee = Arc::new(rewrite_import_uses_expr(scrutinee, bound, scope));
             let mut renamed_arms = Vec::new();
             for (pat, arm_expr) in arms {
-                let pat = rewrite_import_uses_pattern(pat, scope.imported_values);
+                let pat = rewrite_import_uses_pattern(pat, scope);
                 let mut binds = Vec::new();
                 collect_pattern_bindings(&pat, &mut binds);
                 for b in &binds {
@@ -1348,21 +1378,15 @@ fn rewrite_import_uses_expr(
     }
 }
 
-fn rewrite_import_uses_pattern(
-    pat: &Pattern,
-    imported_values: &BTreeMap<Symbol, CanonicalSymbol>,
-) -> Pattern {
+fn rewrite_import_uses_pattern(pat: &Pattern, scope: &RewriteScope<'_>) -> Pattern {
     match pat {
         Pattern::Wildcard(span) => Pattern::Wildcard(*span),
         Pattern::Var(v) => Pattern::Var(v.clone()),
         Pattern::Named(span, name, args) => {
-            let name = imported_values
-                .get(&name.to_dotted_symbol())
-                .map(|c| NameRef::Unqualified(c.symbol().clone()))
-                .unwrap_or_else(|| name.clone());
+            let name = rewrite_constructor_name(name, scope);
             let args = args
                 .iter()
-                .map(|p| rewrite_import_uses_pattern(p, imported_values))
+                .map(|p| rewrite_import_uses_pattern(p, scope))
                 .collect();
             Pattern::Named(*span, name, args)
         }
@@ -1370,33 +1394,64 @@ fn rewrite_import_uses_pattern(
             *span,
             elems
                 .iter()
-                .map(|p| rewrite_import_uses_pattern(p, imported_values))
+                .map(|p| rewrite_import_uses_pattern(p, scope))
                 .collect(),
         ),
         Pattern::List(span, elems) => Pattern::List(
             *span,
             elems
                 .iter()
-                .map(|p| rewrite_import_uses_pattern(p, imported_values))
+                .map(|p| rewrite_import_uses_pattern(p, scope))
                 .collect(),
         ),
         Pattern::Cons(span, head, tail) => Pattern::Cons(
             *span,
-            Box::new(rewrite_import_uses_pattern(head, imported_values)),
-            Box::new(rewrite_import_uses_pattern(tail, imported_values)),
+            Box::new(rewrite_import_uses_pattern(head, scope)),
+            Box::new(rewrite_import_uses_pattern(tail, scope)),
         ),
         Pattern::Dict(span, fields) => Pattern::Dict(
             *span,
             fields
                 .iter()
-                .map(|(name, p)| {
-                    (
-                        name.clone(),
-                        rewrite_import_uses_pattern(p, imported_values),
-                    )
-                })
+                .map(|(name, p)| (name.clone(), rewrite_import_uses_pattern(p, scope)))
                 .collect(),
         ),
+    }
+}
+
+fn qualified_constructor_symbol(typ: &Symbol, variant: &Symbol) -> Symbol {
+    Symbol::intern(&format!("{}.{}", typ, variant))
+}
+
+fn rewrite_constructor_name(name: &NameRef, scope: &RewriteScope<'_>) -> NameRef {
+    let segments = name.as_segments();
+    match segments.as_slice() {
+        [typ, variant] => scope
+            .imported_types
+            .get(typ)
+            .map(|imported_type| {
+                NameRef::Unqualified(qualified_constructor_symbol(
+                    imported_type.symbol(),
+                    variant,
+                ))
+            })
+            .unwrap_or_else(|| name.clone()),
+        [alias, typ, variant] => scope
+            .aliases
+            .get(alias)
+            .and_then(|exports| exports.typ(typ))
+            .map(|imported_type| {
+                NameRef::Unqualified(qualified_constructor_symbol(
+                    imported_type.symbol(),
+                    variant,
+                ))
+            })
+            .unwrap_or_else(|| name.clone()),
+        _ => scope
+            .imported_values
+            .get(&name.to_dotted_symbol())
+            .map(|c| NameRef::Unqualified(c.symbol().clone()))
+            .unwrap_or_else(|| name.clone()),
     }
 }
 

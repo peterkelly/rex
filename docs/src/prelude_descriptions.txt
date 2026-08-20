@@ -41,9 +41,18 @@ fn:Empty	Empty	The empty list constructor.
 fn:Err	Err error	Constructs a failed `Result` containing `error`.
 fn:Equal	Equal	The `Ordering` value returned when two values are equal.
 fn:Greater	Greater	The `Ordering` value returned when the left value is greater than the right value.
+fn:List.Cons	List.Cons head tail	Constructs a non-empty list whose first element is `head` and whose remaining elements are `tail`.
+fn:List.Empty	List.Empty	The type-qualified empty list constructor.
 fn:Less	Less	The `Ordering` value returned when the left value is less than the right value.
 fn:None	None	The empty `Option` constructor.
 fn:Ok	Ok value	Constructs a successful `Result` containing `value`.
+fn:Option.None	Option.None	The type-qualified empty `Option` constructor.
+fn:Option.Some	Option.Some value	Constructs a present `Option` containing `value` using its type-qualified name.
+fn:Ordering.Equal	Ordering.Equal	The type-qualified `Ordering` value returned when two values are equal.
+fn:Ordering.Greater	Ordering.Greater	The type-qualified `Ordering` value returned when the left value is greater than the right value.
+fn:Ordering.Less	Ordering.Less	The type-qualified `Ordering` value returned when the left value is less than the right value.
+fn:Result.Err	Result.Err error	Constructs a failed `Result` containing `error` using its type-qualified name.
+fn:Result.Ok	Result.Ok value	Constructs a successful `Result` containing `value` using its type-qualified name.
 fn:Some	Some value	Constructs a present `Option` containing `value`.
 fn:ap	ap functions values	Applies the wrapped functions in `functions` to the wrapped values in `values`.
 fn:bind	bind transform container	Applies `transform` to each successful value in `container` and flattens the resulting container layer.

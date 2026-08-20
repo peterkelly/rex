@@ -191,8 +191,9 @@ Only exported (`pub`) values, types, and classes are importable through `(*)` an
 
 Module aliases expose all export namespaces for qualified lookup:
 
-- `Alias.value` resolves against exported values (including constructors).
+- `Alias.value` resolves against exported values.
 - `Alias.Type` resolves against exported type names in type positions.
+- `Alias.Type.Variant` resolves an ADT constructor owned by an exported type.
 - `Alias.Class` resolves against exported class names in class-constraint positions.
 
 - Missing requested exports are module errors.
@@ -204,6 +205,12 @@ Module aliases expose all export namespaces for qualified lookup:
 - Lexically bound names (lambda params, `let` vars, pattern bindings) shadow imported names.
 - Importing a name that conflicts with a local top-level declaration is a module error.
 - Importing the same unqualified name more than once (including via aliasing) is a module error.
+
+Importing an ADT type also makes its constructor namespace available. For example,
+`import dep (Status)` permits `Status.Ready`, while `import dep as D` permits
+`D.Status.Ready`. Constructor namespaces are type-owned, so two imported types may both define a
+variant named `Ready` without creating an ambiguity. For compatibility, variants also retain their
+legacy value aliases; an ambiguous legacy alias still requires the type-owned spelling.
 
 Type/class rewrites run with declaration ordering semantics:
 
@@ -295,6 +302,29 @@ Rules:
 - `type` and `class` declarations bind type parameters with whitespace after the declaration head.
 - `instance` declarations bind type parameters with `<...>` immediately after `instance`.
 
+## Algebraic Data Type Constructors
+
+Each ADT owns a constructor namespace named after the type:
+
+```rex
+type Direction = North | South;
+type Status = Ready | Waiting;
+
+let direction = Direction.North in
+match direction with {
+    case Direction.North -> Status.Ready;
+    case Direction.South -> Status.Waiting;
+}
+```
+
+The same `Type.Variant` spelling is used in expressions and constructor patterns. Constructor
+names are distinct from record projection: when the left-hand name resolves to an ADT type, the
+member resolves in that type's variant namespace. The runtime constructor tag remains the variant
+name, so this source-level qualification does not change ADT JSON encoding or Rust conversion.
+
+Unqualified constructor aliases remain available for source compatibility. They may be overloaded
+when multiple ADTs define the same variant; `Type.Variant` is the canonical, unambiguous spelling.
+
 ## Named Record Aliases
 
 ### Syntax
@@ -327,7 +357,7 @@ type Tagged a = { tag: String, value: a };
 A record-carrying ADT constructor may be followed directly by its named fields:
 
 ```rex
-Config { retries = 9, enabled = true }
+Config.Config { retries = 9, enabled = true }
 ```
 
 An uppercase constructor reference and its following record literal bind as one expression before
@@ -345,7 +375,7 @@ require a `Default` instance:
 
 ```rex
 type Config = Config { retries: i32, enabled: Bool };
-Config { retries = 9, enabled = true }
+Config.Config { retries = 9, enabled = true }
 ```
 
 ### Partial Construction
@@ -360,15 +390,15 @@ The constructor fixes the result type and complete field schema before supplied 
 checked. Therefore partial construction does not rely on row polymorphism or infer a smaller
 record type. Unknown fields remain errors.
 
-For a qualifying constructor `C`, this expression:
+For a qualifying constructor `T.C`, this expression:
 
 ```rex
-C { field = value }
+T.C { field = value }
 ```
 
-is semantically equivalent to evaluating `default` once at `C`'s result type and updating that
+is semantically equivalent to evaluating `default` once at `T.C`'s result type and updating that
 value's `field`. Omitted fields come from the whole ADT's `Default` implementation, not from
-independent `Default` instances for each field. `C {}` is an explicitly typed default value.
+independent `Default` instances for each field. `T.C {}` is an explicitly typed default value.
 
 Partial construction is rejected for multi-variant ADTs because `Default T` does not guarantee
 that it produces the named variant. Supporting such construction would require a
@@ -459,10 +489,10 @@ This enables the common pattern:
 ```rex,interactive
 type Sum = A { x: i32 } | B { x: i32 };
 
-let s: Sum = A { x = 1 } in
+let s: Sum = Sum.A { x = 1 } in
 match s with {
-  case A {x} -> { s with { x = x + 1 } };
-  case B {x} -> { s with { x = x + 2 } };
+  case Sum.A {x} -> { s with { x = x + 1 } };
+  case Sum.B {x} -> { s with { x = x + 2 } };
 }
 ```
 
@@ -582,9 +612,9 @@ Regression: `additive_monoid_list_concatenates_in_order` and
 ### Prelude Ordering
 
 The prelude defines the algebraic data type `Ordering` with exactly three unit variants:
-`Less`, `Equal`, and `Greater`. The `Ord` method `cmp : a -> a -> Ordering` returns the variant that
-describes the left operand relative to the right operand. Floating-point comparisons involving
-NaN remain runtime type errors.
+`Ordering.Less`, `Ordering.Equal`, and `Ordering.Greater`. The `Ord` method
+`cmp : a -> a -> Ordering` returns the variant that describes the left operand relative to the
+right operand. Floating-point comparisons involving NaN remain runtime type errors.
 
 Regression: `ord_cmp_returns_ordering_variants` and `ordering_variants_can_be_pattern_matched`
 (`rex/tests/typeclasses_system.rs`).

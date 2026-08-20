@@ -632,28 +632,47 @@ fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
     );
     engine.type_system.register_adt(&list_adt)?;
     for (ctor, scheme) in list_adt.constructor_schemes() {
-        match ctor.as_ref() {
-            "Empty" => {
-                engine.export_native(ctor.to_string(), scheme, 0, |scope, _, args| {
-                    if !args.is_empty() {
-                        return Err(EngineError::Internal(
-                            "Empty constructor received arguments".into(),
-                        ));
-                    }
-                    scope.alloc_root_empty()
-                })?;
+        let leaf = ctor
+            .as_ref()
+            .rsplit('.')
+            .next()
+            .unwrap_or(ctor.as_ref())
+            .to_string();
+        let names = [ctor, Symbol::intern(&leaf)];
+        for name in names {
+            match leaf.as_str() {
+                "Empty" => {
+                    engine.export_native(
+                        name.to_string(),
+                        scheme.clone(),
+                        0,
+                        |scope, _, args| {
+                            if !args.is_empty() {
+                                return Err(EngineError::Internal(
+                                    "Empty constructor received arguments".into(),
+                                ));
+                            }
+                            scope.alloc_root_empty()
+                        },
+                    )?;
+                }
+                "Cons" => {
+                    engine.export_native(
+                        name.to_string(),
+                        scheme.clone(),
+                        2,
+                        |scope, _, args| {
+                            let [head, tail] = args else {
+                                return Err(EngineError::Internal(
+                                    "Cons constructor received wrong arity".into(),
+                                ));
+                            };
+                            scope.alloc_root_cons(*head, *tail)
+                        },
+                    )?;
+                }
+                _ => {}
             }
-            "Cons" => {
-                engine.export_native(ctor.to_string(), scheme, 2, |scope, _, args| {
-                    let [head, tail] = args else {
-                        return Err(EngineError::Internal(
-                            "Cons constructor received wrong arity".into(),
-                        ));
-                    };
-                    scope.alloc_root_cons(*head, *tail)
-                })?;
-            }
-            _ => {}
         }
     }
 

@@ -1230,7 +1230,11 @@ impl AdtDecl {
     }
 
     /// Build constructor schemes of the form:
-    /// `C :: a1 -> a2 -> ... -> T params`.
+    /// `T.C :: a1 -> a2 -> ... -> T params`.
+    ///
+    /// Constructors live in a namespace owned by their ADT. Keeping the type
+    /// name in the canonical value-level symbol lets distinct ADTs reuse
+    /// variant names without making those canonical symbols ambiguous.
     pub fn constructor_schemes(&self) -> Vec<(Symbol, Scheme)> {
         let result_ty = self.result_type();
         let vars: Vec<TypeVar> = self.params.iter().map(|p| p.var.clone()).collect();
@@ -1240,9 +1244,32 @@ impl AdtDecl {
             for arg in variant.args.iter().rev() {
                 typ = Type::fun(arg.typ(), typ);
             }
-            out.push((variant.name.clone(), Scheme::new(vars.clone(), vec![], typ)));
+            let variant_name = variant
+                .name
+                .as_ref()
+                .rsplit('.')
+                .next()
+                .unwrap_or(variant.name.as_ref());
+            let constructor = Symbol::intern(&format!("{}.{}", self.name, variant_name));
+            out.push((constructor, Scheme::new(vars.clone(), vec![], typ)));
         }
         out
+    }
+}
+
+/// Return the legacy constructor symbol for an ADT variant.
+///
+/// Module-qualified ADTs keep the module prefix while dropping the owning
+/// type segment: `@m1.EntryKind.Blob` has compatibility alias `@m1.Blob`.
+pub fn compatibility_constructor_name(adt: &Symbol, variant: &Symbol) -> Symbol {
+    let variant = variant
+        .as_ref()
+        .rsplit('.')
+        .next()
+        .unwrap_or(variant.as_ref());
+    match adt.as_ref().rsplit_once('.') {
+        Some((prefix, _)) => Symbol::intern(&format!("{prefix}.{variant}")),
+        None => Symbol::intern(variant),
     }
 }
 

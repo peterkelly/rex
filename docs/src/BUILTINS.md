@@ -11,10 +11,10 @@
 | `DateTime` | UTC timestamp value. |
 | `Dict a` | Immutable mapping from string keys to values of one type. |
 | `Hash` | BLAKE3 hash value. |
-| `List a` | Immutable ordered sequence. Constructors: `Empty`, `Cons`. |
-| `Option a` | Optional value (`Some` or `None`). Constructors: `Some`, `None`. |
-| `Ordering` | Three-way comparison result (`Less`, `Equal`, or `Greater`). Constructors: `Less`, `Equal`, `Greater`. |
-| `Result a b` | Result value (`Ok` or `Err`) for success/failure flows. Constructors: `Err`, `Ok`. |
+| `List a` | Immutable ordered sequence. Constructors: `List.Empty`, `List.Cons`. |
+| `Option a` | Optional value (`Some` or `None`). Constructors: `Option.Some`, `Option.None`. |
+| `Ordering` | Three-way comparison result (`Less`, `Equal`, or `Greater`). Constructors: `Ordering.Less`, `Ordering.Equal`, `Ordering.Greater`. |
+| `Result a b` | Result value (`Ok` or `Err`) for success/failure flows. Constructors: `Result.Err`, `Result.Ok`. |
 | `String` | UTF-8 string value. |
 | `UUID` | UUID value. |
 | `f32` | 32-bit floating-point number. |
@@ -128,7 +128,31 @@ Returns `Less`, `Equal`, or `Greater` according to the ordering of `left` relati
 
 ## Ordering Values
 
-`cmp` returns one of these `Ordering` values.
+`cmp` returns one of these `Ordering` values. The bare names are convenient aliases for the type-qualified constructors.
+
+### `Ordering.Less`
+
+**Call:** `Ordering.Less`
+
+**Type:** `Ordering`
+
+The type-qualified `Ordering` value returned when the left value is less than the right value.
+
+### `Ordering.Equal`
+
+**Call:** `Ordering.Equal`
+
+**Type:** `Ordering`
+
+The type-qualified `Ordering` value returned when two values are equal.
+
+### `Ordering.Greater`
+
+**Call:** `Ordering.Greater`
+
+**Type:** `Ordering`
+
+The type-qualified `Ordering` value returned when the left value is greater than the right value.
 
 ### `Less`
 
@@ -429,6 +453,22 @@ Returns `value` when it is non-empty, present, or successful; otherwise applies 
 ## List Functions
 
 Construct, index, slice, and combine `List` values.
+
+### `List.Empty`
+
+**Call:** `List.Empty`
+
+**Type:** `List 'a`
+
+The type-qualified empty list constructor.
+
+### `List.Cons`
+
+**Call:** `List.Cons head tail`
+
+**Type:** `'a -> List 'a -> List 'a`
+
+Constructs a non-empty list whose first element is `head` and whose remaining elements are `tail`.
 
 ### `Empty`
 
@@ -864,7 +904,23 @@ Decodes `bytes` as UTF-8, returning `None` when the byte sequence is invalid.
 
 ## Option and Result Functions
 
-Construct, inspect, and extract optional values and success-or-error results.
+Construct, inspect, and extract optional values and success-or-error results. The bare constructor names are convenient aliases for the type-qualified forms.
+
+### `Option.None`
+
+**Call:** `Option.None`
+
+**Type:** `Option 't`
+
+The type-qualified empty `Option` constructor.
+
+### `Option.Some`
+
+**Call:** `Option.Some value`
+
+**Type:** `'t -> Option 't`
+
+Constructs a present `Option` containing `value` using its type-qualified name.
 
 ### `None`
 
@@ -897,6 +953,22 @@ Returns whether `option` is `None`.
 **Type:** `Option 'a -> Bool`
 
 Returns whether `option` is `Some`.
+
+### `Result.Err`
+
+**Call:** `Result.Err error`
+
+**Type:** `'e -> Result 't 'e`
+
+Constructs a failed `Result` containing `error` using its type-qualified name.
+
+### `Result.Ok`
+
+**Call:** `Result.Ok value`
+
+**Type:** `'t -> Result 't 'e`
+
+Constructs a successful `Result` containing `value` using its type-qualified name.
 
 ### `Err`
 
