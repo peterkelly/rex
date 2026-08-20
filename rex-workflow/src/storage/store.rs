@@ -83,7 +83,15 @@ impl Store {
     }
 
     pub async fn get(&self, hash: Hash) -> Result<Vec<u8>, Error> {
-        self.inner.get(hash).await
+        let data = self.inner.get(hash).await?;
+        let data_hash = blake3::hash(&data);
+        if data_hash != hash {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("Invalid hash: Expected {}, got {}", hash, data_hash),
+            ));
+        }
+        Ok(data)
     }
 
     pub async fn size(&self, hash: Hash) -> Result<u64, Error> {
