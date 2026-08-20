@@ -157,10 +157,12 @@ fn expand_export(args: RegistrationArgs, function: ItemFn) -> Result<TokenStream
             "`defaults(...)` is supported only by `#[rex::module]`",
         ));
     }
-    if !function.sig.generics.params.is_empty() || function.sig.generics.where_clause.is_some() {
+    if function.sig.generics.lifetimes().next().is_some()
+        || function.sig.generics.const_params().next().is_some()
+    {
         return Err(Error::new(
             function.sig.generics.span(),
-            "generic functions cannot be registered as Rex exports",
+            "generic Rex exports support only type parameters",
         ));
     }
     if function.sig.constness.is_some() || function.sig.unsafety.is_some() {
@@ -175,6 +177,18 @@ fn expand_export(args: RegistrationArgs, function: ItemFn) -> Result<TokenStream
     let docs = docs_from_attrs(&function.attrs)?;
     let function_name = &function.sig.ident;
     let helper_name = format_ident!("{}_rex_export", function_name);
+    let function_turbofish = function.sig.generics.split_for_impl().1.as_turbofish();
+    let mut helper_generics = function.sig.generics.clone();
+    helper_generics
+        .make_where_clause()
+        .predicates
+        .push(parse_quote!(
+            #state: ::std::clone::Clone
+                + ::std::marker::Send
+                + ::std::marker::Sync
+                + 'static
+        ));
+    let (helper_impl_generics, _, helper_where_clause) = helper_generics.split_for_impl();
     let export_name = args
         .name
         .map(|name| name.value())
@@ -194,13 +208,16 @@ fn expand_export(args: RegistrationArgs, function: ItemFn) -> Result<TokenStream
         #function
 
         #[doc(hidden)]
-        pub fn #helper_name() -> Result<
+        pub fn #helper_name #helper_impl_generics () -> Result<
             ::rex::engine::Export<#state>,
             ::rex::engine::EngineError,
-        > {
+        > #helper_where_clause {
             let __rex_param_names: ::std::vec::Vec<&str> =
                 ::std::vec![#(#param_names),*];
-            let mut __rex_export = #constructor(#export_name, #function_name)?
+            let mut __rex_export = #constructor(
+                #export_name,
+                #function_name #function_turbofish,
+            )?
                 .with_param_names(__rex_param_names)?;
             #attach_docs
             Ok(__rex_export)
@@ -257,13 +274,23 @@ fn expand_module(args: RegistrationArgs, mut module: ItemMod) -> Result<TokenStr
     }
 
     let mut state: Option<(String, Type)> = None;
+    let mut module_generics: Option<(String, Generics)> = None;
     let mut export_helpers = Vec::new();
     let mut exported_types = Vec::new();
     for item in items.iter() {
         match item {
             Item::Fn(function) if function.attrs.iter().any(is_rex_export_attr) => {
+                if function.sig.generics.lifetimes().next().is_some()
+                    || function.sig.generics.const_params().next().is_some()
+                {
+                    return Err(Error::new(
+                        function.sig.generics.span(),
+                        "generic Rex exports support only type parameters",
+                    ));
+                }
                 let function_state = exported_state_type(function)?;
                 let state_tokens = function_state.to_token_stream().to_string();
+                let generics_tokens = function.sig.generics.to_token_stream().to_string();
                 if let Some((expected, _)) = &state {
                     if expected != &state_tokens {
                         return Err(Error::new(
@@ -271,8 +298,18 @@ fn expand_module(args: RegistrationArgs, mut module: ItemMod) -> Result<TokenStr
                             "all functions in a registered Rex module must use the same state type",
                         ));
                     }
+                    if module_generics
+                        .as_ref()
+                        .is_some_and(|(expected, _)| expected != &generics_tokens)
+                    {
+                        return Err(Error::new(
+                            function.sig.generics.span(),
+                            "all functions in a registered Rex module must use the same generics",
+                        ));
+                    }
                 } else {
                     state = Some((state_tokens, function_state));
+                    module_generics = Some((generics_tokens, function.sig.generics.clone()));
                 }
                 export_helpers.push(format_ident!("{}_rex_export", function.sig.ident));
             }
@@ -300,19 +337,34 @@ fn expand_module(args: RegistrationArgs, mut module: ItemMod) -> Result<TokenStr
     let state = state
         .map(|(_, state)| state)
         .unwrap_or_else(|| parse_quote!(()));
+    let mut module_generics = module_generics
+        .map(|(_, generics)| generics)
+        .unwrap_or_default();
+    module_generics
+        .make_where_clause()
+        .predicates
+        .push(parse_quote!(
+            #state: ::std::clone::Clone
+                + ::std::marker::Send
+                + ::std::marker::Sync
+                + 'static
+        ));
+    let (_, module_type_generics, _) = module_generics.split_for_impl();
+    let module_turbofish = module_type_generics.as_turbofish();
+    let (module_impl_generics, _, module_where_clause) = module_generics.split_for_impl();
     let module_docs = docs_expr(module_docs);
     let factory: Item = syn::parse2(quote! {
         /// Build this Rust module's documented Rex registration.
-        pub fn rex_module() -> Result<
+        pub fn rex_module #module_impl_generics () -> Result<
             ::rex::engine::Module<#state>,
             ::rex::engine::EngineError,
-        > {
+        > #module_where_clause {
             let mut __rex_module = ::rex::engine::Module::<#state>::new(
                 #module_name,
                 #module_docs,
             );
             #(__rex_module.add_rex_adt::<#exported_types>()?;)*
-            #(__rex_module.add_export(#export_helpers()?)?;)*
+            #(__rex_module.add_export(#export_helpers #module_turbofish ()?)?;)*
             #(__rex_module.add_rex_default_instance::<#default_types>()?;)*
             Ok(__rex_module)
         }

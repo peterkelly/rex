@@ -102,17 +102,20 @@ pub use rex_engine::Rex;
 ///
 /// The macro preserves Rust doc comments and Rust parameter names in the
 /// generated [`engine::Export`]. It also creates a `<function>_rex_export`
-/// helper used by [`module`]. Rust does not support documentation attributes on
-/// individual function parameters, so parameter descriptions belong in the
-/// function-level documentation.
+/// helper used by [`module`]. Generic exports are monomorphized when this helper
+/// is called. Rust does not support documentation attributes on individual
+/// function parameters, so parameter descriptions belong in the function-level
+/// documentation.
 pub use rex_proc_macro::export;
 
 /// Register an inline Rust module and generate its documented Rex module factory.
 ///
 /// Functions marked with [`export`] and ADTs marked `#[rex(export)]` are added
-/// to the generated `rex_module()` function. The optional `defaults(Type, ...)`
-/// argument registers qualified Rex `Default` instances backed by each listed
-/// type's [`engine::RexDefault`] implementation.
+/// to the generated `rex_module()` function. If the exported functions are
+/// generic, the generated factory has the same type parameters and
+/// monomorphizes all exports for the selected state type. The optional
+/// `defaults(Type, ...)` argument registers qualified Rex `Default` instances
+/// backed by each listed type's [`engine::RexDefault`] implementation.
 pub use rex_proc_macro::module;
 
 /// Parse, typecheck, evaluate, and JSON-encode a Rex snippet.

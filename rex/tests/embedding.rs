@@ -372,6 +372,50 @@ struct HostState {
     roles: Vec<String>,
 }
 
+pub trait OffsetState {
+    fn offset(&self) -> i32;
+}
+
+#[derive(Clone)]
+struct FirstOffsetState(i32);
+
+impl OffsetState for FirstOffsetState {
+    fn offset(&self) -> i32 {
+        self.0
+    }
+}
+
+#[derive(Clone)]
+struct SecondOffsetState(i32);
+
+impl OffsetState for SecondOffsetState {
+    fn offset(&self) -> i32 {
+        self.0
+    }
+}
+
+#[rex::module(name = "host.generic_state")]
+mod generic_state_exports {
+    use super::OffsetState;
+    use rex::engine::EngineError;
+
+    #[rex::export]
+    pub fn add_offset<T>(state: T, value: i32) -> Result<i32, EngineError>
+    where
+        T: OffsetState,
+    {
+        Ok(state.offset() + value)
+    }
+
+    #[rex::export]
+    pub async fn add_offset_async<T>(state: T, value: i32) -> Result<i32, EngineError>
+    where
+        T: OffsetState,
+    {
+        Ok(state.offset() + value)
+    }
+}
+
 fn current_account_id(state: HostState) -> Result<Uuid, EngineError> {
     Ok(state.account_id)
 }
@@ -658,6 +702,43 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     assert_eq!(items.len(), 2);
     assert!(items[0].to_rust::<bool>().unwrap());
     assert!(!items[1].to_rust::<bool>().unwrap());
+}
+
+#[tokio::test]
+async fn export_and_module_macros_support_generic_state_types() -> Result<(), EngineError> {
+    let export = generic_state_exports::add_offset_rex_export::<FirstOffsetState>()?;
+    assert_eq!(export.name, "add_offset");
+
+    let first_module = generic_state_exports::rex_module::<FirstOffsetState>()?;
+    assert_eq!(first_module.exports().len(), 2);
+
+    let mut builder = Builder::with_prelude(FirstOffsetState(10))?;
+    builder.inject_module(first_module)?;
+    let (_heap, value, _typ) = common::eval_source(
+        builder,
+        r#"
+        import host.generic_state as Generic;
+        (Generic.add_offset 5, Generic.add_offset_async 7)
+        "#,
+    )
+    .await?;
+
+    assert_eq!(value, Value::Tuple(vec![Value::I32(15), Value::I32(17)]));
+
+    let second_module = generic_state_exports::rex_module::<SecondOffsetState>()?;
+    let mut builder = Builder::with_prelude(SecondOffsetState(20))?;
+    builder.inject_module(second_module)?;
+    let (_heap, value, _typ) = common::eval_source(
+        builder,
+        r#"
+        import host.generic_state (add_offset, add_offset_async);
+        (add_offset 3, add_offset_async 4)
+        "#,
+    )
+    .await?;
+
+    assert_eq!(value, Value::Tuple(vec![Value::I32(23), Value::I32(24)]));
+    Ok(())
 }
 
 #[tokio::test]
