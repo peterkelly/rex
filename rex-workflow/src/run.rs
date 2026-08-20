@@ -248,6 +248,7 @@ mod tests {
             "qpdf",
             "poppler",
             "imagemagick_ffmpeg",
+            "storage",
         ]
         .into_iter()
         .flat_map(|directory| std::fs::read_dir(examples.join(directory)).unwrap())
