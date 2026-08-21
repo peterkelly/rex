@@ -67,6 +67,9 @@ pub mod engine;
 /// Conversion between JSON values and typed Rex runtime values.
 pub mod json;
 
+/// Reusable Rex modules for embedders.
+pub mod modules;
+
 /// Source parser entry points and parse diagnostics.
 pub mod parser;
 

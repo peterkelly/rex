@@ -1,6 +1,6 @@
-pub use crate::modules::std::artifacts::Pdf;
 use blake3::Hash;
 use rex::Rex;
+pub use rex::modules::std::artifacts::Pdf;
 use std::collections::BTreeMap;
 
 /// One arbitrary file produced by a Poppler command-line utility.

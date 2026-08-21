@@ -1,8 +1,7 @@
-use crate::modules::{
-    std::storage::StateStore,
-    tools::executor::{DockerToolImages, ToolExecutor, docker_executor, local_executor},
+use crate::modules::tools::executor::{
+    DockerToolImages, ToolExecutor, docker_executor, local_executor,
 };
-use rex::storage::Store;
+use rex::{modules::std::storage::StateStore, storage::Store};
 use std::sync::Arc;
 
 #[derive(Clone)]

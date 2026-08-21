@@ -1,11 +1,9 @@
-use blake3::Hash;
-use rex::{
+use crate::{
     ast::Symbol,
     engine::{EngineError, FromRex, IntoRex, Module, Value, virtual_export_name},
     typesystem::{AdtArgument, AdtDecl, AdtField, RexAdt, RexType, Type, TypeVarSupply},
 };
-
-use crate::state::State;
+use blake3::Hash;
 
 const MODULE_NAME: &str = "std.artifacts";
 
@@ -29,7 +27,7 @@ macro_rules! artifact_type {
         }
 
         impl RexAdt for $name {
-            fn rex_adt_decl() -> Result<AdtDecl, rex::typesystem::TypeError> {
+            fn rex_adt_decl() -> Result<AdtDecl, crate::typesystem::TypeError> {
                 let mut supply = TypeVarSupply::new();
                 let mut adt = AdtDecl::new(&Symbol::intern(stringify!($name)), &[], &mut supply);
                 adt.docs = Some($docs.to_owned());
@@ -51,7 +49,7 @@ macro_rules! artifact_type {
                 Ok(adt)
             }
 
-            fn rex_adt_family() -> Result<Vec<AdtDecl>, rex::typesystem::TypeError> {
+            fn rex_adt_family() -> Result<Vec<AdtDecl>, crate::typesystem::TypeError> {
                 Ok(vec![Self::rex_adt_decl()?])
             }
         }
@@ -127,7 +125,10 @@ artifact_type!(
 /// The module owns artifact types used across workflow tool APIs. Constructing a wrapper classifies
 /// a content hash but does not inspect its bytes; the consuming tool validates that the stored blob
 /// is a supported input. Inject this module before installing any workflow tool module.
-pub fn module() -> Result<Module<State>, EngineError> {
+pub fn module<State>() -> Result<Module<State>, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
     let mut module = Module::new(
         MODULE_NAME,
         Some(
@@ -149,7 +150,7 @@ mod tests {
 
     #[test]
     fn artifact_types_have_canonical_ownership() {
-        let module = module().unwrap();
+        let module = module::<()>().unwrap();
         assert_eq!(module.name(), MODULE_NAME);
         assert_eq!(module.adts().len(), 4);
         assert_eq!(

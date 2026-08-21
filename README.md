@@ -133,8 +133,8 @@ The data model has two object kinds:
 
 Each tree entry records its kind, hash, and size. Trees can contain other trees,
 so one root hash identifies a complete immutable directory hierarchy. The sizes
-are cumulative, meaning that an entry that refers to another tree includes total
-size of everything it contains.
+are cumulative, meaning that an entry that refers to another tree includes the
+total size of everything it contains.
 
 ```text
 host file or directory

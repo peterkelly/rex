@@ -1,6 +1,6 @@
-pub use crate::modules::std::artifacts::Image;
 use blake3::Hash;
 use rex::Rex;
+pub use rex::modules::std::artifacts::Image;
 use std::collections::BTreeMap;
 
 /// The physical result of encoding an image sequence as one adjoined file or separate files.

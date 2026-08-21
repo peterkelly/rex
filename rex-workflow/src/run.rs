@@ -1,16 +1,11 @@
-use crate::{
-    modules::{
-        std::{artifacts, storage::storage_module},
-        tools,
-    },
-    state::State,
-};
+use crate::{modules::tools, state::State};
 use rex::{
     ast::CompilationUnit,
     engine::{
         Builder, CompileOptions, CompiledProgram, Evaluator, MainInputSpec, ModuleId, type_has_vars,
     },
     json::{json_to_main_inputs, rex_to_json},
+    modules::std::{artifacts, storage::storage_module},
     parser::{ParseError, parse as parse_rex},
 };
 

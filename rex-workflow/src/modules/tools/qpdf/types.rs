@@ -1,5 +1,5 @@
-pub use crate::modules::std::artifacts::{JsonFile, Pdf};
 use rex::Rex;
+pub use rex::modules::std::artifacts::{JsonFile, Pdf};
 
 /// One QPDF-produced PDF plus any recoverable warnings reported while writing it.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]

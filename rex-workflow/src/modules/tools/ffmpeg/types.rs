@@ -1,6 +1,6 @@
-pub use crate::modules::std::artifacts::Media;
 use blake3::Hash;
 use rex::Rex;
+pub use rex::modules::std::artifacts::Media;
 use std::collections::BTreeMap;
 
 /// A manifest and its referenced media segments stored together as a content-addressed tree.

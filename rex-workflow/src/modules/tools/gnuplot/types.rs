@@ -1,6 +1,6 @@
-pub use crate::modules::std::artifacts::{Image, Pdf};
 use chrono::{DateTime, Utc};
 use rex::Rex;
+pub use rex::modules::std::artifacts::{Image, Pdf};
 
 /// Inclusive numeric bounds used by axes, errors, histograms, and color scales.
 #[derive(Clone, Copy, Debug, PartialEq, Rex)]
