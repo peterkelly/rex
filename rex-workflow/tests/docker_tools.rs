@@ -28,6 +28,7 @@ const POPPLER_IMAGE_ENV: &str = "REX_WORKFLOW_POPPLER_IMAGE";
 struct DockerFixture {
     store: Store,
     state: State,
+    _store_directory: tempfile::TempDir,
 }
 
 fn docker_fixture() -> Option<DockerFixture> {
@@ -36,7 +37,8 @@ fn docker_fixture() -> Option<DockerFixture> {
         return None;
     }
 
-    let store = Store::new_in_memory();
+    let store_directory = tempfile::tempdir().expect("create Docker test CAS directory");
+    let store = Store::new_with_filesystem(store_directory.path().to_path_buf());
     let images = OciToolImages::development(
         OciPlatform::native_linux(),
         image_reference(FFMPEG_IMAGE_ENV, "rex-tool-ffmpeg:local"),
@@ -46,8 +48,30 @@ fn docker_fixture() -> Option<DockerFixture> {
         image_reference(QPDF_IMAGE_ENV, "rex-tool-qpdf:local"),
         image_reference(POPPLER_IMAGE_ENV, "rex-tool-poppler:local"),
     );
-    let state = State::docker(store.clone(), images);
-    Some(DockerFixture { store, state })
+    let tool_directory = std::env::current_exe()
+        .expect("locate integration test executable")
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("integration test executable is under target profile directory")
+        .to_path_buf();
+    let mut state = State::docker(store.clone(), images)
+        .with_tool_directory(tool_directory)
+        .with_tool_environment("REX_STORE", store_directory.path().to_string_lossy());
+    for (name, default) in [
+        (FFMPEG_IMAGE_ENV, "rex-tool-ffmpeg:local"),
+        (GNUPLOT_IMAGE_ENV, "rex-tool-gnuplot:local"),
+        (GRAPHVIZ_IMAGE_ENV, "rex-tool-graphviz:local"),
+        (IMAGEMAGICK_IMAGE_ENV, "rex-tool-imagemagick:local"),
+        (QPDF_IMAGE_ENV, "rex-tool-qpdf:local"),
+        (POPPLER_IMAGE_ENV, "rex-tool-poppler:local"),
+    ] {
+        state = state.with_tool_environment(name, image_reference(name, default));
+    }
+    Some(DockerFixture {
+        store,
+        state,
+        _store_directory: store_directory,
+    })
 }
 
 fn docker_tests_enabled() -> bool {

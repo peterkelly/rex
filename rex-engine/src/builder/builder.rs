@@ -602,6 +602,7 @@ where
     ) -> Result<(), EngineError> {
         let Export {
             name,
+            scheme: _,
             interface: _,
             payload,
             required_adts: _,
@@ -842,6 +843,7 @@ where
     ) -> Result<(), EngineError> {
         let Export {
             name,
+            scheme: _,
             interface: _,
             payload,
             required_adts: _,

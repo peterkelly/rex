@@ -162,6 +162,10 @@ macro_rules! define_handler_impl {
                 declare_fn_decl_from_scheme(export_name, &scheme)
             }
 
+            fn scheme_for(&self) -> Scheme {
+                Scheme::new(vec![], vec![], R::rex_type())
+            }
+
             fn inject(
                 self,
                 engine: &mut dyn ExportTarget<State>,
@@ -210,6 +214,10 @@ macro_rules! define_handler_impl {
                 let typ = native_fn_type!($($arg_ty),+ ; R);
                 let scheme = Scheme::new(vec![], vec![], typ);
                 declare_fn_decl_from_scheme(export_name, &scheme)
+            }
+
+            fn scheme_for(&self) -> Scheme {
+                Scheme::new(vec![], vec![], native_fn_type!($($arg_ty),+ ; R))
             }
 
             fn inject(
@@ -269,6 +277,10 @@ where
         declare_fn_decl_from_scheme(export_name, scheme)
     }
 
+    fn scheme_for(&self) -> Scheme {
+        self.0.clone()
+    }
+
     fn inject(
         self,
         engine: &mut dyn ExportTarget<State>,
@@ -303,6 +315,10 @@ macro_rules! define_async_handler_impl {
             fn interface_decl(export_name: &str) -> DeclareFnDecl {
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
                 declare_fn_decl_from_scheme(export_name, &scheme)
+            }
+
+            fn scheme_for(&self) -> Scheme {
+                Scheme::new(vec![], vec![], R::rex_type())
             }
 
             fn inject_async(
@@ -360,6 +376,10 @@ macro_rules! define_async_handler_impl {
                 let typ = native_fn_type!($($arg_ty),+ ; R);
                 let scheme = Scheme::new(vec![], vec![], typ);
                 declare_fn_decl_from_scheme(export_name, &scheme)
+            }
+
+            fn scheme_for(&self) -> Scheme {
+                Scheme::new(vec![], vec![], native_fn_type!($($arg_ty),+ ; R))
             }
 
             fn inject_async(
@@ -429,6 +449,10 @@ where
     fn interface_decl_for(&self, export_name: &str) -> DeclareFnDecl {
         let (scheme, _, _) = self;
         declare_fn_decl_from_scheme(export_name, scheme)
+    }
+
+    fn scheme_for(&self) -> Scheme {
+        self.0.clone()
     }
 
     fn inject_async(

@@ -1137,6 +1137,79 @@ dependencies = [
 ]
 
 [[package]]
+name = "rex-tool-ffmpeg"
+version = "3.9.14"
+dependencies = [
+ "blake3",
+ "rex",
+ "rex-workflow",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "rex-tool-gnuplot"
+version = "3.9.14"
+dependencies = [
+ "blake3",
+ "chrono",
+ "rex",
+ "rex-workflow",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "rex-tool-graphviz"
+version = "3.9.14"
+dependencies = [
+ "blake3",
+ "rex",
+ "rex-workflow",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "rex-tool-imagemagick"
+version = "3.9.14"
+dependencies = [
+ "blake3",
+ "rex",
+ "rex-workflow",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "rex-tool-poppler"
+version = "3.9.14"
+dependencies = [
+ "blake3",
+ "rex",
+ "rex-workflow",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "rex-tool-qpdf"
+version = "3.9.14"
+dependencies = [
+ "blake3",
+ "rex",
+ "rex-workflow",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "rex-typesystem"
 version = "3.9.14"
 dependencies = [

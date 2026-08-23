@@ -209,6 +209,36 @@ fn struct_like_single_variant_adt_roundtrip() {
 }
 
 #[test]
+fn single_field_variant_in_multi_variant_adt_roundtrip() {
+    let mut ts = mk_type_system();
+    let mut supply = TypeVarSupply::new();
+    let mut data = AdtDecl::new(&Symbol::intern("Data"), &[], &mut supply);
+    data.add_variant(
+        Symbol::intern("Points"),
+        vec![AdtArgument::positional(Type::list(Type::tuple([
+            Type::builtin(BuiltinTypeId::F64),
+            Type::builtin(BuiltinTypeId::F64),
+        ])))],
+        None,
+    );
+    data.add_variant(
+        Symbol::intern("Label"),
+        vec![AdtArgument::positional(Type::builtin(
+            BuiltinTypeId::String,
+        ))],
+        None,
+    );
+    ts.register_adt(&data).unwrap();
+
+    let typ = Type::con("Data", 0);
+    let expected = json!({ "Points": [] });
+    let value = Value::Adt(Symbol::intern("Points"), vec![Value::List(vec![])]);
+
+    assert_eq!(rex_to_json(&value, &typ, &ts).unwrap(), expected);
+    assert_eq!(json_to_rex(&expected, &typ, &ts).unwrap(), value);
+}
+
+#[test]
 fn unit_enum_string_roundtrip() {
     let mut ts = mk_type_system();
     let color = mk_unit_enum("Color", &["Red", "Green", "Blue"]);

@@ -464,7 +464,7 @@ fn value_to_json_for_adt(
     }
     Ok(JsonValue::Object(Map::from_iter([(
         local_name(tag).to_owned(),
-        encode_variant_fields(fields, &field_types, ts)?,
+        encode_wrapped_variant(fields, &field_types, ts)?,
     )])))
 }
 
@@ -531,6 +531,17 @@ fn encode_direct_variant(
 ) -> Result<JsonValue, EngineError> {
     match field_types {
         [] => Ok(JsonValue::String(local_name(constructor).to_owned())),
+        [field_type] => rex_to_json(&fields[0], field_type, ts),
+        _ => encode_variant_fields(fields, field_types, ts),
+    }
+}
+
+fn encode_wrapped_variant(
+    fields: &[RexValue],
+    field_types: &[Type],
+    ts: &TypeSystem,
+) -> Result<JsonValue, EngineError> {
+    match field_types {
         [field_type] => rex_to_json(&fields[0], field_type, ts),
         _ => encode_variant_fields(fields, field_types, ts),
     }

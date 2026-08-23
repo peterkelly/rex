@@ -30,6 +30,11 @@ computations and data manipulation.
 - `rex-fuzz`: stdin-driven fuzz harness binaries.
 - `rex-lsp`: language server (used by the VS Code extension).
 - `rex-vscode`: VS Code extension (Node).
+- `rex-workflow`: workflow runtime, installable-tool protocol, OCI executor,
+  Docker backend, and workflow CLI.
+- `rex-tool-ffmpeg`, `rex-tool-gnuplot`, `rex-tool-graphviz`,
+  `rex-tool-imagemagick`, `rex-tool-poppler`, and `rex-tool-qpdf`: separately
+  installable Rust tool binaries.
 
 ## Key Files
 

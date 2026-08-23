@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use rex_ast::{
     ClassDecl, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, InstanceDecl,
@@ -8,6 +8,7 @@ use rex_ast::{
 use rex_typesystem::{
     types::{AdtArgument, AdtDecl, AdtField, AdtVariant, RexType, Scheme, Type, Types},
     types::{collect_adts_in_types, merge_adt_docs, order_adt_family},
+    wire::{TypeBundle, WireAdtDecl, WireScheme, WireValueDecl},
 };
 
 use crate::{
@@ -175,6 +176,9 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     /// Typeclass instance declarations staged for this module.
     pub(crate) instances: Vec<InstanceDecl>,
 
+    /// Concrete types for which this module stages a host-backed `Default` instance.
+    pub(crate) default_types: Vec<Type>,
+
     /// Staged host exports that will become callable Rex values when the module is injected.
     ///
     /// Each [`Export`] bundles a public Rex name, a declaration that is inserted into the virtual
@@ -243,6 +247,7 @@ where
             docs,
             adts: Vec::new(),
             instances: Vec::new(),
+            default_types: Vec::new(),
             exports: Vec::new(),
             internals: Vec::new(),
         }
@@ -268,9 +273,43 @@ where
         &self.instances
     }
 
+    /// Return concrete types with host-backed `Default` instances.
+    pub fn default_types(&self) -> &[Type] {
+        &self.default_types
+    }
+
     /// Return the staged host exports for this module.
     pub fn exports(&self) -> &[Export<State>] {
         &self.exports
+    }
+
+    /// Describe this module's public functions, types, parameter names, and documentation.
+    ///
+    /// The returned stable wire bundle is suitable for manifests published by dynamically
+    /// installed Rust tool binaries. Types owned by another module remain canonical references;
+    /// only ADTs declared by this module are included in `adts`.
+    pub fn type_bundle(&self) -> Result<TypeBundle, EngineError> {
+        let mut values = BTreeMap::<String, Vec<WireValueDecl>>::new();
+        for export in &self.exports {
+            values
+                .entry(export.name.clone())
+                .or_default()
+                .push(WireValueDecl {
+                    scheme: WireScheme::try_from(export.scheme())?,
+                    params: export.params().map(str::to_owned).collect(),
+                    docs: export.docs().map(str::to_owned),
+                });
+        }
+        let adts = self
+            .adts
+            .iter()
+            .map(|staged| WireAdtDecl::try_from(&staged.adt))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(TypeBundle {
+            docs: self.docs.clone(),
+            values,
+            adts,
+        })
     }
 
     /// Return this module's staged declarations in the compiler package representation.
@@ -459,7 +498,7 @@ where
 
         let native = Export::from_native(
             &native_name,
-            Scheme::new(vec![], vec![], head_ty),
+            Scheme::new(vec![], vec![], head_ty.clone()),
             0,
             |ctx: Context<State>, _, _| T::rex_default(ctx).and_then(IntoRex::into_rex),
         )?
@@ -480,6 +519,58 @@ where
             }],
             docs: None,
         });
+        self.default_types.push(head_ty);
+        Ok(())
+    }
+
+    /// Stage a dynamic host-backed `Default` instance for a concrete type.
+    ///
+    /// This is the runtime-defined counterpart to [`Module::add_rex_default_instance`] and is
+    /// primarily useful when reconstructing an installed module from a manifest.
+    pub fn add_native_default_instance<F>(
+        &mut self,
+        head_ty: Type,
+        handler: F,
+    ) -> Result<(), EngineError>
+    where
+        F: for<'a> Fn(Context<State>, &'a Type) -> Result<Value, EngineError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        if !head_ty.ftv().is_empty() {
+            return Err(EngineError::UnsupportedExpr);
+        }
+        let class = Symbol::intern("Default");
+        let head = type_expr_from_type(&head_ty);
+        let native_name = format!(
+            "__rex_dynamic_default_for_{}",
+            sanitize_type_name_for_symbol(&head_ty)
+        );
+        let native = Export::from_native(
+            &native_name,
+            Scheme::new(vec![], vec![], head_ty.clone()),
+            0,
+            move |context, call_type, _| handler(context, call_type),
+        )?
+        .into_private();
+        self.internals.push(native);
+        self.instances.push(InstanceDecl {
+            span: Span::default(),
+            is_pub: false,
+            type_params: Vec::new(),
+            class,
+            head,
+            context: Vec::new(),
+            methods: vec![InstanceMethodImpl {
+                name: Symbol::intern("default"),
+                type_params: Vec::new(),
+                ann: None,
+                body: Arc::new(Expr::Var(Var::new(native_name))),
+            }],
+            docs: None,
+        });
+        self.default_types.push(head_ty);
         Ok(())
     }
 

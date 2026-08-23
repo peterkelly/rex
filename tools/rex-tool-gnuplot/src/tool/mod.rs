@@ -158,8 +158,7 @@ async fn execute(
     plan: crate::modules::tools::executor::ToolExecutionPlan,
 ) -> Result<ToolExecution, EngineError> {
     state
-        .tools
-        .execute(&state.store, plan)
+        .execute_tool(plan)
         .await
         .map_err(|error| EngineError::Custom(error.to_string()))
 }

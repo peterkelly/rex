@@ -71,6 +71,7 @@
 - [Specification](SPEC.md)
 - [Architecture](ARCHITECTURE.md)
 - [OCI Executor Protocol](OCI_EXECUTORS.md)
+- [Installable Tool Binaries](TOOL_BINARIES.md)
 - [Memory Management](MEMORY_MANAGEMENT.md)
 - [Embedding](EMBEDDING.md)
 - [Contributing](CONTRIBUTING.md)

@@ -59,6 +59,7 @@ async fn compile_cli_program(
     program: &CompilationUnit,
     state: State,
 ) -> Result<(Evaluator<State>, CompiledProgram), Box<dyn std::error::Error>> {
+    let external_tools = state.external_tools.clone();
     let module_id = ModuleId::parse("main").map_err(|err| err.to_string())?;
     let options = CompileOptions::new(module_id);
     let mut builder =
@@ -66,7 +67,7 @@ async fn compile_cli_program(
 
     builder.inject_module(artifacts::module()?)?;
     builder.inject_module(storage_module()?)?;
-    builder.add_importer(tools::importer());
+    builder.add_importer(tools::importer(external_tools));
 
     let compiler = builder.build_compiler();
     let (compiled, evaluator) = compiler
@@ -208,48 +209,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shared_pdf_composes_qpdf_and_poppler() {
-        let source = r#"
-            import std.artifacts (Pdf);
-            import tools.poppler as P;
-            import tools.qpdf as Q;
-
-            fn rewrite (pdf: Pdf) -> Result Q.PdfOutput Q.QpdfError =
-                Q.transform pdf None [];
-
-            fn inspect (output: Q.PdfOutput) -> Result P.PdfInfo P.PopplerError =
-                P.pdfinfo output.pdf default;
-
-            fn main (value: Bool) -> Bool = value;
-        "#;
-        let result = eval_rex(
-            source,
-            Some(json!({ "value": true })),
-            State::without_tools(Store::new_in_memory()),
-        )
-        .await
-        .unwrap();
-        assert_eq!(result, json!(true));
-    }
-
-    #[tokio::test]
-    async fn examples_compile() {
+    async fn storage_examples_compile_without_installed_tools() {
         let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
-        let mut paths = [
-            "imagemagick",
-            "ffmpeg",
-            "gnuplot",
-            "graphviz",
-            "qpdf",
-            "poppler",
-            "imagemagick_ffmpeg",
-            "storage",
-        ]
-        .into_iter()
-        .flat_map(|directory| std::fs::read_dir(examples.join(directory)).unwrap())
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "rex"))
-        .collect::<Vec<_>>();
+        let mut paths = ["storage"]
+            .into_iter()
+            .flat_map(|directory| std::fs::read_dir(examples.join(directory)).unwrap())
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "rex"))
+            .collect::<Vec<_>>();
         paths.sort();
         for path in paths {
             let source = std::fs::read_to_string(&path).unwrap();

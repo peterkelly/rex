@@ -23,6 +23,10 @@ struct Args {
     #[clap(long, env = "REX_STORE", default_value = "./store")]
     store_path: PathBuf,
 
+    /// Directory containing installed tools (defaults to the `rex` binary's directory).
+    #[clap(long, env = "REX_TOOL_DIR")]
+    tool_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     subcommand: SubCommand,
 }
@@ -60,7 +64,7 @@ struct ToolOptions {
     images: OciImageOptions,
 }
 
-#[derive(ClapArgs, Debug, Default)]
+#[derive(Clone, ClapArgs, Debug, Default)]
 struct OciImageOptions {
     /// Permit mutable tags in explicit image overrides.
     #[arg(long)]
@@ -92,12 +96,43 @@ struct OciImageOptions {
 }
 
 impl ToolOptions {
-    fn state(self, store: Store) -> Result<State, String> {
-        Ok(State::docker(store, self.images.oci_images()?))
+    fn state(
+        self,
+        store: Store,
+        tool_dir: Option<PathBuf>,
+        store_path: PathBuf,
+    ) -> Result<State, String> {
+        let mut state = State::docker(store, self.images.clone().oci_images()?);
+        if let Some(directory) = tool_dir {
+            state = state
+                .with_tool_directory(directory)
+                .with_tool_environment("REX_STORE", store_path.to_string_lossy());
+            for (name, value) in self.images.environment() {
+                state = state.with_tool_environment(name, value);
+            }
+        }
+        Ok(state)
     }
 }
 
 impl OciImageOptions {
+    fn environment(&self) -> Vec<(&'static str, String)> {
+        [
+            ("REX_WORKFLOW_FFMPEG_IMAGE", self.ffmpeg_image.as_ref()),
+            ("REX_WORKFLOW_GNUPLOT_IMAGE", self.gnuplot_image.as_ref()),
+            ("REX_WORKFLOW_GRAPHVIZ_IMAGE", self.graphviz_image.as_ref()),
+            (
+                "REX_WORKFLOW_IMAGEMAGICK_IMAGE",
+                self.imagemagick_image.as_ref(),
+            ),
+            ("REX_WORKFLOW_QPDF_IMAGE", self.qpdf_image.as_ref()),
+            ("REX_WORKFLOW_POPPLER_IMAGE", self.poppler_image.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| value.cloned().map(|value| (name, value)))
+        .collect()
+    }
+
     fn oci_images(self) -> Result<OciToolImages, String> {
         let mut images = development_tool_images();
         for (bundle, image) in [
@@ -478,6 +513,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config {
         store_path: args.store_path.clone(),
     };
+    let tool_dir = args.tool_dir.clone().or_else(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|executable| executable.parent().map(std::path::Path::to_path_buf))
+    });
 
     match args.subcommand {
         SubCommand::Store(sub) => sub.run(config).await?,
@@ -502,7 +542,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let store = Store::new_with_filesystem(config.store_path.clone());
-            let state = tools.state(store)?;
+            let state = tools.state(store, tool_dir, config.store_path)?;
 
             let result_json = eval_rex(&source, inputs, state).await?;
             let rendered = render_result_json(&result_json, raw_output)?;

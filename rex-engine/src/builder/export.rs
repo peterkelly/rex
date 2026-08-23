@@ -31,6 +31,7 @@ pub(crate) enum ExportPayload<State: Clone + Send + Sync + 'static> {
 
 pub struct Export<State: Clone + Send + Sync + 'static> {
     pub name: String,
+    pub(crate) scheme: Scheme,
     pub(crate) interface: DeclareFnDecl,
     pub(crate) payload: ExportPayload<State>,
     pub(crate) required_adts: Vec<AdtDecl>,
@@ -51,6 +52,11 @@ where
             .params
             .iter()
             .map(|(param, _)| param.name.as_ref())
+    }
+
+    /// Return the Rex type scheme exposed by this export.
+    pub fn scheme(&self) -> &Scheme {
+        &self.scheme
     }
 
     /// Attach Markdown API documentation to this export.
@@ -97,6 +103,7 @@ where
 
     fn from_injector(
         name: impl Into<String>,
+        scheme: Scheme,
         interface: DeclareFnDecl,
         injector: ExportInjector<State>,
     ) -> Result<Self, EngineError> {
@@ -107,6 +114,7 @@ where
         let normalized = normalize_name(&name).to_string();
         Ok(Self {
             name: normalized,
+            scheme,
             interface,
             payload: ExportPayload::Injector(injector),
             required_adts: Vec::new(),
@@ -121,10 +129,12 @@ where
         H::collect_required_adts(&mut required_adts)?;
         let name = name.into();
         let normalized = normalize_name(&name).to_string();
+        let scheme = handler.scheme_for();
         let interface = handler.interface_decl_for(&normalized);
         let injector: ExportInjector<State> =
             Box::new(move |engine, qualified_name| handler.inject(engine, qualified_name));
-        Ok(Self::from_injector(name, interface, injector)?.with_required_adts(required_adts))
+        Ok(Self::from_injector(name, scheme, interface, injector)?
+            .with_required_adts(required_adts))
     }
 
     pub fn from_async_handler<Sig, H>(
@@ -138,10 +148,12 @@ where
         H::collect_required_adts(&mut required_adts)?;
         let name = name.into();
         let normalized = normalize_name(&name).to_string();
+        let scheme = handler.scheme_for();
         let interface = handler.interface_decl_for(&normalized);
         let injector: ExportInjector<State> =
             Box::new(move |engine, qualified_name| handler.inject_async(engine, qualified_name));
-        Ok(Self::from_injector(name, interface, injector)?.with_required_adts(required_adts))
+        Ok(Self::from_injector(name, scheme, interface, injector)?
+            .with_required_adts(required_adts))
     }
 
     pub fn from_native<F>(
@@ -165,16 +177,17 @@ where
         let normalized = normalize_name(&name).to_string();
         let interface = declare_fn_decl_from_scheme(&normalized, &scheme);
         let handler = Arc::new(handler);
+        let registration_scheme = scheme.clone();
         let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
             let handler = Arc::clone(&handler);
             let func: HostValueCallable<State> = Arc::new(move |engine, typ, args| {
                 let result = handler(engine, &typ, args);
                 async move { result }.boxed()
             });
-            let registration = NativeRegistration::sync(scheme.clone(), arity, func);
+            let registration = NativeRegistration::sync(registration_scheme, arity, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
-        Self::from_injector(name, interface, injector)
+        Self::from_injector(name, scheme, interface, injector)
     }
 
     pub fn from_native_async<F>(
@@ -191,14 +204,15 @@ where
         let normalized = normalize_name(&name).to_string();
         let interface = declare_fn_decl_from_scheme(&normalized, &scheme);
         let handler = Arc::new(handler);
+        let registration_scheme = scheme.clone();
         let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
             let handler = Arc::clone(&handler);
             let func: HostValueCallable<State> =
                 Arc::new(move |engine, typ, args| handler(engine, typ, args));
-            let registration = NativeRegistration::r#async(scheme.clone(), arity, func);
+            let registration = NativeRegistration::r#async(registration_scheme, arity, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
-        Self::from_injector(name, interface, injector)
+        Self::from_injector(name, scheme, interface, injector)
     }
 
     pub fn from_value<V>(name: impl Into<String>, value: V) -> Result<Self, EngineError>
@@ -214,6 +228,7 @@ where
         let name = normalize_name(&name).to_string();
         Ok(Self {
             name,
+            scheme: Scheme::new(vec![], vec![], typ.clone()),
             interface,
             payload: ExportPayload::Value {
                 value: value.into_rex()?,
@@ -237,6 +252,7 @@ pub trait HostFnSync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + '
     fn interface_decl_for(&self, export_name: &str) -> DeclareFnDecl {
         Self::interface_decl(export_name)
     }
+    fn scheme_for(&self) -> Scheme;
     fn inject(
         self,
         engine: &mut dyn ExportTarget<State>,
@@ -253,6 +269,7 @@ pub trait HostFnAsync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 
     fn interface_decl_for(&self, export_name: &str) -> DeclareFnDecl {
         Self::interface_decl(export_name)
     }
+    fn scheme_for(&self) -> Scheme;
     fn inject_async(
         self,
         engine: &mut dyn ExportTarget<State>,

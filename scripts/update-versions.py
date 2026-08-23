@@ -32,6 +32,8 @@ Important behavior:
 from __future__ import annotations
 
 import re
+import tomllib
+from os.path import relpath
 from pathlib import Path
 
 
@@ -46,10 +48,10 @@ ROOT_MANIFEST = ROOT_DIR / "Cargo.toml"
 
 def extract_package_name(manifest_text: str) -> str:
     """Return the crate name from a package manifest."""
-    match = re.search(r'^\[package\].*?^\s*name\s*=\s*"([^"]+)"', manifest_text, re.MULTILINE | re.DOTALL)
-    if not match:
+    package = tomllib.loads(manifest_text).get("package")
+    if not isinstance(package, dict) or not isinstance(package.get("name"), str):
         raise RuntimeError("could not determine package name")
-    return match.group(1)
+    return package["name"]
 
 
 def extract_package_version(manifest_text: str, workspace_version: str) -> str:
@@ -59,20 +61,14 @@ def extract_package_version(manifest_text: str, workspace_version: str) -> str:
     Others inherit it via `version.workspace = true`, in which case we use the
     workspace package version from the root manifest.
     """
-    explicit = re.search(
-        r'^\[package\].*?^\s*version\s*=\s*"([^"]+)"',
-        manifest_text,
-        re.MULTILINE | re.DOTALL,
-    )
-    if explicit:
-        return explicit.group(1)
+    package = tomllib.loads(manifest_text).get("package")
+    if not isinstance(package, dict):
+        raise RuntimeError("could not determine package version")
 
-    inherited = re.search(
-        r'^\[package\].*?^\s*version\.workspace\s*=\s*true',
-        manifest_text,
-        re.MULTILINE | re.DOTALL,
-    )
-    if inherited:
+    version = package.get("version")
+    if isinstance(version, str):
+        return version
+    if isinstance(version, dict) and version.get("workspace") is True:
         return workspace_version
 
     raise RuntimeError("could not determine package version")
@@ -80,14 +76,12 @@ def extract_package_version(manifest_text: str, workspace_version: str) -> str:
 
 def extract_workspace_version(root_text: str) -> str:
     """Read the shared workspace version from the root Cargo.toml."""
-    match = re.search(
-        r'^\[workspace\.package\].*?^\s*version\s*=\s*"([^"]+)"',
-        root_text,
-        re.MULTILINE | re.DOTALL,
-    )
-    if not match:
+    workspace = tomllib.loads(root_text).get("workspace")
+    package = workspace.get("package") if isinstance(workspace, dict) else None
+    version = package.get("version") if isinstance(package, dict) else None
+    if not isinstance(version, str):
         raise RuntimeError("could not determine [workspace.package] version")
-    return match.group(1)
+    return version
 
 
 def main() -> int:
@@ -98,18 +92,20 @@ def main() -> int:
     root_text = ROOT_MANIFEST.read_text()
     workspace_version = extract_workspace_version(root_text)
 
-    # Build a map of workspace crate name -> (version, directory name).
+    manifests = workspace_manifests(root_text)
+
+    # Build a map of workspace crate name -> (version, crate directory).
     # We use this in the second pass to decide which dependency lines are
     # internal workspace edges and what their `path` and `version` should be.
-    crate_info: dict[str, tuple[str, str]] = {}
-    for manifest in sorted(ROOT_DIR.glob("*/Cargo.toml")):
+    crate_info: dict[str, tuple[str, Path]] = {}
+    for manifest in manifests:
         text = manifest.read_text()
         name = extract_package_name(text)
         version = extract_package_version(text, workspace_version)
-        crate_info[name] = (version, manifest.parent.name)
+        crate_info[name] = (version, manifest.parent)
 
     updated_paths: list[Path] = []
-    for manifest in sorted(ROOT_DIR.glob("*/Cargo.toml")):
+    for manifest in manifests:
         # We intentionally operate line by line because the dependency entries
         # we care about are single-line inline tables. This keeps the rewrite
         # small, predictable, and easy to inspect in git diff.
@@ -126,7 +122,7 @@ def main() -> int:
                 if not stripped.startswith(prefix):
                     continue
 
-                dep_path = f"../{crate_dir}"
+                dep_path = Path(relpath(crate_dir, manifest.parent)).as_posix()
                 # Case 1: dependency comes from `[workspace.dependencies]` and
                 # appears in the crate as `{ workspace = true }`. That is fine
                 # for local development but not sufficient for publishing when
@@ -176,6 +172,46 @@ def main() -> int:
         print("no changes needed")
 
     return 0
+
+
+def workspace_manifests(root_text: str) -> list[Path]:
+    """Return package manifests named by the workspace, at any depth."""
+    root_config = tomllib.loads(root_text)
+    workspace = root_config.get("workspace")
+    if not isinstance(workspace, dict):
+        raise RuntimeError("could not determine [workspace] configuration")
+
+    members = workspace.get("members", [])
+    if not isinstance(members, list) or not all(
+        isinstance(member, str) for member in members
+    ):
+        raise RuntimeError("[workspace].members must be an array of paths")
+
+    excluded: set[Path] = set()
+    for pattern in workspace.get("exclude", []):
+        excluded.update(workspace_manifest_matches(pattern))
+
+    manifests: set[Path] = set()
+    for pattern in members:
+        manifests.update(workspace_manifest_matches(pattern))
+
+    if root_config.get("package") is not None:
+        manifests.add(ROOT_MANIFEST.resolve())
+
+    manifests.difference_update(excluded)
+    return sorted(manifests)
+
+
+def workspace_manifest_matches(pattern: str) -> set[Path]:
+    """Expand one Cargo workspace member pattern into package manifests."""
+    manifests = set()
+    for candidate in ROOT_DIR.glob(pattern):
+        manifest = (
+            candidate if candidate.name == "Cargo.toml" else candidate / "Cargo.toml"
+        )
+        if manifest.is_file():
+            manifests.add(manifest.resolve())
+    return manifests
 
 
 if __name__ == "__main__":
