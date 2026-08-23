@@ -163,16 +163,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_graphviz_renders_svg_when_available() {
-        if std::process::Command::new("dot")
-            .arg("-V")
-            .output()
-            .is_err()
-        {
+    async fn docker_graphviz_renders_svg_when_enabled() {
+        if std::env::var("REX_WORKFLOW_DOCKER_TESTS").as_deref() != Ok("1") {
             return;
         }
         let store = Store::new_in_memory();
-        let state = State::local(store.clone());
+        let state = State::docker(
+            store.clone(),
+            crate::modules::tools::executor::OciToolImages::current_development(),
+        );
         let output = render(
             state,
             simple_graph(),

@@ -2,8 +2,8 @@ use blake3::Hash;
 use rex::storage::Store;
 use rex_workflow::{
     modules::tools::executor::{
-        CasInput, DockerToolExecutor, DockerToolImages, ExpectedOutput, InputKind, OutputKind,
-        ToolArgument, ToolExecutionPlan, ToolExecutor, ToolProgram,
+        CasInput, DockerToolExecutor, ExpectedOutput, InputKind, OciPlatform, OciToolImages,
+        OutputKind, ToolArgument, ToolExecutionPlan, ToolExecutor, ToolProgram,
     },
     run::eval_rex,
     state::State,
@@ -18,12 +18,12 @@ use std::{
 };
 
 const ENABLE_ENV: &str = "REX_WORKFLOW_DOCKER_TESTS";
-const FFMPEG_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_FFMPEG_IMAGE";
-const GNUPLOT_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_GNUPLOT_IMAGE";
-const GRAPHVIZ_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_GRAPHVIZ_IMAGE";
-const IMAGEMAGICK_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_IMAGEMAGICK_IMAGE";
-const QPDF_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_QPDF_IMAGE";
-const POPPLER_IMAGE_ENV: &str = "REX_WORKFLOW_DOCKER_POPPLER_IMAGE";
+const FFMPEG_IMAGE_ENV: &str = "REX_WORKFLOW_FFMPEG_IMAGE";
+const GNUPLOT_IMAGE_ENV: &str = "REX_WORKFLOW_GNUPLOT_IMAGE";
+const GRAPHVIZ_IMAGE_ENV: &str = "REX_WORKFLOW_GRAPHVIZ_IMAGE";
+const IMAGEMAGICK_IMAGE_ENV: &str = "REX_WORKFLOW_IMAGEMAGICK_IMAGE";
+const QPDF_IMAGE_ENV: &str = "REX_WORKFLOW_QPDF_IMAGE";
+const POPPLER_IMAGE_ENV: &str = "REX_WORKFLOW_POPPLER_IMAGE";
 
 struct DockerFixture {
     store: Store,
@@ -37,7 +37,8 @@ fn docker_fixture() -> Option<DockerFixture> {
     }
 
     let store = Store::new_in_memory();
-    let images = DockerToolImages::development(
+    let images = OciToolImages::development(
+        OciPlatform::native_linux(),
         image_reference(FFMPEG_IMAGE_ENV, "rex-tool-ffmpeg:local"),
         image_reference(GNUPLOT_IMAGE_ENV, "rex-tool-gnuplot:local"),
         image_reference(GRAPHVIZ_IMAGE_ENV, "rex-tool-graphviz:local"),
@@ -403,7 +404,8 @@ fn docker_executor_fixture() -> Option<(Store, DockerToolExecutor)> {
         eprintln!("skipping Docker integration test; set {ENABLE_ENV}=1 to enable the suite");
         return None;
     }
-    let images = DockerToolImages::development(
+    let images = OciToolImages::development(
+        OciPlatform::native_linux(),
         image_reference(FFMPEG_IMAGE_ENV, "rex-tool-ffmpeg:local"),
         image_reference(GNUPLOT_IMAGE_ENV, "rex-tool-gnuplot:local"),
         image_reference(GRAPHVIZ_IMAGE_ENV, "rex-tool-graphviz:local"),
@@ -696,7 +698,8 @@ async fn docker_distinguishes_tool_failures_from_missing_images() {
     assert_ne!(failure.exit_code, Some(0));
     assert!(!failure.stderr.is_empty());
 
-    let missing = DockerToolExecutor::new(DockerToolImages::development(
+    let missing = DockerToolExecutor::new(OciToolImages::development(
+        OciPlatform::native_linux(),
         "rex-tool-image-that-does-not-exist:missing",
         "rex-tool-gnuplot:local",
         "rex-tool-graphviz:local",

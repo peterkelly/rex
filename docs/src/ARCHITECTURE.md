@@ -47,6 +47,10 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   types, functions, and modules into Rex registrations.
 - `rex`: top-level facade for embedding the pipeline in Rust applications.
 - `rex-cli`: `rex_cli` command-line front-end around the pipeline.
+- `rex-workflow`: typed workflow modules, CAS artifacts, and mandatory OCI tool
+  execution. Semantic tool plans become logical `OciJob` values; Docker is the
+  supplied backend and `OciJobExecutor` is the provider extension point. See
+  [OCI Executor Protocol](OCI_EXECUTORS.md).
 - `rex-lsp` / `rex-vscode`: editor tooling.
 
 `rex-engine` is organized internally around the same phases:

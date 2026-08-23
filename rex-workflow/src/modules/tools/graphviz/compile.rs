@@ -1109,8 +1109,6 @@ pub(crate) fn invalid(message: impl Into<String>) -> GraphvizError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
-    use std::process::Stdio;
 
     fn text(value: &str) -> Label {
         Label::TextLabel(value.to_owned())
@@ -1129,35 +1127,6 @@ mod tests {
             to: endpoint(to),
             attributes: EdgeAttributes::default(),
         }
-    }
-
-    fn assert_dot_accepts(source: &str) {
-        if std::process::Command::new("dot")
-            .arg("-V")
-            .output()
-            .is_err()
-        {
-            return;
-        }
-        let mut child = std::process::Command::new("dot")
-            .arg("-Tcanon")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(source.as_bytes())
-            .unwrap();
-        let result = child.wait_with_output().unwrap();
-        assert!(
-            result.status.success(),
-            "Graphviz rejected generated DOT: {}",
-            String::from_utf8_lossy(&result.stderr)
-        );
     }
 
     #[test]
@@ -1213,7 +1182,6 @@ mod tests {
         assert!(source.contains("\"margin\"=\"16\""));
         assert!(source.contains("\"inside\" [\"label\"=<<B>inside</B>>]"));
         assert!(source.contains("\"inside\" -> \"outside\""));
-        assert_dot_accepts(&source);
     }
 
     #[test]
@@ -1321,7 +1289,6 @@ mod tests {
         assert!(source.contains("\"color\"=\"red:blue\""));
         assert!(source.contains("\"arrowhead\"=\"odiamond\""));
         assert!(source.contains("\"constraint\"=\"false\""));
-        assert_dot_accepts(&source);
     }
 
     #[test]

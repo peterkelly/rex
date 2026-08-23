@@ -542,21 +542,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_poppler_inspects_extracts_and_renders_when_available() {
-        for program in ["pdfinfo", "pdftotext", "pdftocairo", "pdfimages"] {
-            if std::process::Command::new(program)
-                .arg("-v")
-                .output()
-                .is_err()
-            {
-                return;
-            }
+    async fn docker_poppler_inspects_extracts_and_renders_when_enabled() {
+        if std::env::var("REX_WORKFLOW_DOCKER_TESTS").as_deref() != Ok("1") {
+            return;
         }
         let store = Store::new_in_memory();
         let source = Pdf {
             content: store.put(sample_pdf()).await.unwrap(),
         };
-        let state = State::local(store);
+        let state = State::docker(
+            store,
+            crate::modules::tools::executor::OciToolImages::current_development(),
+        );
 
         let info = pdfinfo(
             state.clone(),

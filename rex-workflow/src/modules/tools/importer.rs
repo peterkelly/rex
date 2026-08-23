@@ -239,7 +239,7 @@ mod tests {
         USED_CALLS.store(0, Ordering::SeqCst);
         UNUSED_CALLS.store(0, Ordering::SeqCst);
 
-        let state = State::local(Store::new_in_memory());
+        let state = State::without_tools(Store::new_in_memory());
         let mut builder = Builder::with_prelude(state).unwrap();
         builder.add_importer(Arc::new(ToolImporter::new(TEST_REGISTRY)));
         let compiler = builder.build_compiler();
@@ -261,7 +261,7 @@ mod tests {
 
     #[tokio::test]
     async fn production_tool_modules_register_qualified_defaults() {
-        let state = State::local(Store::new_in_memory());
+        let state = State::without_tools(Store::new_in_memory());
         let mut builder = Builder::with_prelude(state).unwrap();
         builder.inject_module(artifacts::module().unwrap()).unwrap();
         builder.add_importer(importer());

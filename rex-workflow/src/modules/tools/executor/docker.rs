@@ -1,6 +1,8 @@
 use super::{
-    DEFAULT_MAX_OUTPUT_BYTES, ToolBundle, ToolExecution, ToolExecutionError, ToolExecutionPlan,
-    ToolExecutor, ToolFuture, catalog, workspace::ToolWorkspace,
+    OciDigest, OciExecutorCapabilities, OciIsolationPolicy, OciJob, OciJobExecutor, OciJobFuture,
+    OciJobLimits, OciPlatform, OciToolExecutor, OciToolImages, ToolExecution, ToolExecutionError,
+    ToolExecutionErrorKind, ToolExecutionPlan, ToolExecutionProvenance, ToolExecutor, ToolFuture,
+    validate_oci_job, workspace::ToolWorkspace,
 };
 use rex::storage::Store;
 use serde::Deserialize;
@@ -9,6 +11,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::{Command as StdCommand, ExitStatus, Stdio},
+    str::FromStr,
     sync::Arc,
     thread,
     time::Duration,
@@ -22,189 +25,127 @@ const CONTAINER_INPUTS: &str = "/work/inputs";
 const CONTAINER_OUTPUTS: &str = "/work/outputs";
 const CONTAINER_RESULTS: &str = "/work/results";
 const CONTAINER_TMP: &str = "/work/tmp";
-const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(60 * 60);
-const DEFAULT_TMPFS_BYTES: u64 = 512 * 1024 * 1024;
-const DEFAULT_PID_LIMIT: u32 = 512;
-
-/// Container image references for each supported tool bundle.
-///
-/// `new` requires immutable digest-qualified references. Mutable tags are
-/// accepted only through `development`, which makes the weaker provisioning
-/// policy explicit at the embedding boundary. Images must already be present;
-/// executing a workflow never pulls them.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DockerToolImages {
-    ffmpeg: String,
-    gnuplot: String,
-    graphviz: String,
-    image_magick: String,
-    qpdf: String,
-    poppler: String,
-    allow_tags: bool,
-}
-
-impl DockerToolImages {
-    pub fn new(
-        ffmpeg: impl Into<String>,
-        gnuplot: impl Into<String>,
-        graphviz: impl Into<String>,
-        image_magick: impl Into<String>,
-        qpdf: impl Into<String>,
-        poppler: impl Into<String>,
-    ) -> Self {
-        Self::configured(
-            ffmpeg,
-            gnuplot,
-            graphviz,
-            image_magick,
-            qpdf,
-            poppler,
-            false,
-        )
-    }
-
-    /// Configure mutable image tags for local image development.
-    pub fn development(
-        ffmpeg: impl Into<String>,
-        gnuplot: impl Into<String>,
-        graphviz: impl Into<String>,
-        image_magick: impl Into<String>,
-        qpdf: impl Into<String>,
-        poppler: impl Into<String>,
-    ) -> Self {
-        Self::configured(ffmpeg, gnuplot, graphviz, image_magick, qpdf, poppler, true)
-    }
-
-    fn configured(
-        ffmpeg: impl Into<String>,
-        gnuplot: impl Into<String>,
-        graphviz: impl Into<String>,
-        image_magick: impl Into<String>,
-        qpdf: impl Into<String>,
-        poppler: impl Into<String>,
-        allow_tags: bool,
-    ) -> Self {
-        Self {
-            ffmpeg: ffmpeg.into(),
-            gnuplot: gnuplot.into(),
-            graphviz: graphviz.into(),
-            image_magick: image_magick.into(),
-            qpdf: qpdf.into(),
-            poppler: poppler.into(),
-            allow_tags,
-        }
-    }
-
-    pub fn image(&self, bundle: ToolBundle) -> &str {
-        match bundle {
-            ToolBundle::Ffmpeg => &self.ffmpeg,
-            ToolBundle::Gnuplot => &self.gnuplot,
-            ToolBundle::Graphviz => &self.graphviz,
-            ToolBundle::ImageMagick => &self.image_magick,
-            ToolBundle::Qpdf => &self.qpdf,
-            ToolBundle::Poppler => &self.poppler,
-        }
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (ToolBundle, &str)> {
-        ToolBundle::ALL
-            .into_iter()
-            .map(|bundle| (bundle, self.image(bundle)))
-    }
-
-    pub fn allows_tags(&self) -> bool {
-        self.allow_tags
-    }
-
-    pub fn with_image(mut self, bundle: ToolBundle, image: impl Into<String>) -> Self {
-        let image = image.into();
-        match bundle {
-            ToolBundle::Ffmpeg => self.ffmpeg = image,
-            ToolBundle::Gnuplot => self.gnuplot = image,
-            ToolBundle::Graphviz => self.graphviz = image,
-            ToolBundle::ImageMagick => self.image_magick = image,
-            ToolBundle::Qpdf => self.qpdf = image,
-            ToolBundle::Poppler => self.poppler = image,
-        }
-        self
-    }
-
-    pub fn with_tags_allowed(mut self, allow_tags: bool) -> Self {
-        self.allow_tags = allow_tags;
-        self
-    }
-
-    pub fn validate(&self) -> Result<(), ToolExecutionError> {
-        for (bundle, image) in self.iter() {
-            validate_image_reference(bundle, image, self.allow_tags)?;
-        }
-        Ok(())
-    }
-}
 
 /// Executes tool plans in one-shot Docker containers on the local machine.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DockerToolExecutor {
+    executor: OciToolExecutor,
+    backend: Arc<DockerOciJobExecutor>,
+}
+
+/// Docker-specific implementation of the provider-neutral OCI job contract.
+#[derive(Clone, Debug)]
+pub struct DockerOciJobExecutor {
     docker_binary: PathBuf,
-    images: DockerToolImages,
-    execution_timeout: Duration,
-    max_output_bytes: usize,
-    tmpfs_bytes: u64,
-    pid_limit: u32,
+    platform: OciPlatform,
 }
 
 impl DockerToolExecutor {
-    pub fn new(images: DockerToolImages) -> Self {
+    pub fn new(images: OciToolImages) -> Self {
+        let backend = Arc::new(DockerOciJobExecutor::new());
         Self {
-            docker_binary: PathBuf::from("docker"),
-            images,
-            execution_timeout: DEFAULT_EXECUTION_TIMEOUT,
-            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
-            tmpfs_bytes: DEFAULT_TMPFS_BYTES,
-            pid_limit: DEFAULT_PID_LIMIT,
+            executor: OciToolExecutor::new(images, backend.clone()),
+            backend,
         }
     }
 
     /// Override the Docker CLI binary used to manage containers.
     pub fn with_docker_binary(mut self, binary: impl Into<PathBuf>) -> Self {
-        self.docker_binary = binary.into();
+        let backend = Arc::new(self.backend.as_ref().clone().with_docker_binary(binary));
+        self.executor = OciToolExecutor::new(self.executor.images.clone(), backend.clone())
+            .with_job_limits(self.executor.limits.clone())
+            .with_isolation_policy(self.executor.isolation.clone());
+        self.backend = backend;
         self
     }
 
     pub fn with_execution_timeout(mut self, execution_timeout: Duration) -> Self {
-        self.execution_timeout = execution_timeout;
+        self.executor.limits.execution_timeout = execution_timeout;
         self
     }
 
     pub fn with_max_output_bytes(mut self, max_output_bytes: usize) -> Self {
-        self.max_output_bytes = max_output_bytes;
+        self.executor.limits.max_stdout_bytes = max_output_bytes;
+        self.executor.limits.max_stderr_bytes = max_output_bytes;
         self
+    }
+
+    pub fn with_job_limits(mut self, limits: OciJobLimits) -> Self {
+        self.executor.limits = limits;
+        self
+    }
+
+    pub fn with_isolation_policy(mut self, isolation: OciIsolationPolicy) -> Self {
+        self.executor.isolation = isolation;
+        self
+    }
+
+    pub fn oci_backend(&self) -> &DockerOciJobExecutor {
+        &self.backend
+    }
+}
+
+impl DockerOciJobExecutor {
+    pub fn new() -> Self {
+        Self {
+            docker_binary: PathBuf::from("docker"),
+            platform: OciPlatform::native_linux(),
+        }
+    }
+
+    pub fn with_docker_binary(mut self, binary: impl Into<PathBuf>) -> Self {
+        self.docker_binary = binary.into();
+        self
+    }
+}
+
+impl Default for DockerOciJobExecutor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl ToolExecutor for DockerToolExecutor {
     fn execute<'a>(&'a self, store: &'a Store, plan: ToolExecutionPlan) -> ToolFuture<'a> {
-        Box::pin(execute_docker(self, store, plan))
+        self.executor.execute(store, plan)
     }
 }
 
-pub fn docker_executor(images: DockerToolImages) -> Arc<dyn ToolExecutor> {
+impl OciJobExecutor for DockerOciJobExecutor {
+    fn executor_id(&self) -> &str {
+        "docker"
+    }
+
+    fn target_platform(&self) -> OciPlatform {
+        self.platform.clone()
+    }
+
+    fn capabilities(&self) -> OciExecutorCapabilities {
+        OciExecutorCapabilities::secure()
+    }
+
+    fn execute<'a>(&'a self, store: &'a Store, job: OciJob) -> OciJobFuture<'a> {
+        Box::pin(execute_docker_job(self, store, job))
+    }
+}
+
+pub fn docker_executor(images: OciToolImages) -> Arc<dyn ToolExecutor> {
     Arc::new(DockerToolExecutor::new(images))
 }
 
-async fn execute_docker(
-    executor: &DockerToolExecutor,
+async fn execute_docker_job(
+    executor: &DockerOciJobExecutor,
     store: &Store,
-    plan: ToolExecutionPlan,
+    job: OciJob,
 ) -> Result<ToolExecution, ToolExecutionError> {
-    executor.images.validate()?;
-    let workspace = ToolWorkspace::prepare(store, &plan.inputs, &plan.outputs).await?;
-    let runtime = catalog::runtime(plan.program);
-    let arguments = workspace.render_arguments(&plan.arguments, Path::new(CONTAINER_WORKSPACE))?;
+    validate_oci_job(&job, &executor.platform, &executor.capabilities())?;
+    let workspace = ToolWorkspace::prepare(store, &job.inputs, &job.outputs).await?;
+    let arguments = workspace.render_arguments(&job.arguments, Path::new(CONTAINER_WORKSPACE))?;
+    let (executable, prefix_arguments) = job.command.split_first().expect("validated OCI command");
     let wrapper_arguments = workspace.wrapper_arguments(
         Path::new(CONTAINER_WORKSPACE),
-        runtime.container_executable,
-        runtime.prefix_arguments,
+        executable,
+        prefix_arguments,
         &arguments,
     );
     let host_control = canonical_directory(&workspace.control_dir(), "Docker control directory")?;
@@ -213,7 +154,6 @@ async fn execute_docker(
     let host_results = canonical_directory(&workspace.result_dir(), "Docker result directory")?;
     let invocation_id = Uuid::new_v4().to_string();
     let container_name = format!("rex-tool-{invocation_id}");
-    let image = executor.images.image(runtime.bundle);
     let create_arguments = create_arguments(
         &host_control,
         &host_inputs,
@@ -221,10 +161,9 @@ async fn execute_docker(
         &host_results,
         &container_name,
         &invocation_id,
-        image,
+        &job.image.reference,
         &wrapper_arguments,
-        executor.tmpfs_bytes,
-        executor.pid_limit,
+        &job.limits,
     );
 
     let mut cleanup = ContainerCleanup::new(&executor.docker_binary, container_name.clone());
@@ -262,37 +201,57 @@ async fn execute_docker(
         ))
     })?;
 
-    match timeout(executor.execution_timeout, child.wait()).await {
+    match timeout(job.limits.execution_timeout, child.wait()).await {
         Ok(result) => result
             .map_err(|error| ToolExecutionError::new(format!("wait for Docker tool: {error}")))?,
         Err(_) => {
             let _ = child.kill().await;
             let cleanup_result = cleanup.remove().await;
             return Err(match cleanup_result {
-                Ok(()) => ToolExecutionError::new(format!(
-                    "Docker tool exceeded the {:?} execution timeout",
-                    executor.execution_timeout
-                )),
-                Err(error) => ToolExecutionError::new(format!(
-                    "Docker tool exceeded the {:?} execution timeout; cleanup also failed: {error}",
-                    executor.execution_timeout
-                )),
+                Ok(()) => ToolExecutionError::with_kind(
+                    ToolExecutionErrorKind::Timeout,
+                    format!(
+                        "Docker tool exceeded the {:?} execution timeout",
+                        job.limits.execution_timeout
+                    ),
+                ),
+                Err(error) => ToolExecutionError::with_kind(
+                    ToolExecutionErrorKind::Timeout,
+                    format!(
+                        "Docker tool exceeded the {:?} execution timeout; cleanup also failed: {error}",
+                        job.limits.execution_timeout
+                    ),
+                ),
             });
         }
     };
 
     let state_result = inspect_state(&executor.docker_binary, &container_name).await;
+    let digest_result = match super::image_digest(&job.image.reference) {
+        Some(digest) => Ok(digest),
+        None => inspect_image_digest(&executor.docker_binary, &container_name).await,
+    };
     let cleanup_result = cleanup.remove().await;
     let state = state_result?;
+    let image_digest = digest_result?;
     cleanup_result?;
 
     validate_completed_state(&state)?;
-    let result = workspace.read_result(executor.max_output_bytes)?;
-    let outputs = workspace.import_outputs(store, &plan.outputs).await?;
+    let result = workspace.read_result(job.limits.max_stdout_bytes, job.limits.max_stderr_bytes)?;
+    let outputs = workspace
+        .import_outputs(store, &job.outputs, job.limits.max_output_bytes)
+        .await?;
     Ok(ToolExecution {
         exit_code: Some(result.exit_code),
         stdout: result.stdout,
         stderr: result.stderr,
+        provenance: Some(ToolExecutionProvenance {
+            executor: executor.executor_id().to_owned(),
+            platform: executor.target_platform(),
+            image_digest,
+            inputs: job.inputs.iter().map(|input| input.hash).collect(),
+            outputs: outputs.clone(),
+        }),
         outputs,
     })
 }
@@ -308,36 +267,6 @@ fn canonical_directory(path: &Path, description: &str) -> Result<PathBuf, ToolEx
     Ok(canonical)
 }
 
-pub(super) fn validate_image_reference(
-    bundle: ToolBundle,
-    image: &str,
-    allow_tags: bool,
-) -> Result<(), ToolExecutionError> {
-    if image.is_empty()
-        || image.starts_with('-')
-        || image
-            .chars()
-            .any(|character| character.is_whitespace() || character.is_control())
-    {
-        return Err(ToolExecutionError::new(format!(
-            "invalid Docker image reference for {bundle}"
-        )));
-    }
-    if !allow_tags && !has_sha256_digest(image) {
-        return Err(ToolExecutionError::new(format!(
-            "Docker image for {bundle} must be digest-qualified; mutable tags are available only through DockerToolImages::development"
-        )));
-    }
-    Ok(())
-}
-
-fn has_sha256_digest(image: &str) -> bool {
-    let Some((name, digest)) = image.rsplit_once("@sha256:") else {
-        return false;
-    };
-    !name.is_empty() && digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn create_arguments(
     host_control: &Path,
@@ -348,8 +277,7 @@ fn create_arguments(
     invocation_id: &str,
     image: &str,
     wrapper_arguments: &[OsString],
-    tmpfs_bytes: u64,
-    pid_limit: u32,
+    limits: &OciJobLimits,
 ) -> Vec<OsString> {
     let control_mount = bind_mount(host_control, CONTAINER_CONTROL, true);
     let input_mount = bind_mount(host_inputs, CONTAINER_INPUTS, true);
@@ -367,7 +295,11 @@ fn create_arguments(
         OsString::from("--security-opt=no-new-privileges"),
         OsString::from("--no-healthcheck"),
         OsString::from("--pids-limit"),
-        OsString::from(pid_limit.to_string()),
+        OsString::from(limits.pid_limit.to_string()),
+        OsString::from("--memory"),
+        OsString::from(limits.memory_bytes.to_string()),
+        OsString::from("--cpus"),
+        OsString::from(limits.cpu_count.to_string()),
         OsString::from("--user"),
         OsString::from(user),
         OsString::from("--label"),
@@ -384,7 +316,8 @@ fn create_arguments(
         result_mount,
         OsString::from("--tmpfs"),
         OsString::from(format!(
-            "{CONTAINER_TMP}:rw,noexec,nosuid,nodev,mode=1777,size={tmpfs_bytes}"
+            "{CONTAINER_TMP}:rw,noexec,nosuid,nodev,mode=1777,size={}",
+            limits.temporary_storage_bytes
         )),
         OsString::from("--workdir"),
         OsString::from(CONTAINER_WORKSPACE),
@@ -421,11 +354,13 @@ fn bind_mount(source: &Path, destination: &str, read_only: bool) -> OsString {
 
 #[cfg(unix)]
 fn host_user() -> String {
-    format!(
-        "{}:{}",
-        nix::unistd::geteuid().as_raw(),
-        nix::unistd::getegid().as_raw()
-    )
+    let uid = nix::unistd::geteuid().as_raw();
+    let gid = nix::unistd::getegid().as_raw();
+    if uid == 0 || gid == 0 {
+        "65532:65532".to_owned()
+    } else {
+        format!("{uid}:{gid}")
+    }
 }
 
 #[cfg(not(unix))]
@@ -501,6 +436,35 @@ async fn inspect_state(
     }
     serde_json::from_slice(&output.stdout)
         .map_err(|error| ToolExecutionError::new(format!("parse Docker container state: {error}")))
+}
+
+async fn inspect_image_digest(
+    docker_binary: &Path,
+    container_name: &str,
+) -> Result<OciDigest, ToolExecutionError> {
+    let output = docker_output(
+        docker_binary,
+        [
+            OsStr::new("inspect"),
+            OsStr::new("--format={{.Image}}"),
+            OsStr::new(container_name),
+        ],
+        "inspect Docker tool image",
+    )
+    .await?;
+    if !output.status.success() {
+        return Err(docker_failure(
+            "inspect Docker tool image",
+            output.status,
+            &output.stderr,
+        ));
+    }
+    OciDigest::from_str(String::from_utf8_lossy(&output.stdout).trim()).map_err(|_| {
+        ToolExecutionError::with_kind(
+            ToolExecutionErrorKind::ResultProtocol,
+            "Docker returned an invalid immutable image digest",
+        )
+    })
 }
 
 fn validate_completed_state(state: &ContainerState) -> Result<(), ToolExecutionError> {
@@ -602,12 +566,15 @@ fn spawn_container_cleanup(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modules::tools::executor::{ExpectedOutput, OutputKind, ToolProgram};
+    use crate::modules::tools::executor::{
+        ExpectedOutput, OutputKind, ToolBundle, ToolProgram, catalog,
+    };
 
     const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    fn images() -> DockerToolImages {
-        DockerToolImages::new(
+    fn images() -> OciToolImages {
+        OciToolImages::new(
+            OciPlatform::native_linux(),
             format!("example/rex-ffmpeg@sha256:{DIGEST}"),
             format!("example/rex-gnuplot@sha256:{DIGEST}"),
             format!("example/rex-graphviz@sha256:{DIGEST}"),
@@ -627,7 +594,8 @@ mod tests {
 
     #[test]
     fn mutable_image_references_are_explicitly_development_only() {
-        let images = DockerToolImages::new(
+        let images = OciToolImages::new(
+            OciPlatform::native_linux(),
             "ffmpeg:latest",
             "gnuplot:latest",
             "graphviz:latest",
@@ -636,7 +604,8 @@ mod tests {
             "poppler:latest",
         );
         assert!(images.validate().is_err());
-        let images = DockerToolImages::development(
+        let images = OciToolImages::development(
+            OciPlatform::native_linux(),
             "ffmpeg:latest",
             "gnuplot:latest",
             "graphviz:latest",
@@ -651,7 +620,9 @@ mod tests {
     #[test]
     fn image_references_cannot_be_interpreted_as_docker_options() {
         for image in ["", "--privileged", "image with spaces", "image\n--volume"] {
-            assert!(validate_image_reference(ToolBundle::Ffmpeg, image, true).is_err());
+            assert!(
+                super::super::validate_image_reference(ToolBundle::Ffmpeg, image, true).is_err()
+            );
         }
     }
 
@@ -663,7 +634,7 @@ mod tests {
             OsString::from("/work/results/stdout"),
             OsString::from("/work/results/stderr"),
             OsString::from("/work/results/exit-code"),
-            OsString::from(runtime.container_executable),
+            OsString::from(runtime.executable),
             OsString::from("identify"),
             OsString::from("/work/inputs/input.png"),
         ];
@@ -674,10 +645,13 @@ mod tests {
             Path::new("/host/results"),
             "rex-tool-test",
             "invocation-id",
-            images().image(runtime.bundle),
+            &images().image(runtime.bundle).reference,
             &wrapper_arguments,
-            1024,
-            12,
+            &OciJobLimits {
+                temporary_storage_bytes: 1024,
+                pid_limit: 12,
+                ..OciJobLimits::default()
+            },
         );
         let arguments: Vec<_> = arguments
             .iter()
@@ -691,6 +665,11 @@ mod tests {
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
             "--pids-limit",
+            "12",
+            "--memory",
+            "4294967296",
+            "--cpus",
+            "4",
             "--user",
             "rex.workflow=true",
             "rex.workflow.invocation=invocation-id",

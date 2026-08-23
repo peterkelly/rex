@@ -449,16 +449,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_magick_generates_and_identifies_an_image_when_available() {
-        if std::process::Command::new("magick")
-            .arg("-version")
-            .output()
-            .is_err()
-        {
+    async fn docker_magick_generates_and_identifies_an_image_when_enabled() {
+        if std::env::var("REX_WORKFLOW_DOCKER_TESTS").as_deref() != Ok("1") {
             return;
         }
 
-        let state = State::local(Store::new_in_memory());
+        let state = State::docker(
+            Store::new_in_memory(),
+            crate::modules::tools::executor::OciToolImages::current_development(),
+        );
         let generated = transform(
             state.clone(),
             ImageSource::Canvas(
@@ -495,16 +494,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_magick_grayscale_accepts_the_compiled_intensity_method_when_available() {
-        if std::process::Command::new("magick")
-            .arg("-version")
-            .output()
-            .is_err()
-        {
+    async fn docker_magick_grayscale_accepts_the_compiled_intensity_method_when_enabled() {
+        if std::env::var("REX_WORKFLOW_DOCKER_TESTS").as_deref() != Ok("1") {
             return;
         }
 
-        let state = State::local(Store::new_in_memory());
+        let state = State::docker(
+            Store::new_in_memory(),
+            crate::modules::tools::executor::OciToolImages::current_development(),
+        );
         let source = generated_image(&state, 32, 24, "#336699").await;
         let output = transform(
             state.clone(),
@@ -528,16 +526,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_magick_specialized_tools_exchange_cas_images_when_available() {
-        if std::process::Command::new("magick")
-            .arg("-version")
-            .output()
-            .is_err()
-        {
+    async fn docker_magick_specialized_tools_exchange_cas_images_when_enabled() {
+        if std::env::var("REX_WORKFLOW_DOCKER_TESTS").as_deref() != Ok("1") {
             return;
         }
 
-        let state = State::local(Store::new_in_memory());
+        let state = State::docker(
+            Store::new_in_memory(),
+            crate::modules::tools::executor::OciToolImages::current_development(),
+        );
         let first = generated_image(&state, 40, 30, "red").await;
         let second = generated_image(&state, 20, 10, "blue").await;
 

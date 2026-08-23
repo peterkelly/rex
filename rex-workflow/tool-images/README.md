@@ -50,10 +50,9 @@ rex tools inspect
 Then run a workflow:
 
 ```sh
-rex run workflow.rex --tool-executor docker
+rex run workflow.rex
 ```
 
-Set `REX_TOOL_EXECUTOR=docker` to select the profile through the environment.
 `rex tools build` uses the Dockerfiles embedded in the Rex binary and invokes
 `docker buildx bake --load` for the Docker daemon's native architecture. The
 executor always uses `--pull=never`, so evaluating a workflow never contacts a
@@ -80,7 +79,8 @@ Every invocation receives a fresh workspace and container. The executor:
 - does not mount the CAS, repository, current directory, home directory,
   system fonts, Docker socket, or any caller-selected host path;
 - disables networking, capabilities, privilege escalation, and health checks;
-- uses a read-only image root, a PID limit, and the host's numeric UID/GID;
+- uses a read-only image root and memory, CPU, PID, and temporary-storage
+  limits, under a non-root numeric UID/GID;
 - sets a headless C locale, UTC timezone, temporary home, and cache paths;
 - labels containers for recovery without exposing container selection to Rex;
 - separates Docker infrastructure failures from a tool's ordinary exit status;
@@ -122,13 +122,14 @@ The CLI uses these local tags whenever Docker execution is selected:
 
 ```sh
 rex tools inspect
-rex run workflow.rex --tool-executor docker
+rex run workflow.rex
 ```
 
 Embedders make the same policy explicit:
 
 ```rust,ignore
-let images = DockerToolImages::development(
+let images = OciToolImages::development(
+    OciPlatform::native_linux(),
     "rex-tool-ffmpeg:local",
     "rex-tool-gnuplot:local",
     "rex-tool-graphviz:local",
@@ -139,18 +140,18 @@ let images = DockerToolImages::development(
 let state = State::docker(store, images);
 ```
 
-`DockerToolImages::development` makes the use of mutable local tags explicit at
-the embedding boundary. `DockerToolImages::new` remains available for future
+`OciToolImages::development` makes the use of mutable local tags explicit at
+the embedding boundary. `OciToolImages::new` remains available for future
 published or privately hosted images and requires digest-qualified references.
 CLI image overrides also require digests unless `--allow-image-tags` is
 supplied explicitly. The image override environment variables are:
 
-- `REX_WORKFLOW_DOCKER_FFMPEG_IMAGE`
-- `REX_WORKFLOW_DOCKER_GNUPLOT_IMAGE`
-- `REX_WORKFLOW_DOCKER_GRAPHVIZ_IMAGE`
-- `REX_WORKFLOW_DOCKER_IMAGEMAGICK_IMAGE`
-- `REX_WORKFLOW_DOCKER_QPDF_IMAGE`
-- `REX_WORKFLOW_DOCKER_POPPLER_IMAGE`
+- `REX_WORKFLOW_FFMPEG_IMAGE`
+- `REX_WORKFLOW_GNUPLOT_IMAGE`
+- `REX_WORKFLOW_GRAPHVIZ_IMAGE`
+- `REX_WORKFLOW_IMAGEMAGICK_IMAGE`
+- `REX_WORKFLOW_QPDF_IMAGE`
+- `REX_WORKFLOW_POPPLER_IMAGE`
 
 ## Docker integration tests
 

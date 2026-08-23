@@ -162,7 +162,7 @@ mod tests {
             }
         });
 
-        let state = State::local(Store::new_in_memory());
+        let state = State::without_tools(Store::new_in_memory());
         let result = eval_rex(source, Some(inputs), state).await.unwrap();
         assert_eq!(
             result,
@@ -192,7 +192,7 @@ mod tests {
         let result = eval_rex(
             source,
             Some(json!({ "content": hash })),
-            State::local(Store::new_in_memory()),
+            State::without_tools(Store::new_in_memory()),
         )
         .await
         .unwrap();
@@ -225,7 +225,7 @@ mod tests {
         let result = eval_rex(
             source,
             Some(json!({ "value": true })),
-            State::local(Store::new_in_memory()),
+            State::without_tools(Store::new_in_memory()),
         )
         .await
         .unwrap();
@@ -255,7 +255,7 @@ mod tests {
             let source = std::fs::read_to_string(&path).unwrap();
             let program = parse_rex(&source)
                 .unwrap_or_else(|errors| panic!("{} did not parse: {errors:?}", path.display()));
-            compile_cli_program(&program, State::local(Store::new_in_memory()))
+            compile_cli_program(&program, State::without_tools(Store::new_in_memory()))
                 .await
                 .unwrap_or_else(|error| panic!("{} did not compile: {error}", path.display()));
         }

@@ -323,19 +323,18 @@ mod tests {
     use rex::storage::Store;
 
     #[tokio::test]
-    async fn real_qpdf_checks_transforms_merges_splits_and_exports_json_when_available() {
-        if std::process::Command::new("qpdf")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
+    async fn docker_qpdf_checks_transforms_merges_splits_and_exports_json_when_enabled() {
+        if std::env::var("REX_WORKFLOW_DOCKER_TESTS").as_deref() != Ok("1") {
             return;
         }
         let store = Store::new_in_memory();
         let source = Pdf {
             content: store.put(sample_pdf()).await.unwrap(),
         };
-        let state = State::local(store);
+        let state = State::docker(
+            store,
+            crate::modules::tools::executor::OciToolImages::current_development(),
+        );
 
         let report = check(state.clone(), source.clone(), None)
             .await

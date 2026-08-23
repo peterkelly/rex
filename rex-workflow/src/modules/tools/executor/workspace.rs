@@ -1,7 +1,7 @@
 use super::{
     CasInput, ExpectedOutput, InputKind, OutputId,
     OutputKind::{Directory, Numbered, Single, Tree},
-    PathSlot, ToolArgument, ToolExecutionError,
+    PathSlot, ToolArgument, ToolExecutionError, ToolExecutionErrorKind,
 };
 use blake3::Hash;
 use rex::storage::{Store, export_blob, export_tree, import_path};
@@ -69,6 +69,7 @@ impl ToolWorkspace {
             std::fs::create_dir_all(&path).map_err(|error| {
                 ToolExecutionError::new(format!("create `{}`: {error}", path.display()))
             })?;
+            make_container_writable(&path, directory)?;
         }
         std::fs::write(
             temporary.path().join(CONTROL_DIRECTORY).join(WRAPPER_FILE),
@@ -105,10 +106,6 @@ impl ToolWorkspace {
         self.root().join(RESULT_DIRECTORY)
     }
 
-    pub(super) fn scratch_dir(&self) -> PathBuf {
-        self.root().join(SCRATCH_DIRECTORY)
-    }
-
     pub(super) fn render_arguments(
         &self,
         arguments: &[ToolArgument],
@@ -123,7 +120,7 @@ impl ToolWorkspace {
         &self,
         execution_root: &Path,
         executable: &str,
-        prefix_arguments: &[&str],
+        prefix_arguments: &[String],
         arguments: &[String],
     ) -> Vec<OsString> {
         let control = execution_root.join(CONTROL_DIRECTORY);
@@ -142,12 +139,13 @@ impl ToolWorkspace {
 
     pub(super) fn read_result(
         &self,
-        max_output_bytes: usize,
+        max_stdout_bytes: usize,
+        max_stderr_bytes: usize,
     ) -> Result<RecordedToolResult, ToolExecutionError> {
         let result_dir = self.result_dir();
         let exit_code_path = result_dir.join(EXIT_CODE_FILE);
         let exit_code_bytes = read_regular_file(&exit_code_path, 32).map_err(|error| {
-            ToolExecutionError::new(format!(
+            result_error(format!(
                 "read tool completion record `{}`: {error}",
                 exit_code_path.display()
             ))
@@ -157,13 +155,13 @@ impl ToolWorkspace {
             .and_then(|value| value.trim().parse::<i32>().ok())
             .filter(|value| (0..=255).contains(value))
             .ok_or_else(|| {
-                ToolExecutionError::new(format!(
+                result_error(format!(
                     "invalid tool exit code in `{}`",
                     exit_code_path.display()
                 ))
             })?;
-        let stdout = read_result_stream(&result_dir.join(STDOUT_FILE), max_output_bytes, "stdout")?;
-        let stderr = read_result_stream(&result_dir.join(STDERR_FILE), max_output_bytes, "stderr")?;
+        let stdout = read_result_stream(&result_dir.join(STDOUT_FILE), max_stdout_bytes, "stdout")?;
+        let stderr = read_result_stream(&result_dir.join(STDERR_FILE), max_stderr_bytes, "stderr")?;
         Ok(RecordedToolResult {
             exit_code,
             stdout,
@@ -175,10 +173,33 @@ impl ToolWorkspace {
         &self,
         store: &Store,
         outputs: &[ExpectedOutput],
+        max_output_bytes: u64,
     ) -> Result<BTreeMap<OutputId, Vec<Hash>>, ToolExecutionError> {
         let output_paths = resolve_paths(self.root(), &self.output_paths);
-        import_outputs(store, outputs, &output_paths).await
+        import_outputs(store, outputs, &output_paths, max_output_bytes).await
     }
+}
+
+#[cfg(unix)]
+fn make_container_writable(path: &Path, directory: &str) -> Result<(), ToolExecutionError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if matches!(directory, OUTPUT_DIRECTORY | RESULT_DIRECTORY) {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777)).map_err(
+            |error| {
+                ToolExecutionError::new(format!(
+                    "make container workspace `{}` writable: {error}",
+                    path.display()
+                ))
+            },
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn make_container_writable(_path: &Path, _directory: &str) -> Result<(), ToolExecutionError> {
+    Ok(())
 }
 
 fn read_result_stream(
@@ -187,7 +208,7 @@ fn read_result_stream(
     stream: &str,
 ) -> Result<Vec<u8>, ToolExecutionError> {
     read_regular_file(path, limit).map_err(|error| {
-        ToolExecutionError::new(format!(
+        result_error(format!(
             "read recorded tool {stream} `{}`: {error}",
             path.display()
         ))
@@ -326,27 +347,29 @@ async fn import_outputs(
     store: &Store,
     outputs: &[ExpectedOutput],
     paths: &[PathBuf],
+    max_output_bytes: u64,
 ) -> Result<BTreeMap<OutputId, Vec<Hash>>, ToolExecutionError> {
     let mut imported = BTreeMap::new();
+    let mut imported_bytes = 0_u64;
     for (id, (output, path)) in outputs.iter().zip(paths).enumerate() {
         let files = match output.kind {
             Single => match std::fs::symlink_metadata(path) {
                 Ok(metadata) if metadata.file_type().is_symlink() => {
-                    return Err(ToolExecutionError::new(format!(
+                    return Err(result_error(format!(
                         "tool output is a symbolic link: `{}`",
                         path.display()
                     )));
                 }
                 Ok(metadata) if metadata.file_type().is_file() => vec![path.clone()],
                 Ok(_) => {
-                    return Err(ToolExecutionError::new(format!(
+                    return Err(result_error(format!(
                         "tool output is not a regular file: `{}`",
                         path.display()
                     )));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
                 Err(error) => {
-                    return Err(ToolExecutionError::new(format!(
+                    return Err(result_error(format!(
                         "inspect tool output `{}`: {error}",
                         path.display()
                     )));
@@ -354,10 +377,11 @@ async fn import_outputs(
             },
             Numbered => {
                 let prefix = format!("output-{id:04}-");
-                let mut files = regular_files(path.parent().ok_or_else(|| {
-                    ToolExecutionError::new("numbered output has no parent directory")
-                })?)
-                .map_err(|error| ToolExecutionError::new(format!("scan output: {error}")))?;
+                let mut files = regular_files(
+                    path.parent()
+                        .ok_or_else(|| result_error("numbered output has no parent directory"))?,
+                )
+                .map_err(|error| result_error(format!("scan output: {error}")))?;
                 files.retain(|candidate| {
                     candidate
                         .file_name()
@@ -367,25 +391,26 @@ async fn import_outputs(
                 files
             }
             Directory => regular_files(path)
-                .map_err(|error| ToolExecutionError::new(format!("scan output: {error}")))?,
+                .map_err(|error| result_error(format!("scan output: {error}")))?,
             Tree => {
-                let (_, hash) = import_path(store, path).await.map_err(|error| {
-                    ToolExecutionError::new(format!("import output tree: {error}"))
-                })?;
+                let files = regular_files(path)
+                    .map_err(|error| result_error(format!("scan output tree: {error}")))?;
+                account_output_bytes(&files, &mut imported_bytes, max_output_bytes)?;
+                let (_, hash) = import_path(store, path)
+                    .await
+                    .map_err(|error| result_error(format!("import output tree: {error}")))?;
                 imported.insert(id, vec![hash]);
                 continue;
             }
         };
 
+        account_output_bytes(&files, &mut imported_bytes, max_output_bytes)?;
         let mut hashes = Vec::with_capacity(files.len());
         for file in files {
             hashes.push(
                 store
                     .put(std::fs::read(&file).map_err(|error| {
-                        ToolExecutionError::new(format!(
-                            "read output `{}`: {error}",
-                            file.display()
-                        ))
+                        result_error(format!("read output `{}`: {error}", file.display()))
                     })?)
                     .await
                     .map_err(|error| {
@@ -399,6 +424,31 @@ async fn import_outputs(
         imported.insert(id, hashes);
     }
     Ok(imported)
+}
+
+fn account_output_bytes(
+    files: &[PathBuf],
+    imported_bytes: &mut u64,
+    max_output_bytes: u64,
+) -> Result<(), ToolExecutionError> {
+    for file in files {
+        let length = std::fs::metadata(file)
+            .map_err(|error| result_error(format!("inspect output `{}`: {error}", file.display())))?
+            .len();
+        *imported_bytes = imported_bytes.checked_add(length).ok_or_else(|| {
+            result_error("tool output size overflowed while enforcing the result limit")
+        })?;
+        if *imported_bytes > max_output_bytes {
+            return Err(result_error(format!(
+                "tool outputs exceed the {max_output_bytes}-byte result limit"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn result_error(message: impl Into<String>) -> ToolExecutionError {
+    ToolExecutionError::with_kind(ToolExecutionErrorKind::ResultProtocol, message)
 }
 
 fn regular_files(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error + Send + Sync>> {
@@ -558,19 +608,20 @@ mod tests {
             .status()
             .unwrap();
 
-        let result = workspace.read_result(1024).unwrap();
+        let result = workspace.read_result(1024, 1024).unwrap();
         assert_eq!(result.exit_code, 7);
         assert_eq!(result.stdout, b"recorded-out");
         assert_eq!(result.stderr, b"recorded-err");
     }
 
     #[tokio::test]
-    async fn missing_completion_record_is_an_infrastructure_error() {
+    async fn missing_completion_record_is_a_result_protocol_error() {
         let workspace = ToolWorkspace::prepare(&Store::new_in_memory(), &[], &[])
             .await
             .unwrap();
 
-        let error = workspace.read_result(1024).unwrap_err();
+        let error = workspace.read_result(1024, 1024).unwrap_err();
+        assert_eq!(error.kind(), ToolExecutionErrorKind::ResultProtocol);
         assert!(error.to_string().contains("completion record"));
     }
 
@@ -616,6 +667,7 @@ mod tests {
                     extension: "bin".to_string(),
                 }],
                 &[output],
+                u64::MAX,
             )
             .await
             .unwrap_err();

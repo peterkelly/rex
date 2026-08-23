@@ -1,5 +1,6 @@
 use crate::modules::tools::executor::{
-    DockerToolImages, ToolExecutor, docker_executor, local_executor,
+    OciJobExecutor, OciToolExecutor, OciToolImages, ToolExecutionError, ToolExecutionErrorKind,
+    ToolExecutionPlan, ToolExecutor, ToolFuture, docker_executor,
 };
 use rex::{modules::std::storage::StateStore, storage::Store};
 use std::sync::Arc;
@@ -7,7 +8,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct State {
     pub store: Store,
-    pub tools: Arc<dyn ToolExecutor>,
+    pub(crate) tools: Arc<dyn ToolExecutor>,
 }
 
 impl StateStore for State {
@@ -17,21 +18,40 @@ impl StateStore for State {
 }
 
 impl State {
-    pub fn local(store: Store) -> Self {
-        Self {
-            store,
-            tools: local_executor(),
-        }
-    }
-
-    pub fn docker(store: Store, images: DockerToolImages) -> Self {
+    pub fn docker(store: Store, images: OciToolImages) -> Self {
         Self {
             store,
             tools: docker_executor(images),
         }
     }
 
-    pub fn with_executor(store: Store, tools: Arc<dyn ToolExecutor>) -> Self {
-        Self { store, tools }
+    /// Configure a conforming OCI backend supplied by an embedding host.
+    pub fn oci(store: Store, images: OciToolImages, backend: Arc<dyn OciJobExecutor>) -> Self {
+        Self {
+            store,
+            tools: Arc::new(OciToolExecutor::new(images, backend)),
+        }
+    }
+
+    /// Construct state for parsing, typechecking, and pure evaluation tests.
+    /// Any attempted external tool call fails instead of running a host binary.
+    pub fn without_tools(store: Store) -> Self {
+        Self {
+            store,
+            tools: Arc::new(UnavailableToolExecutor),
+        }
+    }
+}
+
+struct UnavailableToolExecutor;
+
+impl ToolExecutor for UnavailableToolExecutor {
+    fn execute<'a>(&'a self, _store: &'a Store, _plan: ToolExecutionPlan) -> ToolFuture<'a> {
+        Box::pin(async {
+            Err(ToolExecutionError::with_kind(
+                ToolExecutionErrorKind::Unsupported,
+                "external tools require a configured OCI executor",
+            ))
+        })
     }
 }

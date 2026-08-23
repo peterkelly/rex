@@ -1,10 +1,10 @@
 use blake3::Hash;
-use clap::{Args as ClapArgs, CommandFactory, Parser, ValueEnum};
+use clap::{Args as ClapArgs, CommandFactory, Parser};
 use rex::storage::{EntryKind, Store, export_blob, export_tree, import_path};
 use rex_workflow::{
     config::Config,
     modules::tools::executor::{
-        DockerToolExecutor, DockerToolImages, ExpectedOutput, ToolArgument, ToolBundle,
+        DockerToolExecutor, ExpectedOutput, OciPlatform, OciToolImages, ToolArgument, ToolBundle,
         ToolExecutionPlan, ToolExecutor, ToolProgram,
     },
     run::{eval_rex, render_result_json},
@@ -54,98 +54,64 @@ enum SubCommand {
     },
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-enum ToolExecutorChoice {
-    /// Run tools as processes on the host operating system.
-    #[default]
-    Local,
-    /// Run tools in isolated containers through the local Docker daemon.
-    Docker,
-}
-
 #[derive(ClapArgs, Debug)]
 struct ToolOptions {
-    /// Execution backend used for external workflow tools.
-    #[arg(long, env = "REX_TOOL_EXECUTOR", value_enum, default_value_t)]
-    tool_executor: ToolExecutorChoice,
-
     #[command(flatten)]
-    images: DockerImageOptions,
+    images: OciImageOptions,
 }
 
 #[derive(ClapArgs, Debug, Default)]
-struct DockerImageOptions {
+struct OciImageOptions {
     /// Permit mutable tags in explicit image overrides.
     #[arg(long)]
     allow_image_tags: bool,
 
-    /// Docker image containing FFmpeg and FFprobe.
-    #[arg(long, env = "REX_WORKFLOW_DOCKER_FFMPEG_IMAGE")]
-    docker_ffmpeg_image: Option<String>,
+    /// OCI image containing FFmpeg and FFprobe.
+    #[arg(long, env = "REX_WORKFLOW_FFMPEG_IMAGE")]
+    ffmpeg_image: Option<String>,
 
-    /// Docker image containing gnuplot.
-    #[arg(long, env = "REX_WORKFLOW_DOCKER_GNUPLOT_IMAGE")]
-    docker_gnuplot_image: Option<String>,
+    /// OCI image containing gnuplot.
+    #[arg(long, env = "REX_WORKFLOW_GNUPLOT_IMAGE")]
+    gnuplot_image: Option<String>,
 
-    /// Docker image containing Graphviz.
-    #[arg(long, env = "REX_WORKFLOW_DOCKER_GRAPHVIZ_IMAGE")]
-    docker_graphviz_image: Option<String>,
+    /// OCI image containing Graphviz.
+    #[arg(long, env = "REX_WORKFLOW_GRAPHVIZ_IMAGE")]
+    graphviz_image: Option<String>,
 
-    /// Docker image containing ImageMagick.
-    #[arg(long, env = "REX_WORKFLOW_DOCKER_IMAGEMAGICK_IMAGE")]
-    docker_imagemagick_image: Option<String>,
+    /// OCI image containing ImageMagick.
+    #[arg(long, env = "REX_WORKFLOW_IMAGEMAGICK_IMAGE")]
+    imagemagick_image: Option<String>,
 
-    /// Docker image containing QPDF.
-    #[arg(long, env = "REX_WORKFLOW_DOCKER_QPDF_IMAGE")]
-    docker_qpdf_image: Option<String>,
+    /// OCI image containing QPDF.
+    #[arg(long, env = "REX_WORKFLOW_QPDF_IMAGE")]
+    qpdf_image: Option<String>,
 
-    /// Docker image containing the Poppler command suite.
-    #[arg(long, env = "REX_WORKFLOW_DOCKER_POPPLER_IMAGE")]
-    docker_poppler_image: Option<String>,
+    /// OCI image containing the Poppler command suite.
+    #[arg(long, env = "REX_WORKFLOW_POPPLER_IMAGE")]
+    poppler_image: Option<String>,
 }
 
 impl ToolOptions {
     fn state(self, store: Store) -> Result<State, String> {
-        match self.tool_executor {
-            ToolExecutorChoice::Local => {
-                if self.images.is_configured() {
-                    return Err("Docker image options require `--tool-executor docker`".to_owned());
-                }
-                Ok(State::local(store))
-            }
-            ToolExecutorChoice::Docker => Ok(State::docker(store, self.images.docker_images()?)),
-        }
+        Ok(State::docker(store, self.images.oci_images()?))
     }
 }
 
-impl DockerImageOptions {
-    fn is_configured(&self) -> bool {
-        self.allow_image_tags || self.has_image_override()
-    }
-
-    fn has_image_override(&self) -> bool {
-        self.docker_ffmpeg_image.is_some()
-            || self.docker_gnuplot_image.is_some()
-            || self.docker_graphviz_image.is_some()
-            || self.docker_imagemagick_image.is_some()
-            || self.docker_qpdf_image.is_some()
-            || self.docker_poppler_image.is_some()
-    }
-
-    fn docker_images(self) -> Result<DockerToolImages, String> {
-        let mut images = local_tool_images();
+impl OciImageOptions {
+    fn oci_images(self) -> Result<OciToolImages, String> {
+        let mut images = development_tool_images();
         for (bundle, image) in [
-            (ToolBundle::Ffmpeg, self.docker_ffmpeg_image),
-            (ToolBundle::Gnuplot, self.docker_gnuplot_image),
-            (ToolBundle::Graphviz, self.docker_graphviz_image),
-            (ToolBundle::ImageMagick, self.docker_imagemagick_image),
-            (ToolBundle::Qpdf, self.docker_qpdf_image),
-            (ToolBundle::Poppler, self.docker_poppler_image),
+            (ToolBundle::Ffmpeg, self.ffmpeg_image),
+            (ToolBundle::Gnuplot, self.gnuplot_image),
+            (ToolBundle::Graphviz, self.graphviz_image),
+            (ToolBundle::ImageMagick, self.imagemagick_image),
+            (ToolBundle::Qpdf, self.qpdf_image),
+            (ToolBundle::Poppler, self.poppler_image),
         ] {
             if let Some(image) = image {
                 if !self.allow_image_tags && !is_digest_qualified(&image) {
                     return Err(format!(
-                        "Docker image override for {bundle} must be digest-qualified unless --allow-image-tags is supplied"
+                        "OCI image override for {bundle} must be digest-qualified unless --allow-image-tags is supplied"
                     ));
                 }
                 images = images.with_image(bundle, image);
@@ -156,8 +122,9 @@ impl DockerImageOptions {
     }
 }
 
-fn local_tool_images() -> DockerToolImages {
-    DockerToolImages::development(
+fn development_tool_images() -> OciToolImages {
+    OciToolImages::development(
+        OciPlatform::native_linux(),
         "rex-tool-ffmpeg:local",
         "rex-tool-gnuplot:local",
         "rex-tool-graphviz:local",
@@ -181,7 +148,7 @@ enum ToolsSubCommand {
     /// Diagnose Docker, image availability, architecture, and tool versions.
     Inspect {
         #[command(flatten)]
-        images: DockerImageOptions,
+        images: OciImageOptions,
     },
     /// Remove stopped Rex tool containers left behind by interrupted workflows.
     Cleanup {
@@ -195,7 +162,7 @@ impl ToolsSubCommand {
     async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         match self {
             Self::Build => build_tool_images(),
-            Self::Inspect { images } => inspect_tool_images(images.docker_images()?).await,
+            Self::Inspect { images } => inspect_tool_images(images.oci_images()?).await,
             Self::Cleanup { include_running } => cleanup_tool_containers(include_running),
         }
     }
@@ -259,7 +226,7 @@ const TOOL_IMAGE_SOURCES: &[(&str, &[u8])] = &[
     ),
 ];
 
-async fn inspect_tool_images(images: DockerToolImages) -> Result<(), Box<dyn std::error::Error>> {
+async fn inspect_tool_images(images: OciToolImages) -> Result<(), Box<dyn std::error::Error>> {
     let version = docker_command([
         OsStr::new("version"),
         OsStr::new("--format"),
@@ -279,16 +246,16 @@ async fn inspect_tool_images(images: DockerToolImages) -> Result<(), Box<dyn std
             OsStr::new("inspect"),
             OsStr::new("--format"),
             OsStr::new("{{.Id}} {{.Os}}/{{.Architecture}}"),
-            OsStr::new(image),
+            OsStr::new(&image.reference),
         ])?;
         if output.status.success() {
             println!(
                 "{bundle}: {} ({})",
-                image,
+                image.reference,
                 String::from_utf8_lossy(&output.stdout).trim()
             );
         } else {
-            println!("{bundle}: MISSING ({image})");
+            println!("{bundle}: MISSING ({})", image.reference);
             missing.push(bundle);
         }
     }
@@ -560,92 +527,71 @@ mod tests {
     }
 
     #[test]
-    fn run_defaults_to_the_local_tool_executor() {
+    fn run_defaults_to_docker_with_locally_built_oci_images() {
         let tools = parse_run(&["rex", "run", "workflow.rex"]);
 
-        assert_eq!(tools.tool_executor, ToolExecutorChoice::Local);
-        assert!(!tools.images.is_configured());
-        assert!(tools.state(Store::new_in_memory()).is_ok());
-    }
-
-    #[test]
-    fn run_configures_locally_built_images_by_default() {
-        let tools = parse_run(&["rex", "run", "workflow.rex", "--tool-executor", "docker"]);
-
-        assert_eq!(tools.tool_executor, ToolExecutorChoice::Docker);
-        let images = tools.images.docker_images().unwrap();
+        let images = tools.images.oci_images().unwrap();
         assert!(images.validate().is_ok());
         assert!(images.allows_tags());
-        assert_eq!(images.image(ToolBundle::Ffmpeg), "rex-tool-ffmpeg:local");
+        assert_eq!(
+            images.image(ToolBundle::Ffmpeg).reference,
+            "rex-tool-ffmpeg:local"
+        );
     }
 
     #[test]
-    fn run_accepts_a_docker_image_override_for_every_bundle() {
+    fn run_accepts_an_oci_image_override_for_every_bundle() {
         let tools = parse_run(&[
             "rex",
             "run",
             "workflow.rex",
-            "--tool-executor",
-            "docker",
-            "--docker-ffmpeg-image",
+            "--ffmpeg-image",
             "registry.example/ffmpeg@sha256:1111111111111111111111111111111111111111111111111111111111111111",
-            "--docker-gnuplot-image",
+            "--gnuplot-image",
             "registry.example/gnuplot@sha256:6666666666666666666666666666666666666666666666666666666666666666",
-            "--docker-graphviz-image",
+            "--graphviz-image",
             "registry.example/graphviz@sha256:5555555555555555555555555555555555555555555555555555555555555555",
-            "--docker-imagemagick-image",
+            "--imagemagick-image",
             "registry.example/imagemagick@sha256:2222222222222222222222222222222222222222222222222222222222222222",
-            "--docker-qpdf-image",
+            "--qpdf-image",
             "registry.example/qpdf@sha256:3333333333333333333333333333333333333333333333333333333333333333",
-            "--docker-poppler-image",
+            "--poppler-image",
             "registry.example/poppler@sha256:4444444444444444444444444444444444444444444444444444444444444444",
         ]);
 
-        let images = tools.images.docker_images().unwrap();
+        let images = tools.images.oci_images().unwrap();
         assert_eq!(
-            images.image(ToolBundle::Ffmpeg),
+            images.image(ToolBundle::Ffmpeg).reference,
             "registry.example/ffmpeg@sha256:1111111111111111111111111111111111111111111111111111111111111111"
         );
         assert_eq!(
-            images.image(ToolBundle::Gnuplot),
+            images.image(ToolBundle::Gnuplot).reference,
             "registry.example/gnuplot@sha256:6666666666666666666666666666666666666666666666666666666666666666"
         );
         assert_eq!(
-            images.image(ToolBundle::Graphviz),
+            images.image(ToolBundle::Graphviz).reference,
             "registry.example/graphviz@sha256:5555555555555555555555555555555555555555555555555555555555555555"
         );
         assert_eq!(
-            images.image(ToolBundle::ImageMagick),
+            images.image(ToolBundle::ImageMagick).reference,
             "registry.example/imagemagick@sha256:2222222222222222222222222222222222222222222222222222222222222222"
         );
         assert_eq!(
-            images.image(ToolBundle::Qpdf),
+            images.image(ToolBundle::Qpdf).reference,
             "registry.example/qpdf@sha256:3333333333333333333333333333333333333333333333333333333333333333"
         );
         assert_eq!(
-            images.image(ToolBundle::Poppler),
+            images.image(ToolBundle::Poppler).reference,
             "registry.example/poppler@sha256:4444444444444444444444444444444444444444444444444444444444444444"
         );
     }
 
     #[test]
-    fn run_rejects_docker_image_options_with_the_local_executor() {
-        let tools = parse_run(&[
-            "rex",
-            "run",
-            "workflow.rex",
-            "--docker-qpdf-image",
-            "registry.example/qpdf:latest",
-        ]);
-
-        let error = tools
-            .state(Store::new_in_memory())
-            .err()
-            .expect("local execution should reject Docker image options");
-        assert_eq!(
-            error,
-            "Docker image options require `--tool-executor docker`"
-        );
+    fn run_rejects_the_removed_local_executor_option() {
+        let error =
+            Args::try_parse_from(["rex", "run", "workflow.rex", "--tool-executor", "local"])
+                .unwrap_err();
+        assert!(error.to_string().contains("unexpected argument"));
     }
 
     #[test]

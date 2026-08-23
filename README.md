@@ -27,9 +27,9 @@ processing scientific data:
 - **Typed tool APIs** expose domain concepts such as video codecs, PDF structure,
   image operations, and output formats. Rex programs construct valid tool
   requests rather than assembling shell command strings.
-- **Isolated Docker execution** can run each tool invocation in a fresh,
-  locked-down container containing only its declared inputs. The same workflow
-  can also use locally installed tools for a faster development loop.
+- **Mandatory OCI execution** runs every external tool in a fresh, locked-down
+  container containing only its declared inputs. Docker is the supplied
+  backend; a provider-neutral job protocol supports future remote runtimes.
 
 Together these properties make workflow definitions concise, inspectable, and
 amenable to parallel execution. They also create a clean boundary between the
@@ -249,35 +249,14 @@ expect a single file, a numbered sequence, a directory, or a tree. It rejects
 symbolic links and special files before recursively importing output into the
 CAS.
 
-## Local and Docker execution
+## OCI container execution
 
-The same typed tool plan can be executed by different host-selected backends.
-The workflow itself does not change.
-
-### Local processes
-
-Local execution is the default:
-
-```sh
-rex --store-path ./store run workflow.rex --inputs inputs.json
-```
-
-It creates a temporary workspace, materializes declared CAS inputs, runs the
-catalogued executable installed on the host, and imports declared outputs.
-This is convenient during development and uses the codecs, delegates, fonts,
-and other capabilities installed on that machine. It is not an operating-
-system sandbox: the process still has the permissions and environment of the
-host user.
-
-### Isolated Docker containers
-
-Docker execution keeps the workflow API identical while placing each tool
-invocation in a fresh container:
+Every external tool invocation is an executor-neutral OCI job. Docker is the
+only backend shipped in this repository and is selected automatically:
 
 ```sh
 rex --store-path ./store run workflow.rex \
-    --inputs inputs.json \
-    --tool-executor docker
+    --inputs inputs.json
 ```
 
 The supplied container executor is intentionally restrictive. For every
@@ -290,8 +269,8 @@ invocation it:
   Docker socket, system fonts, or arbitrary host paths;
 - disables networking, Linux capabilities, privilege escalation, and health
   checks;
-- uses a read-only image root, a PID limit, and the host user's numeric UID and
-  GID;
+- uses a read-only image root, memory, CPU, PID, and temporary-storage limits,
+  and a non-root numeric UID and GID;
 - supplies a headless C locale, UTC timezone, temporary home, and controlled
   cache locations;
 - bounds execution time and captured stdout/stderr; and
@@ -306,7 +285,7 @@ documented headless formats.
 Containers are useful for both isolation and repeatability. They make the tool
 runtime, libraries, codecs, delegates, fonts, locale, and operating-system
 environment an explicit deployment choice rather than an undocumented property
-of a worker. `DockerToolImages::new` requires digest-qualified image references,
+of a worker. `OciToolImages::new` requires digest-qualified image references,
 and CLI image overrides require digests unless mutable tags are explicitly
 allowed.
 
@@ -324,9 +303,8 @@ coverage.
 
 ## Quick start
 
-You need a recent Rust toolchain. Docker with Buildx is required for the
-container profile; for local execution, install the relevant tool suite on the
-host instead.
+You need a recent Rust toolchain and Docker with Buildx. Rex never executes a
+workflow tool as a process installed directly on the host.
 
 Build the workflow binary from the workspace root and create a local store:
 
@@ -346,8 +324,7 @@ Run an input-free example that generates a PNG gradient with ImageMagick:
 
 ```sh
 target/debug/rex --store-path ./store run \
-    rex-workflow/examples/imagemagick/generate_gradient.rex \
-    --tool-executor docker
+    rex-workflow/examples/imagemagick/generate_gradient.rex
 ```
 
 The JSON result contains the BLAKE3 `content` hash of the generated image.
@@ -390,13 +367,12 @@ Then run the resize example:
 ```sh
 target/debug/rex --store-path ./store run \
     rex-workflow/examples/imagemagick/resize.rex \
-    --inputs inputs.json \
-    --tool-executor docker
+    --inputs inputs.json
 ```
 
-Omit `--tool-executor docker` to use a locally installed ImageMagick. You can
-also set `REX_STORE` and `REX_TOOL_EXECUTOR` instead of passing the corresponding
-options on every invocation.
+Set `REX_STORE` to avoid passing the store path on every invocation. OCI image
+overrides use `--ffmpeg-image`, `--gnuplot-image`, `--graphviz-image`,
+`--imagemagick-image`, `--qpdf-image`, and `--poppler-image`.
 
 ### CLI overview
 
@@ -410,7 +386,7 @@ rex [--store-path PATH] store ls HASH[/PATH]
 rex [--store-path PATH] store resolve-path HASH[/PATH]
 
 rex [--store-path PATH] run FILE [--inputs JSON] [--raw-output]
-    [--tool-executor local|docker]
+    [--*-image OCI_REFERENCE] [--allow-image-tags]
 
 rex tools build
 rex tools inspect
@@ -468,14 +444,16 @@ A workflow run crosses several deliberately small boundaries:
    declared by `main`.
 4. **Evaluate.** `rex-engine` evaluates pure expressions and schedules injected
    asynchronous functions. The runtime state contains a CAS implementation and
-   a host-selected tool executor.
+   an OCI tool executor.
 5. **Compile tool requests.** A `tools.*` module converts semantic Rex values
    into a closed `ToolExecutionPlan` with explicit input and output slots.
-6. **Execute.** The local or Docker backend materializes CAS inputs into an
-   invocation-specific workspace and runs the catalogued program.
-7. **Capture artifacts.** Declared outputs are validated, recursively imported
+6. **Build an OCI job.** The host resolves the plan to an image, fixed command,
+   target platform, isolation policy, and resource limits.
+7. **Execute.** The selected OCI backend transfers declared CAS inputs, runs the
+   job, and returns only declared results plus execution provenance.
+8. **Capture artifacts.** Declared outputs are validated, recursively imported
    into the CAS, and returned to Rex as hashes wrapped in semantic types.
-8. **Encode the result.** The final typed Rex value is converted to JSON for the
+9. **Encode the result.** The final typed Rex value is converted to JSON for the
    caller.
 
 This separation makes policy replaceable. The workflow language describes
@@ -484,8 +462,8 @@ is trusted, how it is isolated, and which operational limits apply.
 
 ## Embedding workflows in Rust
 
-`rex-workflow` is a library as well as a CLI. An embedding application can
-choose its store and executor, provide JSON inputs, and evaluate Rex source:
+`rex-workflow` is a library as well as a CLI. An embedding application chooses
+its store, OCI images, and executor, then evaluates Rex source:
 
 ```rust,ignore
 use rex_workflow::{
@@ -494,29 +472,11 @@ use rex_workflow::{
 };
 use rex::storage::Store;
 
+use rex_workflow::modules::tools::executor::{OciPlatform, OciToolImages};
+
 let store = Store::new_with_filesystem("./store".into());
-let state = State::local(store);
-let inputs = serde_json::json!({ "input": input_hash });
-
-let result = eval_rex(source, Some(inputs), state).await?;
-```
-
-Stores can instead be in memory or backed by any
-`object_store::ObjectStore`, which covers common object-storage services and
-protocols supported by that crate:
-
-```rust,ignore
-let store = Store::new_in_memory();
-
-let store = Store::new_with_object_store(object_store, "rex/objects/");
-```
-
-Embedders can select the supplied Docker executor with explicit image policy:
-
-```rust,ignore
-use rex_workflow::modules::tools::executor::DockerToolImages;
-
-let images = DockerToolImages::new(
+let images = OciToolImages::new(
+    OciPlatform::new("linux", "amd64", None)?,
     "registry.example/ffmpeg@sha256:<digest>",
     "registry.example/gnuplot@sha256:<digest>",
     "registry.example/graphviz@sha256:<digest>",
@@ -525,11 +485,18 @@ let images = DockerToolImages::new(
     "registry.example/poppler@sha256:<digest>",
 );
 let state = State::docker(store, images);
+let inputs = serde_json::json!({ "input": input_hash });
+let result = eval_rex(source, Some(inputs), state).await?;
 ```
 
-Or they can implement the `ToolExecutor` trait to route the same execution
-plans into another sandbox, a worker service, or infrastructure with custom
-resource accounting. Host applications can also use the core `rex` crate to
+Stores can instead be in memory or backed by an `object_store::ObjectStore`.
+Embedders can implement `OciJobExecutor` to route the same logical jobs to a
+remote container service. The shared validator requires compatible platforms,
+resource controls, isolation guarantees, CAS transfer, and provenance; it does
+not permit a host-process implementation. See
+[OCI executor protocol](docs/src/OCI_EXECUTORS.md).
+
+Host applications can also use the core `rex` crate to
 inject their own typed native modules. This is how domain-specific scientific
 software can become a controlled Rex capability without becoming a shell
 command.
@@ -583,7 +550,8 @@ reference](docs/src/LANGUAGE.md), [semantics](docs/src/SPEC.md), and
 
 This repository is a Cargo workspace. Its main crates are:
 
-- `rex-workflow`: workflow runtime, typed tool modules, local/Docker executors,
+- `rex-workflow`: workflow runtime, typed tool modules, OCI executor protocol,
+  Docker backend,
   and the workflow `rex` CLI.
 - `rex`: entry point for embedding the core language in Rust applications,
   including content-addressable storage with memory, filesystem, and
@@ -634,11 +602,9 @@ workflow source. This costs some of the immediate flexibility of arbitrary
 command execution, but it buys a boundary that can be typed, reviewed, tested,
 and isolated.
 
-The current `rex-workflow` implementation is a local runtime and embeddable
-library, not yet a distributed scheduler or a complete provenance database.
-Its CAS, tool-plan abstraction, async evaluator, and replaceable storage and
-execution traits are the building blocks for those systems. The immediate goal
-is to make single-host workflows correct, composable, and secure before adding
-distributed coordination.
+The current `rex-workflow` implementation supplies Docker and an in-memory fake
+remote boundary for conformance testing. It is not yet a distributed scheduler
+or cloud executor. Provider adapters must implement the OCI job protocol and
+pass the complete conformance suite before they can be selected.
 
 Made with ❤️ by [QDX](https://qdx.co/)

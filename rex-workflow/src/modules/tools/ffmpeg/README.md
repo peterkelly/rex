@@ -175,14 +175,11 @@ typechecked in the workflow test suite.
 Cross-tool pipelines are demonstrated in the
 [`examples/imagemagick_ffmpeg`](examples/imagemagick_ffmpeg/README.md) directory.
 
-## Host architecture
+## OCI execution architecture
 
 The FFmpeg compiler lowers semantic values into a `ToolExecutionPlan`. A plan contains symbolic CAS
-inputs, symbolic output slots, and argument fragments whose paths are resolved only by a
-`ToolExecutor`. Joined argument fragments support path-bearing filter values without leaking the
-materialized path into Rex or into the semantic compiler.
-
-`LocalToolExecutor` currently creates a temporary workspace, exports blobs or trees, invokes the
-program without a shell, imports files, sequences, or trees, and removes the workspace. The trait is
-the boundary for replacing local execution with an isolated runner later; none of the Rex-visible
-FFmpeg types depend on the local implementation.
+inputs, symbolic output slots, and argument fragments whose paths are resolved only by an
+OCI executor. Joined argument fragments support path-bearing filter values without leaking the
+materialized path into Rex or into the semantic compiler. The host resolves the plan to an
+`OciJob`; only a conforming `OciJobExecutor` may materialize inputs, run FFmpeg, and import declared
+results. No Rex-visible FFmpeg type can request host-process execution.

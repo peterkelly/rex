@@ -70,6 +70,7 @@
 - [Language Reference](LANGUAGE.md)
 - [Specification](SPEC.md)
 - [Architecture](ARCHITECTURE.md)
+- [OCI Executor Protocol](OCI_EXECUTORS.md)
 - [Memory Management](MEMORY_MANAGEMENT.md)
 - [Embedding](EMBEDDING.md)
 - [Contributing](CONTRIBUTING.md)

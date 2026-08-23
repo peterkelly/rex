@@ -848,19 +848,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_ffmpeg_generates_transcodes_and_probes_media_when_available() {
-        if std::process::Command::new("ffmpeg")
-            .arg("-version")
-            .output()
-            .is_err()
-            || std::process::Command::new("ffprobe")
-                .arg("-version")
-                .output()
-                .is_err()
-        {
+    async fn docker_ffmpeg_generates_transcodes_and_probes_media_when_enabled() {
+        if std::env::var("REX_WORKFLOW_DOCKER_TESTS").as_deref() != Ok("1") {
             return;
         }
-        let state = State::local(Store::new_in_memory());
+        let state = State::docker(
+            Store::new_in_memory(),
+            crate::modules::tools::executor::OciToolImages::current_development(),
+        );
         let media = transcode(
             state.clone(),
             MediaSource::TestVideo(TestVideoSource {
@@ -969,19 +964,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_ffmpeg_specialized_functions_exchange_cas_media_when_available() {
-        if std::process::Command::new("ffmpeg")
-            .arg("-version")
-            .output()
-            .is_err()
-            || std::process::Command::new("ffprobe")
-                .arg("-version")
-                .output()
-                .is_err()
-        {
+    async fn docker_ffmpeg_specialized_functions_exchange_cas_media_when_enabled() {
+        if std::env::var("REX_WORKFLOW_DOCKER_TESTS").as_deref() != Ok("1") {
             return;
         }
-        let state = State::local(Store::new_in_memory());
+        let state = State::docker(
+            Store::new_in_memory(),
+            crate::modules::tools::executor::OciToolImages::current_development(),
+        );
         let video = transcode(
             state.clone(),
             MediaSource::TestVideo(TestVideoSource {

@@ -120,9 +120,9 @@ example is parsed and typechecked in the workflow test suite.
 Cross-tool pipelines are demonstrated in the
 [`examples/imagemagick_ffmpeg`](examples/imagemagick_ffmpeg/README.md) directory.
 
-## Host architecture
+## OCI execution architecture
 
 ImageMagick compiles into a generic symbolic `ToolExecutionPlan`. Plans contain CAS inputs and
-opaque path slots, not host paths. `LocalToolExecutor` materializes a temporary workspace and runs
-the command today. The `ToolExecutor` trait is the replacement boundary for isolated sandbox
-execution later; no Rex-visible ImageMagick type depends on the local executor.
+opaque path slots, not host paths. The host resolves the plan to an `OciJob`; Docker or another
+conforming `OciJobExecutor` owns materialization, isolation, execution, and result transfer. No
+Rex-visible ImageMagick type can request host-process execution.

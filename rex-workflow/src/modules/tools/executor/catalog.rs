@@ -3,13 +3,11 @@ use super::{ToolBundle, ToolProgram};
 /// Everything an executor needs to select and enter a tool runtime.
 ///
 /// `prefix_arguments` holds arguments that select a subcommand inside a
-/// shared executable. Keeping them here ensures local and container
-/// executors enter the tool through the same command line.
+/// shared executable. The command is part of the trusted OCI job catalog.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ToolRuntime {
     pub(super) bundle: ToolBundle,
-    pub(super) local_executable: &'static str,
-    pub(super) container_executable: &'static str,
+    pub(super) executable: &'static str,
     pub(super) prefix_arguments: &'static [&'static str],
 }
 
@@ -17,26 +15,22 @@ pub(super) const fn runtime(program: ToolProgram) -> ToolRuntime {
     match program {
         ToolProgram::Ffmpeg => ToolRuntime {
             bundle: ToolBundle::Ffmpeg,
-            local_executable: "ffmpeg",
-            container_executable: "ffmpeg",
+            executable: "ffmpeg",
             prefix_arguments: &[],
         },
         ToolProgram::Ffprobe => ToolRuntime {
             bundle: ToolBundle::Ffmpeg,
-            local_executable: "ffprobe",
-            container_executable: "ffprobe",
+            executable: "ffprobe",
             prefix_arguments: &[],
         },
         ToolProgram::Graphviz => ToolRuntime {
             bundle: ToolBundle::Graphviz,
-            local_executable: "dot",
-            container_executable: "dot",
+            executable: "dot",
             prefix_arguments: &[],
         },
         ToolProgram::Gnuplot => ToolRuntime {
             bundle: ToolBundle::Gnuplot,
-            local_executable: "gnuplot",
-            container_executable: "gnuplot",
+            executable: "gnuplot",
             prefix_arguments: &[],
         },
         ToolProgram::ImageMagick => image_magick(&[]),
@@ -48,8 +42,7 @@ pub(super) const fn runtime(program: ToolProgram) -> ToolRuntime {
         ToolProgram::ImageMagickStream => image_magick(&["stream"]),
         ToolProgram::Qpdf => ToolRuntime {
             bundle: ToolBundle::Qpdf,
-            local_executable: "qpdf",
-            container_executable: "qpdf",
+            executable: "qpdf",
             prefix_arguments: &[],
         },
         ToolProgram::PdfInfo => poppler("pdfinfo"),
@@ -62,8 +55,7 @@ pub(super) const fn runtime(program: ToolProgram) -> ToolRuntime {
 const fn image_magick(prefix_arguments: &'static [&'static str]) -> ToolRuntime {
     ToolRuntime {
         bundle: ToolBundle::ImageMagick,
-        local_executable: "magick",
-        container_executable: "magick",
+        executable: "magick",
         prefix_arguments,
     }
 }
@@ -71,8 +63,7 @@ const fn image_magick(prefix_arguments: &'static [&'static str]) -> ToolRuntime 
 const fn poppler(executable: &'static str) -> ToolRuntime {
     ToolRuntime {
         bundle: ToolBundle::Poppler,
-        local_executable: executable,
-        container_executable: executable,
+        executable,
         prefix_arguments: &[],
     }
 }
@@ -167,8 +158,7 @@ mod tests {
                 runtime(program),
                 ToolRuntime {
                     bundle,
-                    local_executable: executable,
-                    container_executable: executable,
+                    executable,
                     prefix_arguments,
                 }
             );
