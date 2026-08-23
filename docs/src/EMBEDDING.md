@@ -1190,9 +1190,10 @@ limits for untrusted code:
 
 ## Embedding workflow tool execution
 
-The core `rex` crate does not execute operating-system tools. Hosts using
-`rex-workflow` must configure OCI images and either the supplied Docker backend
-or an implementation of `OciJobExecutor`. There is no host-process executor.
+The `rex::workflow` module does not execute operating-system tools directly on
+the host. Workflow hosts must configure OCI images and either the supplied
+Docker backend or an implementation of `OciJobExecutor`. There is no
+host-process executor.
 
 Provider implementations receive logical CAS inputs and output declarations,
 not host paths or Docker arguments. They must enforce the requested platform,

@@ -1013,7 +1013,10 @@ name = "rex"
 version = "3.9.14"
 dependencies = [
  "blake3",
+ "chrono",
  "clap",
+ "futures",
+ "nix",
  "object_store",
  "rex-ast",
  "rex-engine",
@@ -1142,7 +1145,6 @@ version = "3.9.14"
 dependencies = [
  "blake3",
  "rex",
- "rex-workflow",
  "serde",
  "serde_json",
  "tokio",
@@ -1155,7 +1157,6 @@ dependencies = [
  "blake3",
  "chrono",
  "rex",
- "rex-workflow",
  "serde",
  "serde_json",
  "tokio",
@@ -1167,7 +1168,6 @@ version = "3.9.14"
 dependencies = [
  "blake3",
  "rex",
- "rex-workflow",
  "serde",
  "serde_json",
  "tokio",
@@ -1179,7 +1179,6 @@ version = "3.9.14"
 dependencies = [
  "blake3",
  "rex",
- "rex-workflow",
  "serde",
  "serde_json",
  "tokio",
@@ -1191,7 +1190,6 @@ version = "3.9.14"
 dependencies = [
  "blake3",
  "rex",
- "rex-workflow",
  "serde",
  "serde_json",
  "tokio",
@@ -1203,9 +1201,19 @@ version = "3.9.14"
 dependencies = [
  "blake3",
  "rex",
- "rex-workflow",
  "serde",
  "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "rex-tools-integration"
+version = "3.9.14"
+dependencies = [
+ "blake3",
+ "rex",
+ "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -1244,23 +1252,6 @@ dependencies = [
  "rex-util",
  "serde_json",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "rex-workflow"
-version = "3.9.14"
-dependencies = [
- "blake3",
- "chrono",
- "clap",
- "futures",
- "nix",
- "rex",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "uuid",
 ]
 
 [[package]]

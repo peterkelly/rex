@@ -39,13 +39,13 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and load native images
-        working-directory: rex-workflow/tool-images
+        working-directory: tools
         run: docker buildx bake --set '*.platform=${{ matrix.platform }}' --load
 
       - name: Run hardened smoke tests
         if: env.REX_WORKFLOW_DOCKER_TESTS == '1'
-        working-directory: rex-workflow/tool-images
-        run: ./verify.sh
+        working-directory: tools
+        run: ./verify-images.sh
 
       - name: Install Rust toolchain
         if: env.REX_WORKFLOW_DOCKER_TESTS == '1'
@@ -57,4 +57,6 @@ jobs:
 
       - name: Run Docker integration tests
         if: env.REX_WORKFLOW_DOCKER_TESTS == '1'
-        run: cargo test -p rex-workflow --test docker_tools -- --nocapture --test-threads=1
+        run: |
+          cargo build -p rex-tool-ffmpeg -p rex-tool-gnuplot -p rex-tool-graphviz -p rex-tool-imagemagick -p rex-tool-poppler -p rex-tool-qpdf
+          cargo test -p rex-tools-integration --test docker_tools -- --nocapture --test-threads=1

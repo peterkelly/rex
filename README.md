@@ -41,7 +41,7 @@ tool's closed API sharply limits what generated programs can ask the host to exe
 See [LLM guidance](docs/src/LLMS.md) for syntax and validation advice.
 
 > **Project status:** the `main` branch contains the work in progress toward
-> Rex v4 and is currently versioned as 3.9.x. `rex-workflow` is new and under
+> Rex v4 and is currently versioned as 3.9.x. The workflow runtime is new and under
 > active development. The older production release of the core Rex language
 > is available at [talo/rex](https://github.com/talo/rex).
 
@@ -120,7 +120,7 @@ eventually needs an external templating language.
 
 Scientific workflows are easier to reason about when artifacts are values,
 not mutable locations. `rex::storage` provides the content-addressable store
-used by `rex-workflow`, in which every object is named by the BLAKE3 hash of
+used by `rex::workflow`, in which every object is named by the BLAKE3 hash of
 its bytes.
 
 The data model has two object kinds:
@@ -230,7 +230,7 @@ also provide typed general render APIs for complex filter graphs, multiple
 inputs, ordered image operations, and multiple outputs.
 
 Each module is implemented by an independently installed Rust binary named
-`rex-tool-NAME`. `rex-workflow` reads its typed manifest when `tools.NAME` is
+`rex-tool-NAME`. The `rex::workflow` runtime reads its typed manifest when `tools.NAME` is
 imported and invokes its `execute` command for calls. The bundled modules
 compile requests into `ToolExecutionPlan` values. Plans can reference only:
 
@@ -287,9 +287,9 @@ documented headless formats.
 Containers are useful for both isolation and repeatability. They make the tool
 runtime, libraries, codecs, delegates, fonts, locale, and operating-system
 environment an explicit deployment choice rather than an undocumented property
-of a worker. `OciToolImages::new` requires digest-qualified image references,
-and CLI image overrides require digests unless mutable tags are explicitly
-allowed.
+of a worker. Each installed tool owns its image selection; the generic
+`OciImage` validator requires digest-qualified references unless mutable tags
+are explicitly allowed by that tool's state factory.
 
 The repository currently builds development images locally with the tags
 `rex-tool-ffmpeg:local`, `rex-tool-gnuplot:local`, `rex-tool-graphviz:local`, `rex-tool-imagemagick:local`,
@@ -299,7 +299,7 @@ an image as a side effect. Published multi-platform images and a release digest
 lock are future work; today, production users should supply and pin their own
 images if they require a controlled image supply chain.
 
-See [the tool image documentation](rex-workflow/tool-images/README.md) for the
+See [the tool image documentation](tools/README.md) for the
 full isolation contract, image overrides, build details, and integration-test
 coverage.
 
@@ -312,24 +312,26 @@ still run only inside OCI containers.
 Build the workflow binary from the workspace root and create a local store:
 
 ```sh
-cargo build -p rex-workflow \
+cargo build -p rex \
   -p rex-tool-ffmpeg -p rex-tool-gnuplot -p rex-tool-graphviz \
   -p rex-tool-imagemagick -p rex-tool-poppler -p rex-tool-qpdf
 mkdir -p store
 ```
 
-Build and inspect the six native-architecture Docker tool images:
+Build and verify the six native-architecture Docker tool images:
 
 ```sh
-target/debug/rex tools build
-target/debug/rex tools inspect
+cd tools
+docker buildx bake --load
+./verify-images.sh
+cd ..
 ```
 
 Run an input-free example that generates a PNG gradient with ImageMagick:
 
 ```sh
 target/debug/rex --store-path ./store --tool-dir target/debug run \
-    rex-workflow/examples/imagemagick/generate_gradient.rex
+    examples/imagemagick/generate_gradient.rex
 ```
 
 The JSON result contains the BLAKE3 `content` hash of the generated image.
@@ -371,15 +373,14 @@ Then run the resize example:
 
 ```sh
 target/debug/rex --store-path ./store --tool-dir target/debug run \
-    rex-workflow/examples/imagemagick/resize.rex \
+    examples/imagemagick/resize.rex \
     --inputs inputs.json
 ```
 
 The CLI looks for tools beside its own executable by default. Set `REX_STORE`
 and `REX_TOOL_DIR` to avoid passing the store path or to select another
-installed-tool directory. OCI image
-overrides use `--ffmpeg-image`, `--gnuplot-image`, `--graphviz-image`,
-`--imagemagick-image`, `--qpdf-image`, and `--poppler-image`.
+installed-tool directory. Each tool binary documents its own OCI image
+environment variable.
 
 ### CLI overview
 
@@ -393,10 +394,7 @@ rex [--store-path PATH] store ls HASH[/PATH]
 rex [--store-path PATH] store resolve-path HASH[/PATH]
 
 rex [--store-path PATH] [--tool-dir DIRECTORY] run FILE [--inputs JSON] [--raw-output]
-    [--*-image OCI_REFERENCE] [--allow-image-tags]
 
-rex tools build
-rex tools inspect
 rex tools cleanup [--include-running]
 ```
 
@@ -413,28 +411,28 @@ the whole hierarchy.
 ## Workflow examples
 
 The repository includes a broad set of examples. Every tool example is parsed
-and typechecked by the `rex-workflow` test suite.
+and typechecked by the Rex workflow test suite.
 
-- [FFmpeg examples](rex-workflow/examples/ffmpeg/README.md): generated video
+- [FFmpeg examples](examples/ffmpeg/README.md): generated video
   and audio, transcoding, stream copying, probing, inspection, muxing,
   concatenation, filtering, frame extraction, segmentation, and HLS/DASH.
-- [Gnuplot examples](rex-workflow/examples/gnuplot/README.md): curves, error
+- [Gnuplot examples](examples/gnuplot/README.md): curves, error
   bars, bands, categorical bars, histograms, heatmaps, vectors, labels, point
   clouds, paths, and surface representations built from inline values.
-- [Graphviz examples](rex-workflow/examples/graphviz/README.md): typed DOT graph
+- [Graphviz examples](examples/graphviz/README.md): typed DOT graph
   construction, subgraph composition, and SVG rendering.
-- [ImageMagick examples](rex-workflow/examples/imagemagick/README.md): image
+- [ImageMagick examples](examples/imagemagick/README.md): image
   generation, resizing, thumbnails, conversion, metadata, drawing,
   composition, comparison, montage, frame extraction, batch processing, and
   raw pixels.
-- [QPDF examples](rex-workflow/examples/qpdf/README.md): validation, JSON
+- [QPDF examples](examples/qpdf/README.md): validation, JSON
   inspection, linearization, and page merging.
-- [Poppler examples](rex-workflow/examples/poppler/README.md): metadata, text
+- [Poppler examples](examples/poppler/README.md): metadata, text
   and word geometry, page rendering, and image extraction.
 - [Combined ImageMagick and FFmpeg
-  examples](rex-workflow/examples/imagemagick_ffmpeg/README.md): multi-stage
+  examples](examples/imagemagick_ffmpeg/README.md): multi-stage
   media workflows with direct CAS-backed handoff.
-- [Storage examples](rex-workflow/examples/storage): recursive traversal and
+- [Storage examples](examples/storage): recursive traversal and
   rendering of immutable directory trees.
 
 Most example files contain their required input shape, exact CLI invocation,
@@ -452,7 +450,7 @@ A workflow run crosses several deliberately small boundaries:
 4. **Evaluate.** `rex-engine` evaluates pure expressions and schedules injected
    asynchronous functions. The runtime state contains a CAS implementation and
    an OCI tool executor.
-5. **Invoke the installed module.** `rex-workflow` converts arguments with the
+5. **Invoke the installed module.** `rex::workflow` converts arguments with the
    declared types and calls the module binary's `execute` command.
 6. **Compile and build the OCI job.** The Rust tool converts semantic values
    into a `ToolExecutionPlan` with explicit input and output slots and resolves
@@ -471,38 +469,32 @@ is trusted, how it is isolated, and which operational limits apply.
 
 ## Embedding workflows in Rust
 
-`rex-workflow` is a library as well as a CLI. An embedding application chooses
-its store, OCI images, and executor, then evaluates Rex source:
+`rex::workflow` is a library module, and the `rex` crate also supplies its CLI.
+An embedding application chooses its store and installed-tool directory, then
+evaluates Rex source:
 
 ```rust,ignore
-use rex_workflow::{
-    run::eval_rex,
-    state::State,
+use rex::{
+    storage::Store,
+    workflow::{
+        run::eval_rex,
+        state::State,
+    },
 };
-use rex::storage::Store;
-
-use rex_workflow::modules::tools::executor::{OciPlatform, OciToolImages};
 
 let store = Store::new_with_filesystem("./store".into());
-let images = OciToolImages::new(
-    OciPlatform::new("linux", "amd64", None)?,
-    "registry.example/ffmpeg@sha256:<digest>",
-    "registry.example/gnuplot@sha256:<digest>",
-    "registry.example/graphviz@sha256:<digest>",
-    "registry.example/imagemagick@sha256:<digest>",
-    "registry.example/qpdf@sha256:<digest>",
-    "registry.example/poppler@sha256:<digest>",
-);
-let state = State::docker(store, images);
+let state = State::without_tools(store)
+    .with_tool_directory("./installed-tools")
+    .with_tool_environment("REX_STORE", "./store");
 let inputs = serde_json::json!({ "input": input_hash });
 let result = eval_rex(source, Some(inputs), state).await?;
 ```
 
 Stores can instead be in memory or backed by an `object_store::ObjectStore`.
-Embedders can implement `OciJobExecutor` to route the same logical jobs to a
-remote container service. The shared validator requires compatible platforms,
-resource controls, isolation guarantees, CAS transfer, and provenance; it does
-not permit a host-process implementation. See
+An installed tool's state factory can implement `OciJobExecutor` to route its
+logical jobs to a remote container service. The shared validator requires
+compatible platforms, resource controls, isolation guarantees, CAS transfer,
+and provenance; it does not permit a host-process implementation. See
 [OCI executor protocol](docs/src/OCI_EXECUTORS.md).
 
 Host applications can also use the core `rex` crate to
@@ -512,8 +504,8 @@ command.
 
 ## Rex as an embedded language
 
-The workflow system is built on the general Rex embedding API. Outside
-`rex-workflow`, a Rust application can parse and typecheck user programs,
+The workflow system is built on the general Rex embedding API. Outside the
+workflow module, a Rust application can parse and typecheck user programs,
 inject synchronous or asynchronous native functions, and evaluate them with
 application-defined state. The `#[derive(Rex)]`, `#[rex::export]`, and
 `#[rex::module]` macros bridge documented Rust types and APIs into Rex.
@@ -529,7 +521,7 @@ For embedding patterns and the untrusted-code checklist, see
 
 ## Language and tooling
 
-Rex can also be used independently of `rex-workflow` for pure computation or
+Rex can also be used without its workflow module for pure computation or
 as an embedded scripting language. Try it in the
 [browser playground](https://peterkelly.github.io/rex/) or run the standalone
 language CLI:
@@ -559,12 +551,10 @@ reference](docs/src/LANGUAGE.md), [semantics](docs/src/SPEC.md), and
 
 This repository is a Cargo workspace. Its main crates are:
 
-- `rex-workflow`: workflow runtime, installable-tool protocol, OCI executor
-  protocol, Docker backend,
-  and the workflow `rex` CLI.
 - `rex`: entry point for embedding the core language in Rust applications,
   including content-addressable storage with memory, filesystem, and
-  `object_store` backends.
+  `object_store` backends, plus the workflow runtime, installable-tool
+  protocol, OCI executor protocol, Docker backend, and workflow `rex` CLI.
 - `rex-parser`: parser producing a `CompilationUnit { decls, body }`.
 - `rex-ast`: shared syntax tree nodes, symbols, and spans.
 - `rex-typesystem`: Hindley–Milner inference, ADTs, higher-kinded types, and
@@ -599,7 +589,7 @@ daemon. After building the local images, run:
 cargo build -p rex-tool-ffmpeg -p rex-tool-gnuplot -p rex-tool-graphviz \
   -p rex-tool-imagemagick -p rex-tool-poppler -p rex-tool-qpdf
 REX_WORKFLOW_DOCKER_TESTS=1 \
-cargo test -p rex-workflow --test docker_tools -- \
+cargo test -p rex-tools-integration --test docker_tools -- \
     --nocapture --test-threads=1
 ```
 
@@ -616,7 +606,7 @@ tool APIs, and Docker policy is not controlled by workflow source. Installing a
 tool binary is therefore an explicit trust decision rather than arbitrary
 command execution from Rex code.
 
-The current `rex-workflow` implementation supplies Docker and an in-memory fake
+The current workflow implementation supplies Docker and an in-memory fake
 remote boundary for conformance testing. It is not yet a distributed scheduler
 or cloud executor. Provider adapters must implement the OCI job protocol and
 pass the complete conformance suite before they can be selected.

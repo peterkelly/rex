@@ -10,7 +10,9 @@ version.workspace = true
 
 [dependencies]
 blake3 = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true }
+futures = { workspace = true }
 object_store = { workspace = true }
 rex-ast = { path = "../rex-ast", version = "3.9.14" }
 rex-engine = { path = "../rex-engine", version = "3.9.14" }
@@ -21,8 +23,11 @@ rex-util = { path = "../rex-util", version = "3.9.14" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3.27.0"
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 uuid = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["user"] }
 
 [lints]
 workspace = true

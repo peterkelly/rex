@@ -79,6 +79,9 @@ pub mod storage;
 /// Hindley-Milner type inference, type representations, ADTs, and type classes.
 pub mod typesystem;
 
+/// Workflow execution, installable tools, OCI isolation, and workflow state.
+pub mod workflow;
+
 /// Derive bridge for Rust data types that should cross the Rex boundary.
 ///
 /// `#[derive(Rex)]` implements these traits for the derived Rust type:

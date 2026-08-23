@@ -8,7 +8,7 @@ remote OCI service without changing Rex modules or exposing host execution.
 An `OciJob` contains only:
 
 - a host-selected OCI image and target `os/architecture[/variant]`;
-- a fixed catalog command and symbolic arguments;
+- a trusted command supplied by the installed tool and symbolic arguments;
 - declared CAS blob or tree inputs and declared output slots;
 - mandatory resource and result limits; and
 - an explicit isolation policy.
@@ -63,7 +63,7 @@ A provider adapter implements `OciJobExecutor`. It owns authentication,
 submission, scheduling, polling, cancellation, private workspace or object
 storage, CAS transfer, and service cleanup. It must call or reproduce the
 shared validation contract before starting work and must pass
-`oci_executor_conformance`.
+`workflow_oci_executor_conformance`.
 
 `FakeRemoteOciExecutor` is an in-memory protocol test double. It uses a CAS
 separate from the caller and proves that the boundary does not depend on Docker

@@ -10,7 +10,6 @@ version.workspace = true
 blake3.workspace = true
 chrono.workspace = true
 rex = { path = "../../rex", version = "3.9.14" }
-rex-workflow = { path = "../../rex-workflow", version = "3.9.14" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

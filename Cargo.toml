@@ -16,10 +16,10 @@ members = [
     "tools/rex-tool-imagemagick",
     "tools/rex-tool-poppler",
     "tools/rex-tool-qpdf",
+    "tools/rex-tools-integration",
     "rex-typesystem",
     "rex-util",
     "rex-wasm",
-    "rex-workflow",
 ]
 
 [workspace.package]

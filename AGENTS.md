@@ -20,7 +20,7 @@ computations and data manipulation.
 
 ## Crates in this workspace
 
-- `rex`: Crate acting as the entry point for embedding in other Rust programs. Also contains examples and integration tests.
+- `rex`: Crate acting as the entry point for embedding in other Rust programs. Also contains the workflow runtime, installable-tool protocol, OCI executor, Docker backend, workflow CLI, examples, and integration tests.
 - `rex-cli`: CLI crate providing the `rex_cli` binary.
 - `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `CompilationUnit`, symbols, spans).
 - `rex-parser`: source parser producing `CompilationUnit { decls, body }`.
@@ -30,8 +30,6 @@ computations and data manipulation.
 - `rex-fuzz`: stdin-driven fuzz harness binaries.
 - `rex-lsp`: language server (used by the VS Code extension).
 - `rex-vscode`: VS Code extension (Node).
-- `rex-workflow`: workflow runtime, installable-tool protocol, OCI executor,
-  Docker backend, and workflow CLI.
 - `rex-tool-ffmpeg`, `rex-tool-gnuplot`, `rex-tool-graphviz`,
   `rex-tool-imagemagick`, `rex-tool-poppler`, and `rex-tool-qpdf`: separately
   installable Rust tool binaries.

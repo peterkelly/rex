@@ -1,0 +1,17 @@
+[package]
+name = "rex-tools-integration"
+description = "Integration tests for the bundled Rex tool crates"
+publish = false
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dev-dependencies]
+blake3.workspace = true
+rex = { path = "../../rex", version = "3.9.14" }
+serde_json.workspace = true
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true
