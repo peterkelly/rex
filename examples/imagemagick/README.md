@@ -7,10 +7,10 @@ inside the workflow host.
 The examples intentionally use a small set of consistent conventions:
 
 - `Image { content = hash }` turns a CAS hash into a shared image artifact.
-- `IM.StoredImage image IM.AllFrames []` reads all frames with default settings.
+- `IM.ImageSource.Stored image IM.FrameSelection.All []` reads all frames with default settings.
 - operations are applied in list order.
-- `IM.AdjoinFrames` produces one encoded file, which may contain multiple frames.
-- `IM.SeparateFrames` produces `IM.MultipleImages`.
+- `IM.OutputMode.Adjoin` produces one encoded file, which may contain multiple frames.
+- `IM.OutputMode.Separate` produces `IM.ImageOutput.Multiple`.
 - expected ImageMagick failures are returned as `Err IM.ImageMagickError` values.
 
 Run an example with the workflow CLI and a JSON input file, for example:

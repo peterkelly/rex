@@ -21,7 +21,6 @@
 import std.artifacts (Image, Media);
 import tools.ffmpeg as FF;
 import tools.imagemagick as IM;
-import tools.imagemagick (SingleImage, MultipleImages);
 
 type WorkflowError
     = FfmpegFailed FF.FfmpegError
@@ -35,8 +34,8 @@ fn encode_title_card (title: String, card: Image)
             FF.MediaInput {
                 source = FF.StoredMedia (Media { content = card.content }),
                 options = [
-                    FF.InputStreamLoop (-1),
-                    FF.InputFrameRate (FF.Rational { numerator = 30, denominator = 1 })
+                    FF.InputOption.StreamLoop (-1),
+                    FF.InputOption.FrameRate (FF.Rational { numerator = 30, denominator = 1 })
                 ]
             },
             FF.MediaInput {
@@ -55,42 +54,42 @@ fn encode_title_card (title: String, card: Image)
                 mode = FF.SingleFile,
                 streams = [
                     FF.OutputStream {
-                        source = FF.InputStream
+                        source = FF.StreamSource.Input
                             (FF.StreamRef {
                                 input = 0,
-                                kind = FF.VideoStream,
+                                kind = FF.MediaKind.Video,
                                 index = Some 0
                             }),
-                        encoding = FF.EncodeVideo (FF.VideoEncoding {
+                        encoding = FF.StreamEncoding.Video (FF.VideoEncoding {
                             codec = FF.H264,
                             options = [
                                 FF.ConstantRateFactor 20.0,
                                 FF.Preset "medium",
                                 FF.PixelFormat "yuv420p",
-                                FF.VideoFrameRate
+                                FF.VideoEncodeOption.FrameRate
                                     (FF.Rational { numerator = 30, denominator = 1 })
                             ]
                         }),
                         metadata = dict_empty,
-                        dispositions = [FF.DefaultDisposition]
+                        dispositions = [FF.StreamDisposition.Default]
                     },
                     FF.OutputStream {
-                        source = FF.InputStream
+                        source = FF.StreamSource.Input
                             (FF.StreamRef {
                                 input = 1,
-                                kind = FF.AudioStream,
+                                kind = FF.MediaKind.Audio,
                                 index = Some 0
                             }),
-                        encoding = FF.EncodeAudio (FF.AudioEncoding {
+                        encoding = FF.StreamEncoding.Audio (FF.AudioEncoding {
                             codec = FF.Aac,
-                            options = [FF.AudioBitRate 128000]
+                            options = [FF.AudioEncodeOption.BitRate 128000]
                         }),
                         metadata = dict_empty,
-                        dispositions = [FF.DefaultDisposition]
+                        dispositions = [FF.StreamDisposition.Default]
                     }
                 ],
                 options = [
-                    FF.OutputDuration (FF.Time { seconds = 5.0 }),
+                    FF.MuxOption.Duration (FF.Time { seconds = 5.0 }),
                     FF.MovFlags ["faststart"]
                 ],
                 metadata = dict_singleton "title" title
@@ -105,29 +104,29 @@ fn main (font: Hash, title: String)
     -> Result (List FF.MediaArtifact) WorkflowError =
     match IM.generate
         (IM.LinearGradient
-            (IM.Size { width = 1280, height = 720 })
+            (IM.Size.Size { width = 1280, height = 720 })
             (IM.Color { value = "#0f172a" })
             (IM.Color { value = "#4338ca" }))
         [
             IM.Draw
                 [
-                    IM.DrawFill (IM.Color { value = "white" }),
-                    IM.DrawFont font,
-                    IM.DrawPointSize 64.0,
-                    IM.DrawGravity IM.GravityCenter
+                    IM.DrawStyle.Fill (IM.Color { value = "white" }),
+                    IM.DrawStyle.Font font,
+                    IM.DrawStyle.PointSize 64.0,
+                    IM.DrawStyle.Gravity IM.Gravity.Center
                 ]
-                [IM.DrawText (IM.Point { x = 0.0, y = 0.0 }) title]
+                [IM.DrawingPrimitive.Text (IM.Point.Point { x = 0.0, y = 0.0 }) title]
         ]
         (IM.Encoding {
-            format = IM.Format { name = "png" },
-            mode = IM.AdjoinFrames,
-            options = [IM.WriteStripMetadata]
+            format = IM.Format.Format { name = "png" },
+            mode = IM.OutputMode.Adjoin,
+            options = [IM.WriteOption.StripMetadata]
         })
     with {
         case Err error -> Err (ImageMagickFailed error);
         case Ok output ->
             match output with {
-                case SingleImage card -> encode_title_card title card;
-                case MultipleImages _ -> Err UnexpectedImageOutput;
+                case IM.ImageOutput.Single card -> encode_title_card title card;
+                case IM.ImageOutput.Multiple _ -> Err UnexpectedImageOutput;
             };
     };

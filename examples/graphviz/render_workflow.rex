@@ -23,7 +23,7 @@ let
         kind = G.Cluster,
         id = Some "build",
         attributes = G.SubgraphAttributes {
-            label = Some (G.TextLabel "Build"),
+            label = Some (G.Label.Text "Build"),
             padding = Some 16.0
         },
         nodes = {
@@ -39,15 +39,15 @@ let
                 horizontal = 0.25,
                 vertical = None
             }),
-            rank_direction = Some G.RankLeftToRight,
-            ordering = Some G.OrderOutgoing,
+            rank_direction = Some G.RankDirection.LeftToRight,
+            ordering = Some G.EdgeOrdering.Outgoing,
             center = Some true,
             background_color = Some "white",
-            splines = Some G.SplinesSpline
+            splines = Some G.SplineMode.Spline
         },
         node_defaults = G.NodeAttributes {
-            shape = Some G.ShapeBox,
-            styles = Some [G.NodeRounded, G.NodeFilled],
+            shape = Some G.NodeShape.Box,
+            styles = Some [G.NodeStyle.Rounded, G.NodeStyle.Filled],
             fill_color = Some "lightgoldenrod1"
         },
         nodes = {
@@ -57,10 +57,10 @@ let
         },
         edges = [
             edge G.EdgeAttributes {
-                label = Some (G.TextLabel "typed program")
+                label = Some (G.Label.Text "typed program")
             } "typecheck" "evaluate"
         ],
         subgraphs = { build = build_cluster }
     }
 in
-    G.render graph G.LayoutDot G.FormatSvg
+    G.render graph G.LayoutEngine.Dot G.RenderFormat.Svg

@@ -44,7 +44,7 @@ fn main (inputs: List Hash) -> Result Media FF.FfmpegError =
                 codec = FF.H264,
                 options = [FF.ConstantRateFactor 21.0, FF.PixelFormat "yuv420p"]
             }),
-            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioBitRate 192000] }),
+            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioEncodeOption.BitRate 192000] }),
             subtitle = None,
             options = [FF.MovFlags ["faststart"]],
             metadata = dict_empty

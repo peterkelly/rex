@@ -26,7 +26,7 @@ pub struct ExtractedImages {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum TextFormat {
     #[default]
-    PlainText,
+    Plain,
     PhysicalLayout,
     ContentStreamOrder,
     HtmlMetadata,
@@ -39,9 +39,9 @@ pub enum TextFormat {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum EndOfLine {
     #[default]
-    EolUnix,
-    EolDos,
-    EolMac,
+    Unix,
+    Dos,
+    Mac,
 }
 
 /// Pixel crop rectangle accepted by Poppler conversion utilities.
@@ -137,44 +137,44 @@ pub struct PdfInfo {
 /// Output format selected for `pdftocairo`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum CairoFormat {
-    CairoPng,
-    CairoJpeg,
-    CairoTiff,
-    CairoPdf,
-    CairoPostScript,
-    CairoEncapsulatedPostScript,
-    CairoSvg,
+    Png,
+    Jpeg,
+    Tiff,
+    Pdf,
+    PostScript,
+    EncapsulatedPostScript,
+    Svg,
 }
 
 /// Odd/even page filtering accepted by `pdftocairo`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum PageSelection {
     #[default]
-    AllPages,
-    OddPages,
-    EvenPages,
+    All,
+    Odd,
+    Even,
 }
 
 /// Raster color mode accepted by `pdftocairo`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum CairoColorMode {
     #[default]
-    CairoColor,
-    CairoGrayscale,
-    CairoMonochrome,
+    Color,
+    Grayscale,
+    Monochrome,
 }
 
 /// Antialiasing mode accepted by `pdftocairo -antialias`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum CairoAntialias {
     #[default]
-    AntialiasDefault,
-    AntialiasNone,
-    AntialiasGray,
-    AntialiasSubpixel,
-    AntialiasFast,
-    AntialiasGood,
-    AntialiasBest,
+    Default,
+    None,
+    Gray,
+    Subpixel,
+    Fast,
+    Good,
+    Best,
 }
 
 /// Common rendering and page-selection options for `pdftocairo`.
@@ -207,22 +207,22 @@ pub struct PdfToCairoOptions {
 /// One vector/single-page file or an ordered raster page sequence from `pdftocairo`.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum CairoOutput {
-    CairoSingleFile(OutputFile),
-    CairoPageFiles(Vec<OutputFile>),
+    SingleFile(OutputFile),
+    PageFiles(Vec<OutputFile>),
 }
 
 /// Encoding policy selected for files extracted by `pdfimages`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum PdfImagesFormat {
     #[default]
-    ImagesDefault,
-    ImagesPng,
-    ImagesTiff,
-    ImagesJpegNative,
-    ImagesJpeg2000Native,
-    ImagesJbig2Native,
-    ImagesCcittNative,
-    ImagesAll,
+    Default,
+    Png,
+    Tiff,
+    JpegNative,
+    Jpeg2000Native,
+    Jbig2Native,
+    CcittNative,
+    All,
 }
 
 /// Page selection, naming, passwords, and output policy for `pdfimages`.

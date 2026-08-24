@@ -38,9 +38,9 @@ mod api {
     ) -> Result<QResult<CheckReport>, EngineError> {
         let execution = execute(&state, check_plan(pdf, password)).await?;
         let status = match execution.exit_code {
-            Some(0) => CheckStatus::CheckClean,
-            Some(3) => CheckStatus::CheckWarnings,
-            Some(2) => CheckStatus::CheckErrors,
+            Some(0) => CheckStatus::Clean,
+            Some(3) => CheckStatus::Warnings,
+            Some(2) => CheckStatus::Errors,
             _ => return Ok(Err(process_error(&execution))),
         };
         Ok(Ok(CheckReport {
@@ -338,7 +338,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(report.status, CheckStatus::CheckClean);
+        assert_eq!(report.status, CheckStatus::Clean);
         assert_eq!(
             show_npages(state.clone(), source.clone(), None)
                 .await
@@ -353,9 +353,9 @@ mod tests {
             None,
             vec![
                 WriteOption::Linearize,
-                WriteOption::ObjectStreams(ObjectStreamMode::ObjectStreamsGenerate),
+                WriteOption::ObjectStreams(ObjectStreamMode::Generate),
                 WriteOption::Rotate(RotationSpec {
-                    rotation: Rotation::RelativeRotation(90),
+                    rotation: Rotation::Relative(90),
                     pages: Some("1".to_string()),
                 }),
             ],
@@ -370,7 +370,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            CheckStatus::CheckClean
+            CheckStatus::Clean
         );
 
         let overlaid = overlay(
@@ -395,7 +395,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            CheckStatus::CheckClean
+            CheckStatus::Clean
         );
 
         let encrypted = transform(
@@ -405,9 +405,9 @@ mod tests {
             vec![WriteOption::Encrypt(EncryptionSpec {
                 user_password: Some("reader".to_string()),
                 owner_password: Some("owner".to_string()),
-                method: EncryptionMethod::EncryptionAes256,
-                print: PrintPermission::PrintLowResolution,
-                modify: ModifyPermission::ModifyNone,
+                method: EncryptionMethod::Aes256,
+                print: PrintPermission::LowResolution,
+                modify: ModifyPermission::None,
                 extract: false,
                 accessibility: true,
                 annotate: false,
@@ -445,7 +445,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            CheckStatus::CheckClean
+            CheckStatus::Clean
         );
 
         let merged = pages(
@@ -488,10 +488,10 @@ mod tests {
             source,
             None,
             JsonOptions {
-                keys: vec![JsonKey::JsonPages],
+                keys: vec![JsonKey::Pages],
                 objects: vec![],
-                stream_data: JsonStreamData::JsonStreamDataNone,
-                decode_level: DecodeLevel::DecodeNone,
+                stream_data: JsonStreamData::None,
+                decode_level: DecodeLevel::None,
             },
         )
         .await

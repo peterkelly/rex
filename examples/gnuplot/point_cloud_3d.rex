@@ -17,7 +17,7 @@ let
         title = Some "samples",
         points = G.PointStyle {
             color = Some "#cc79a7",
-            shape = G.PointFilledCircle,
+            shape = G.PointShape.FilledCircle,
             size = 1.5
         }
     },
@@ -31,9 +31,9 @@ let
             azimuth_degrees = 35.0,
             scale = 1.0
         },
-        series = [G.PointSeries3D cloud]
+        series = [G.Series3D.Point cloud]
     }
 in
     G.render_svg
-        (G.Figure { panels = [Some (G.Panel3D plot)] })
+        (G.Figure { panels = [Some (G.Panel.ThreeDimensional plot)] })
         G.SvgOptions {}

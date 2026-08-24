@@ -21,7 +21,7 @@ fn main (input: Hash) -> Result Media FF.FfmpegError =
     FF.transcode
         (FF.StoredMedia (Media { content = input }))
         [
-            FF.VideoOperation
+            FF.MediaOperation.Video
                 (FF.Scale (FF.ScaleFilter {
                     width = 1280,
                     height = 720,
@@ -36,7 +36,7 @@ fn main (input: Hash) -> Result Media FF.FfmpegError =
                 codec = FF.H264,
                 options = [FF.ConstantRateFactor 21.0, FF.PixelFormat "yuv420p"]
             }),
-            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioBitRate 160000] }),
+            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioEncodeOption.BitRate 160000] }),
             subtitle = None,
             options = [FF.MovFlags ["faststart"]],
             metadata = dict_empty

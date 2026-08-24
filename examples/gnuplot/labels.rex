@@ -10,51 +10,51 @@ let
         ],
         title = Some "observations",
         color = Some "#0072b2",
-        alignment = G.AlignCenter
+        alignment = G.TextAlignment.Center
     },
     plot = G.Plot2D {
         title = Some "Labels and annotations",
         x_axis = G.Axis {
-            range = G.NumericRange (G.NumericBounds {
+            range = G.AxisRange.Numeric (G.NumericBounds {
                 minimum = 0.0,
                 maximum = 4.0
             })
         },
         y_axis = G.Axis {
-            range = G.NumericRange (G.NumericBounds {
+            range = G.AxisRange.Numeric (G.NumericBounds {
                 minimum = 0.0,
                 maximum = 3.5
             })
         },
-        series = [G.LabelSeries labels],
+        series = [G.Series2D.Label labels],
         annotations = [
-            G.TextAnnotation (G.TextAnnotation2D {
-                position = G.PanelPosition2D 0.03 0.92,
+            G.Annotation2D.Text (G.TextAnnotation2D {
+                position = G.Position2D.Panel 0.03 0.92,
                 text = "panel-relative note",
                 font = G.Font { size_points = 11.0 },
-                alignment = G.AlignLeft
+                alignment = G.TextAlignment.Left
             }),
-            G.ArrowAnnotation (G.ArrowAnnotation2D {
-                from = G.DataPosition2D 0.4 0.5,
-                to = G.DataPosition2D 1.0 1.2,
+            G.Annotation2D.Arrow (G.ArrowAnnotation2D {
+                from = G.Position2D.Data 0.4 0.5,
+                to = G.Position2D.Data 1.0 1.2,
                 line = G.LineStyle {
                     color = Some "#d55e00",
-                    dash = G.DashedLine
+                    dash = G.DashPattern.Dashed
                 },
-                head = G.FilledArrowHead
+                head = G.ArrowHead.Filled
             }),
             G.ReferenceLine (G.ReferenceLine2D {
-                orientation = G.HorizontalReference,
+                orientation = G.ReferenceOrientation.Horizontal,
                 value = 2.0,
                 label = Some "target",
                 line = G.LineStyle {
                     color = Some "#009e73",
-                    dash = G.DottedLine
+                    dash = G.DashPattern.Dotted
                 }
             })
         ]
     }
 in
     G.render_svg
-        (G.Figure { panels = [Some (G.Panel2D plot)] })
+        (G.Figure { panels = [Some (G.Panel.TwoDimensional plot)] })
         G.SvgOptions {}

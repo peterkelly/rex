@@ -20,15 +20,15 @@ import tools.imagemagick as IM;
 
 fn main (input: Hash) -> Result IM.ImageOutput IM.ImageMagickError =
     IM.transform
-        (IM.StoredImage (Image { content = input }) IM.AllFrames [])
+        (IM.ImageSource.Stored (Image { content = input }) IM.FrameSelection.All [])
         [
             IM.AutoOrient,
-            IM.Grayscale IM.IntensityRec709Luminance,
+            IM.Grayscale IM.IntensityMethod.Rec709Luminance,
             IM.SigmoidalContrast IM.Enabled 6.0 50.0,
             IM.Sharpen (IM.BlurGeometry { radius = 0.0, sigma = 0.8 })
         ]
         (IM.Encoding {
-            format = IM.Format { name = "png" },
-            mode = IM.AdjoinFrames,
-            options = [IM.WriteDepth 8]
+            format = IM.Format.Format { name = "png" },
+            mode = IM.OutputMode.Adjoin,
+            options = [IM.WriteOption.Depth 8]
         });

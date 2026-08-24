@@ -24,14 +24,14 @@ fn main (background: Hash) -> (logo: Hash) -> Result IM.ImageOutput IM.ImageMagi
         (Image { content = background })
         (Image { content = logo })
         None
-        IM.ComposeOver
+        IM.ComposeOperator.Over
         [
-            IM.CompositeGravity IM.GravitySouthEast,
-            IM.CompositeGeometry
-                (IM.Rectangle { width = 0, height = 0, x = 32, y = 32 })
+            IM.CompositeOption.Gravity IM.Gravity.SouthEast,
+            IM.CompositeOption.Geometry
+                (IM.Rectangle.Rectangle { width = 0, height = 0, x = 32, y = 32 })
         ]
         (IM.Encoding {
-            format = IM.Format { name = "png" },
-            mode = IM.AdjoinFrames,
+            format = IM.Format.Format { name = "png" },
+            mode = IM.OutputMode.Adjoin,
             options = []
         });

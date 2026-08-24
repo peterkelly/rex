@@ -76,8 +76,8 @@ impl<'a> Serializer<'a> {
             self.output.push_str("strict ");
         }
         self.output.push_str(match self.graph.kind {
-            GraphKind::DirectedGraph => "digraph",
-            GraphKind::UndirectedGraph => "graph",
+            GraphKind::Directed => "digraph",
+            GraphKind::Undirected => "graph",
         });
         if let Some(id) = &self.graph.id {
             self.output.push(' ');
@@ -124,8 +124,8 @@ impl<'a> Serializer<'a> {
 
     fn write_edges(&mut self, edges: &[Edge], depth: usize) -> Result<(), GraphvizError> {
         let operator = match self.graph.kind {
-            GraphKind::DirectedGraph => " -> ",
-            GraphKind::UndirectedGraph => " -- ",
+            GraphKind::Directed => " -> ",
+            GraphKind::Undirected => " -- ",
         };
         for edge in edges {
             write_indent(&mut self.output, depth);
@@ -154,7 +154,7 @@ impl<'a> Serializer<'a> {
         write_indent(&mut self.output, depth);
         self.output.push_str("subgraph");
         match subgraph.kind {
-            SubgraphKind::PlainSubgraph => {
+            SubgraphKind::Plain => {
                 if let Some(id) = &subgraph.id {
                     self.output.push(' ');
                     write_quoted(&mut self.output, id)?;
@@ -327,11 +327,11 @@ fn graph_attributes(source: &GraphAttributes) -> Result<AttributeMap, GraphvizEr
     }
     if let Some(ratio) = source.ratio {
         let value = match ratio {
-            GraphRatio::RatioValue(value) => finite_number(value, "graph ratio")?,
-            GraphRatio::RatioFill => "fill".to_owned(),
-            GraphRatio::RatioCompress => "compress".to_owned(),
-            GraphRatio::RatioExpand => "expand".to_owned(),
-            GraphRatio::RatioAuto => "auto".to_owned(),
+            GraphRatio::Value(value) => finite_number(value, "graph ratio")?,
+            GraphRatio::Fill => "fill".to_owned(),
+            GraphRatio::Compress => "compress".to_owned(),
+            GraphRatio::Expand => "expand".to_owned(),
+            GraphRatio::Auto => "auto".to_owned(),
         };
         insert_text(&mut attributes, "ratio", value)?;
     }
@@ -352,10 +352,10 @@ fn graph_attributes(source: &GraphAttributes) -> Result<AttributeMap, GraphvizEr
             &mut attributes,
             "rankdir",
             match direction {
-                RankDirection::RankTopToBottom => "TB",
-                RankDirection::RankLeftToRight => "LR",
-                RankDirection::RankBottomToTop => "BT",
-                RankDirection::RankRightToLeft => "RL",
+                RankDirection::TopToBottom => "TB",
+                RankDirection::LeftToRight => "LR",
+                RankDirection::BottomToTop => "BT",
+                RankDirection::RightToLeft => "RL",
             },
         )?;
     }
@@ -364,8 +364,8 @@ fn graph_attributes(source: &GraphAttributes) -> Result<AttributeMap, GraphvizEr
             &mut attributes,
             "ordering",
             match ordering {
-                EdgeOrdering::OrderIncoming => "in",
-                EdgeOrdering::OrderOutgoing => "out",
+                EdgeOrdering::Incoming => "in",
+                EdgeOrdering::Outgoing => "out",
             },
         )?;
     }
@@ -392,13 +392,13 @@ fn graph_attributes(source: &GraphAttributes) -> Result<AttributeMap, GraphvizEr
             &mut attributes,
             "splines",
             match splines {
-                SplineMode::SplinesNone => "none",
-                SplineMode::SplinesLine => "line",
-                SplineMode::SplinesPolyline => "polyline",
-                SplineMode::SplinesCurved => "curved",
-                SplineMode::SplinesOrtho => "ortho",
-                SplineMode::SplinesSpline => "spline",
-                SplineMode::SplinesCompound => "compound",
+                SplineMode::None => "none",
+                SplineMode::Line => "line",
+                SplineMode::Polyline => "polyline",
+                SplineMode::Curved => "curved",
+                SplineMode::Ortho => "ortho",
+                SplineMode::Spline => "spline",
+                SplineMode::Compound => "compound",
             },
         )?;
     }
@@ -415,11 +415,11 @@ fn subgraph_attributes(source: &SubgraphAttributes) -> Result<AttributeMap, Grap
             &mut attributes,
             "rank",
             match rank {
-                RankConstraint::RankSame => "same",
-                RankConstraint::RankMinimum => "min",
-                RankConstraint::RankSource => "source",
-                RankConstraint::RankMaximum => "max",
-                RankConstraint::RankSink => "sink",
+                RankConstraint::Same => "same",
+                RankConstraint::Minimum => "min",
+                RankConstraint::Source => "source",
+                RankConstraint::Maximum => "max",
+                RankConstraint::Sink => "sink",
             },
         )?;
     }
@@ -458,9 +458,9 @@ fn node_attributes(source: &NodeAttributes) -> Result<AttributeMap, GraphvizErro
                 &mut attributes,
                 "fixedsize",
                 match sizing {
-                    NodeSizing::SizeAtLeast => "false",
-                    NodeSizing::SizeFixed => "true",
-                    NodeSizing::SizeFixedShape => "shape",
+                    NodeSizing::AtLeast => "false",
+                    NodeSizing::Fixed => "true",
+                    NodeSizing::FixedShape => "shape",
                 },
             )?;
         }
@@ -563,10 +563,10 @@ fn edge_attributes(source: &EdgeAttributes) -> Result<AttributeMap, GraphvizErro
             &mut attributes,
             "dir",
             match direction {
-                EdgeDirection::ArrowsForward => "forward",
-                EdgeDirection::ArrowsBackward => "back",
-                EdgeDirection::ArrowsBoth => "both",
-                EdgeDirection::ArrowsNone => "none",
+                EdgeDirection::Forward => "forward",
+                EdgeDirection::Backward => "back",
+                EdgeDirection::Both => "both",
+                EdgeDirection::None => "none",
             },
         )?;
     }
@@ -726,8 +726,8 @@ fn insert_label(
     label: &Label,
 ) -> Result<(), GraphvizError> {
     let value = match label {
-        Label::TextLabel(value) => AttributeValue::Text(value.clone()),
-        Label::HtmlLabel(value) => AttributeValue::Html(value.clone()),
+        Label::Text(value) => AttributeValue::Text(value.clone()),
+        Label::Html(value) => AttributeValue::Html(value.clone()),
     };
     insert_value(attributes, name, value)
 }
@@ -893,208 +893,206 @@ fn write_indent(output: &mut String, depth: usize) {
 
 fn write_compass(output: &mut String, compass: CompassPoint) {
     output.push_str(match compass {
-        CompassPoint::CompassNorth => "n",
-        CompassPoint::CompassNorthEast => "ne",
-        CompassPoint::CompassEast => "e",
-        CompassPoint::CompassSouthEast => "se",
-        CompassPoint::CompassSouth => "s",
-        CompassPoint::CompassSouthWest => "sw",
-        CompassPoint::CompassWest => "w",
-        CompassPoint::CompassNorthWest => "nw",
-        CompassPoint::CompassCenter => "c",
-        CompassPoint::CompassAny => "_",
+        CompassPoint::North => "n",
+        CompassPoint::NorthEast => "ne",
+        CompassPoint::East => "e",
+        CompassPoint::SouthEast => "se",
+        CompassPoint::South => "s",
+        CompassPoint::SouthWest => "sw",
+        CompassPoint::West => "w",
+        CompassPoint::NorthWest => "nw",
+        CompassPoint::Center => "c",
+        CompassPoint::Any => "_",
     });
 }
 
 fn node_style_value(style: NodeStyle) -> &'static str {
     match style {
-        NodeStyle::NodeFilled => "filled",
-        NodeStyle::NodeInvisible => "invis",
-        NodeStyle::NodeDiagonals => "diagonals",
-        NodeStyle::NodeRounded => "rounded",
-        NodeStyle::NodeDashed => "dashed",
-        NodeStyle::NodeDotted => "dotted",
-        NodeStyle::NodeSolid => "solid",
-        NodeStyle::NodeBold => "bold",
+        NodeStyle::Filled => "filled",
+        NodeStyle::Invisible => "invis",
+        NodeStyle::Diagonals => "diagonals",
+        NodeStyle::Rounded => "rounded",
+        NodeStyle::Dashed => "dashed",
+        NodeStyle::Dotted => "dotted",
+        NodeStyle::Solid => "solid",
+        NodeStyle::Bold => "bold",
     }
 }
 
 fn edge_style_value(style: EdgeStyle) -> &'static str {
     match style {
-        EdgeStyle::EdgeSolid => "solid",
-        EdgeStyle::EdgeDashed => "dashed",
-        EdgeStyle::EdgeDotted => "dotted",
-        EdgeStyle::EdgeBold => "bold",
-        EdgeStyle::EdgeInvisible => "invis",
+        EdgeStyle::Solid => "solid",
+        EdgeStyle::Dashed => "dashed",
+        EdgeStyle::Dotted => "dotted",
+        EdgeStyle::Bold => "bold",
+        EdgeStyle::Invisible => "invis",
     }
 }
 
 fn arrow_shape_value(shape: ArrowShape) -> &'static str {
     match shape {
-        ArrowShape::ArrowNormal => "normal",
-        ArrowShape::ArrowInverted => "inv",
-        ArrowShape::ArrowDot => "dot",
-        ArrowShape::ArrowOpenDot => "odot",
-        ArrowShape::ArrowInvertedDot => "invdot",
-        ArrowShape::ArrowOpenInvertedDot => "invodot",
-        ArrowShape::ArrowTee => "tee",
-        ArrowShape::ArrowEmpty => "empty",
-        ArrowShape::ArrowInvertedEmpty => "invempty",
-        ArrowShape::ArrowOpen => "open",
-        ArrowShape::ArrowHalfOpen => "halfopen",
-        ArrowShape::ArrowDiamond => "diamond",
-        ArrowShape::ArrowOpenDiamond => "odiamond",
-        ArrowShape::ArrowBox => "box",
-        ArrowShape::ArrowOpenBox => "obox",
-        ArrowShape::ArrowCrow => "crow",
-        ArrowShape::ArrowNone => "none",
+        ArrowShape::Normal => "normal",
+        ArrowShape::Inverted => "inv",
+        ArrowShape::Dot => "dot",
+        ArrowShape::OpenDot => "odot",
+        ArrowShape::InvertedDot => "invdot",
+        ArrowShape::OpenInvertedDot => "invodot",
+        ArrowShape::Tee => "tee",
+        ArrowShape::Empty => "empty",
+        ArrowShape::InvertedEmpty => "invempty",
+        ArrowShape::Open => "open",
+        ArrowShape::HalfOpen => "halfopen",
+        ArrowShape::Diamond => "diamond",
+        ArrowShape::OpenDiamond => "odiamond",
+        ArrowShape::Box => "box",
+        ArrowShape::OpenBox => "obox",
+        ArrowShape::Crow => "crow",
+        ArrowShape::None => "none",
     }
 }
 
 fn node_shape_value(shape: NodeShape) -> &'static str {
     match shape {
-        NodeShape::ShapeBox => "box",
-        NodeShape::ShapePolygon => "polygon",
-        NodeShape::ShapeEllipse => "ellipse",
-        NodeShape::ShapeCircle => "circle",
-        NodeShape::ShapePoint => "point",
-        NodeShape::ShapeEgg => "egg",
-        NodeShape::ShapeTriangle => "triangle",
-        NodeShape::ShapePlainText => "plaintext",
-        NodeShape::ShapePlain => "plain",
-        NodeShape::ShapeDiamond => "diamond",
-        NodeShape::ShapeTrapezium => "trapezium",
-        NodeShape::ShapeParallelogram => "parallelogram",
-        NodeShape::ShapeHouse => "house",
-        NodeShape::ShapePentagon => "pentagon",
-        NodeShape::ShapeHexagon => "hexagon",
-        NodeShape::ShapeSeptagon => "septagon",
-        NodeShape::ShapeOctagon => "octagon",
-        NodeShape::ShapeDoubleCircle => "doublecircle",
-        NodeShape::ShapeDoubleOctagon => "doubleoctagon",
-        NodeShape::ShapeTripleOctagon => "tripleoctagon",
-        NodeShape::ShapeInvertedTriangle => "invtriangle",
-        NodeShape::ShapeInvertedTrapezium => "invtrapezium",
-        NodeShape::ShapeInvertedHouse => "invhouse",
-        NodeShape::ShapeSquare => "square",
-        NodeShape::ShapeStar => "star",
-        NodeShape::ShapeUnderline => "underline",
-        NodeShape::ShapeCylinder => "cylinder",
-        NodeShape::ShapeNote => "note",
-        NodeShape::ShapeTab => "tab",
-        NodeShape::ShapeFolder => "folder",
-        NodeShape::ShapeThreeDimensionalBox => "box3d",
-        NodeShape::ShapeComponent => "component",
-        NodeShape::ShapePromoter => "promoter",
-        NodeShape::ShapeCodingSequence => "cds",
-        NodeShape::ShapeTerminator => "terminator",
-        NodeShape::ShapeUntranslatedRegion => "utr",
-        NodeShape::ShapePrimerSite => "primersite",
-        NodeShape::ShapeRestrictionSite => "restrictionsite",
-        NodeShape::ShapeFivePrimeOverhang => "fivepoverhang",
-        NodeShape::ShapeThreePrimeOverhang => "threepoverhang",
-        NodeShape::ShapeNoOverhang => "noverhang",
-        NodeShape::ShapeAssembly => "assembly",
-        NodeShape::ShapeSignature => "signature",
-        NodeShape::ShapeInsulator => "insulator",
-        NodeShape::ShapeRiboSite => "ribosite",
-        NodeShape::ShapeRnaStability => "rnastab",
-        NodeShape::ShapeProteaseSite => "proteasesite",
-        NodeShape::ShapeProteinStability => "proteinstab",
-        NodeShape::ShapeReversePromoter => "rpromoter",
-        NodeShape::ShapeRightArrow => "rarrow",
-        NodeShape::ShapeLeftArrow => "larrow",
-        NodeShape::ShapeLeftPromoter => "lpromoter",
-        NodeShape::ShapeRecord => "record",
-        NodeShape::ShapeRoundedRecord => "Mrecord",
+        NodeShape::Box => "box",
+        NodeShape::Polygon => "polygon",
+        NodeShape::Ellipse => "ellipse",
+        NodeShape::Circle => "circle",
+        NodeShape::Point => "point",
+        NodeShape::Egg => "egg",
+        NodeShape::Triangle => "triangle",
+        NodeShape::PlainText => "plaintext",
+        NodeShape::Plain => "plain",
+        NodeShape::Diamond => "diamond",
+        NodeShape::Trapezium => "trapezium",
+        NodeShape::Parallelogram => "parallelogram",
+        NodeShape::House => "house",
+        NodeShape::Pentagon => "pentagon",
+        NodeShape::Hexagon => "hexagon",
+        NodeShape::Septagon => "septagon",
+        NodeShape::Octagon => "octagon",
+        NodeShape::DoubleCircle => "doublecircle",
+        NodeShape::DoubleOctagon => "doubleoctagon",
+        NodeShape::TripleOctagon => "tripleoctagon",
+        NodeShape::InvertedTriangle => "invtriangle",
+        NodeShape::InvertedTrapezium => "invtrapezium",
+        NodeShape::InvertedHouse => "invhouse",
+        NodeShape::Square => "square",
+        NodeShape::Star => "star",
+        NodeShape::Underline => "underline",
+        NodeShape::Cylinder => "cylinder",
+        NodeShape::Note => "note",
+        NodeShape::Tab => "tab",
+        NodeShape::Folder => "folder",
+        NodeShape::ThreeDimensionalBox => "box3d",
+        NodeShape::Component => "component",
+        NodeShape::Promoter => "promoter",
+        NodeShape::CodingSequence => "cds",
+        NodeShape::Terminator => "terminator",
+        NodeShape::UntranslatedRegion => "utr",
+        NodeShape::PrimerSite => "primersite",
+        NodeShape::RestrictionSite => "restrictionsite",
+        NodeShape::FivePrimeOverhang => "fivepoverhang",
+        NodeShape::ThreePrimeOverhang => "threepoverhang",
+        NodeShape::NoOverhang => "noverhang",
+        NodeShape::Assembly => "assembly",
+        NodeShape::Signature => "signature",
+        NodeShape::Insulator => "insulator",
+        NodeShape::RiboSite => "ribosite",
+        NodeShape::RnaStability => "rnastab",
+        NodeShape::ProteaseSite => "proteasesite",
+        NodeShape::ProteinStability => "proteinstab",
+        NodeShape::ReversePromoter => "rpromoter",
+        NodeShape::RightArrow => "rarrow",
+        NodeShape::LeftArrow => "larrow",
+        NodeShape::LeftPromoter => "lpromoter",
+        NodeShape::Record => "record",
+        NodeShape::RoundedRecord => "Mrecord",
     }
 }
 
 pub(crate) fn layout_name(layout: LayoutEngine) -> &'static str {
     match layout {
-        LayoutEngine::LayoutDot => "dot",
-        LayoutEngine::LayoutNeato => "neato",
-        LayoutEngine::LayoutFdp => "fdp",
-        LayoutEngine::LayoutSfdp => "sfdp",
-        LayoutEngine::LayoutCirco => "circo",
-        LayoutEngine::LayoutTwopi => "twopi",
-        LayoutEngine::LayoutOsage => "osage",
-        LayoutEngine::LayoutPatchwork => "patchwork",
-        LayoutEngine::LayoutNop => "nop",
-        LayoutEngine::LayoutNop2 => "nop2",
+        LayoutEngine::Dot => "dot",
+        LayoutEngine::Neato => "neato",
+        LayoutEngine::Fdp => "fdp",
+        LayoutEngine::Sfdp => "sfdp",
+        LayoutEngine::Circo => "circo",
+        LayoutEngine::Twopi => "twopi",
+        LayoutEngine::Osage => "osage",
+        LayoutEngine::Patchwork => "patchwork",
+        LayoutEngine::Nop => "nop",
+        LayoutEngine::Nop2 => "nop2",
     }
 }
 
 pub(crate) fn format_name(format: RenderFormat) -> &'static str {
     match format {
-        RenderFormat::FormatAscii => "ascii",
-        RenderFormat::FormatBmp => "bmp",
-        RenderFormat::FormatCanon => "canon",
-        RenderFormat::FormatDot => "dot",
-        RenderFormat::FormatDotJson => "dot_json",
-        RenderFormat::FormatEps => "eps",
-        RenderFormat::FormatFig => "fig",
-        RenderFormat::FormatGd => "gd",
-        RenderFormat::FormatGd2 => "gd2",
-        RenderFormat::FormatGif => "gif",
-        RenderFormat::FormatJpeg => "jpeg",
-        RenderFormat::FormatJson => "json",
-        RenderFormat::FormatJson0 => "json0",
-        RenderFormat::FormatPdf => "pdf",
-        RenderFormat::FormatPic => "pic",
-        RenderFormat::FormatPlain => "plain",
-        RenderFormat::FormatPlainExt => "plain-ext",
-        RenderFormat::FormatPng => "png",
-        RenderFormat::FormatPostScript => "ps",
-        RenderFormat::FormatPostScript2 => "ps2",
-        RenderFormat::FormatPov => "pov",
-        RenderFormat::FormatSvg => "svg",
-        RenderFormat::FormatSvgz => "svgz",
-        RenderFormat::FormatTga => "tga",
-        RenderFormat::FormatTiff => "tiff",
-        RenderFormat::FormatVml => "vml",
-        RenderFormat::FormatVmlz => "vmlz",
-        RenderFormat::FormatVrml => "vrml",
-        RenderFormat::FormatWebp => "webp",
-        RenderFormat::FormatXDot => "xdot",
-        RenderFormat::FormatXDot12 => "xdot1.2",
-        RenderFormat::FormatXDot14 => "xdot1.4",
-        RenderFormat::FormatXDotJson => "xdot_json",
+        RenderFormat::Ascii => "ascii",
+        RenderFormat::Bmp => "bmp",
+        RenderFormat::Canon => "canon",
+        RenderFormat::Dot => "dot",
+        RenderFormat::DotJson => "dot_json",
+        RenderFormat::Eps => "eps",
+        RenderFormat::Fig => "fig",
+        RenderFormat::Gd => "gd",
+        RenderFormat::Gd2 => "gd2",
+        RenderFormat::Gif => "gif",
+        RenderFormat::Jpeg => "jpeg",
+        RenderFormat::Json => "json",
+        RenderFormat::Json0 => "json0",
+        RenderFormat::Pdf => "pdf",
+        RenderFormat::Pic => "pic",
+        RenderFormat::Plain => "plain",
+        RenderFormat::PlainExt => "plain-ext",
+        RenderFormat::Png => "png",
+        RenderFormat::PostScript => "ps",
+        RenderFormat::PostScript2 => "ps2",
+        RenderFormat::Pov => "pov",
+        RenderFormat::Svg => "svg",
+        RenderFormat::Svgz => "svgz",
+        RenderFormat::Tga => "tga",
+        RenderFormat::Tiff => "tiff",
+        RenderFormat::Vml => "vml",
+        RenderFormat::Vmlz => "vmlz",
+        RenderFormat::Vrml => "vrml",
+        RenderFormat::Webp => "webp",
+        RenderFormat::XDot => "xdot",
+        RenderFormat::XDot12 => "xdot1.2",
+        RenderFormat::XDot14 => "xdot1.4",
+        RenderFormat::XDotJson => "xdot_json",
     }
 }
 
 fn format_extension(format: RenderFormat) -> &'static str {
     match format {
-        RenderFormat::FormatCanon | RenderFormat::FormatDot => "dot",
-        RenderFormat::FormatXDot | RenderFormat::FormatXDot12 | RenderFormat::FormatXDot14 => {
-            "xdot"
-        }
-        RenderFormat::FormatDotJson
-        | RenderFormat::FormatJson
-        | RenderFormat::FormatJson0
-        | RenderFormat::FormatXDotJson => "json",
-        RenderFormat::FormatPlain | RenderFormat::FormatPlainExt => "txt",
-        RenderFormat::FormatPostScript | RenderFormat::FormatPostScript2 => "ps",
-        RenderFormat::FormatJpeg => "jpg",
-        RenderFormat::FormatTiff => "tiff",
-        RenderFormat::FormatAscii => "txt",
-        RenderFormat::FormatBmp => "bmp",
-        RenderFormat::FormatEps => "eps",
-        RenderFormat::FormatFig => "fig",
-        RenderFormat::FormatGd => "gd",
-        RenderFormat::FormatGd2 => "gd2",
-        RenderFormat::FormatGif => "gif",
-        RenderFormat::FormatPdf => "pdf",
-        RenderFormat::FormatPic => "pic",
-        RenderFormat::FormatPng => "png",
-        RenderFormat::FormatPov => "pov",
-        RenderFormat::FormatSvg => "svg",
-        RenderFormat::FormatSvgz => "svgz",
-        RenderFormat::FormatTga => "tga",
-        RenderFormat::FormatVml => "vml",
-        RenderFormat::FormatVmlz => "vmlz",
-        RenderFormat::FormatVrml => "vrml",
-        RenderFormat::FormatWebp => "webp",
+        RenderFormat::Canon | RenderFormat::Dot => "dot",
+        RenderFormat::XDot | RenderFormat::XDot12 | RenderFormat::XDot14 => "xdot",
+        RenderFormat::DotJson
+        | RenderFormat::Json
+        | RenderFormat::Json0
+        | RenderFormat::XDotJson => "json",
+        RenderFormat::Plain | RenderFormat::PlainExt => "txt",
+        RenderFormat::PostScript | RenderFormat::PostScript2 => "ps",
+        RenderFormat::Jpeg => "jpg",
+        RenderFormat::Tiff => "tiff",
+        RenderFormat::Ascii => "txt",
+        RenderFormat::Bmp => "bmp",
+        RenderFormat::Eps => "eps",
+        RenderFormat::Fig => "fig",
+        RenderFormat::Gd => "gd",
+        RenderFormat::Gd2 => "gd2",
+        RenderFormat::Gif => "gif",
+        RenderFormat::Pdf => "pdf",
+        RenderFormat::Pic => "pic",
+        RenderFormat::Png => "png",
+        RenderFormat::Pov => "pov",
+        RenderFormat::Svg => "svg",
+        RenderFormat::Svgz => "svgz",
+        RenderFormat::Tga => "tga",
+        RenderFormat::Vml => "vml",
+        RenderFormat::Vmlz => "vmlz",
+        RenderFormat::Vrml => "vrml",
+        RenderFormat::Webp => "webp",
     }
 }
 
@@ -1111,7 +1109,7 @@ mod tests {
     use super::*;
 
     fn text(value: &str) -> Label {
-        Label::TextLabel(value.to_owned())
+        Label::Text(value.to_owned())
     }
 
     fn endpoint(node: &str) -> Endpoint {
@@ -1132,15 +1130,15 @@ mod tests {
     #[test]
     fn serializes_semantic_graph_in_canonical_phases() {
         let node_defaults = NodeAttributes {
-            shape: Some(NodeShape::ShapeBox),
+            shape: Some(NodeShape::Box),
             ..NodeAttributes::default()
         };
         let graph = Graph {
             strict: true,
-            kind: GraphKind::DirectedGraph,
+            kind: GraphKind::Directed,
             id: Some("workflow".to_owned()),
             attributes: GraphAttributes {
-                rank_direction: Some(RankDirection::RankLeftToRight),
+                rank_direction: Some(RankDirection::LeftToRight),
                 ..GraphAttributes::default()
             },
             node_defaults,
@@ -1163,7 +1161,7 @@ mod tests {
                     nodes: BTreeMap::from([(
                         "inside".to_owned(),
                         NodeAttributes {
-                            label: Some(Label::HtmlLabel("<B>inside</B>".to_owned())),
+                            label: Some(Label::Html("<B>inside</B>".to_owned())),
                             ..NodeAttributes::default()
                         },
                     )]),
@@ -1187,7 +1185,7 @@ mod tests {
     #[test]
     fn render_plan_reads_the_program_from_a_declared_input() {
         let source = blake3::hash(b"DOT program");
-        let plan = render_plan(source, LayoutEngine::LayoutDot, RenderFormat::FormatSvg);
+        let plan = render_plan(source, LayoutEngine::Dot, RenderFormat::Svg);
 
         assert_eq!(plan.inputs.len(), 1);
         assert_eq!(plan.inputs[0].hash, source);
@@ -1199,7 +1197,7 @@ mod tests {
     #[test]
     fn serializes_typed_node_and_edge_attributes() {
         let node_attributes = NodeAttributes {
-            label: Some(Label::HtmlLabel("<B>typed node</B>".to_owned())),
+            label: Some(Label::Html("<B>typed node</B>".to_owned())),
             font: Some(Font {
                 family: Some("DejaVu Sans".to_owned()),
                 size_points: Some(12.0),
@@ -1208,9 +1206,9 @@ mod tests {
             size: Some(NodeSize {
                 width: Some(2.0),
                 height: Some(1.0),
-                sizing: Some(NodeSizing::SizeFixedShape),
+                sizing: Some(NodeSizing::FixedShape),
             }),
-            shape: Some(NodeShape::ShapePolygon),
+            shape: Some(NodeShape::Polygon),
             polygon: Some(PolygonOptions {
                 regular: Some(true),
                 peripheries: Some(2),
@@ -1221,7 +1219,7 @@ mod tests {
             }),
             outline_color: Some("blue".to_owned()),
             fill_color: Some("lightblue".to_owned()),
-            styles: Some(vec![NodeStyle::NodeRounded, NodeStyle::NodeFilled]),
+            styles: Some(vec![NodeStyle::Rounded, NodeStyle::Filled]),
             external_label: Some(text("outside")),
             link: Some(Link {
                 url: "https://example.com/node".to_owned(),
@@ -1238,18 +1236,18 @@ mod tests {
                 color: Some("black".to_owned()),
             }),
             weight: Some(2.5),
-            styles: Some(vec![EdgeStyle::EdgeDashed, EdgeStyle::EdgeBold]),
+            styles: Some(vec![EdgeStyle::Dashed, EdgeStyle::Bold]),
             colors: Some(vec!["red".to_owned(), "blue".to_owned()]),
-            direction: Some(EdgeDirection::ArrowsBoth),
+            direction: Some(EdgeDirection::Both),
             arrow_scale: Some(1.5),
             head: Some(EdgeEnd {
-                arrow: Some(ArrowShape::ArrowOpenDiamond),
+                arrow: Some(ArrowShape::OpenDiamond),
                 clip_to_node: Some(false),
                 link: None,
                 port_group: Some("shared-head".to_owned()),
             }),
             tail: Some(EdgeEnd {
-                arrow: Some(ArrowShape::ArrowCrow),
+                arrow: Some(ArrowShape::Crow),
                 clip_to_node: Some(true),
                 link: None,
                 port_group: Some("shared-tail".to_owned()),
@@ -1407,7 +1405,7 @@ mod tests {
         assert!(error.message.contains("edge colors"));
 
         let error = graph_attributes(&GraphAttributes {
-            ratio: Some(GraphRatio::RatioValue(f64::NAN)),
+            ratio: Some(GraphRatio::Value(f64::NAN)),
             ..GraphAttributes::default()
         })
         .unwrap_err();

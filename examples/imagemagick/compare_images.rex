@@ -24,5 +24,5 @@ fn main (expected: Hash) -> (actual: Hash) -> Result IM.Comparison IM.ImageMagic
     IM.compare
         (Image { content = expected })
         (Image { content = actual })
-        IM.MetricStructuralSimilarity
-        [IM.CompareFuzz "1%"];
+        IM.ComparisonMetric.StructuralSimilarity
+        [IM.CompareOption.Fuzz "1%"];

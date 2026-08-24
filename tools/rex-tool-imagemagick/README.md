@@ -13,9 +13,9 @@ import std.artifacts (Image);
 Image { content = hash }
 ```
 
-Every new image is imported into the store before it is returned. `SingleImage` represents one
-encoded file, including animated or multipage formats. `MultipleImages` represents several encoded
-files, normally produced with `SeparateFrames`.
+Every new image is imported into the store before it is returned. `ImageOutput.Single` represents
+one encoded file, including animated or multipage formats. `ImageOutput.Multiple` represents several
+encoded files, normally produced with `OutputMode.Separate`.
 
 ImageMagick is resolved as `magick` through `PATH`. ImageMagick scripts and `conjure` are not
 exposed.
@@ -44,15 +44,15 @@ even when the installed ImageMagick build provides them.
 
 ## Sources
 
-`StoredImage` reads CAS content and accepts an explicit frame selection plus read options. Other
+`ImageSource.Stored` reads CAS content and accepts an explicit frame selection plus read options. Other
 source constructors generate images without a stored input:
 
 - `Canvas`
 - `LinearGradient`
 - `RadialGradient`
 - `Checkerboard`
-- `NoiseImage`
-- `BuiltinImage`
+- `ImageSource.Noise`
+- `ImageSource.Builtin`
 
 Read options cover density, colorspace, depth, page, size, alpha handling, background, profiles,
 format hints, and coder-specific defines. A format hint is useful for headerless formats; ordinary
@@ -79,7 +79,8 @@ Some ImageMagick-specific mini-languages remain nominal strings where their gram
 and intrinsic to the operation, including kernels, threshold expressions, `fx` expressions,
 format-specific defines, and advanced montage geometry.
 
-Portable text drawing and montage should supply CAS-backed fonts (`DrawFont` and `MontageFont`). The
+Portable text drawing and montage should supply CAS-backed fonts (`DrawStyle.Font` and
+`MontageOption.Font`). The
 API does not expose ambient system font-family selection, and ImageMagick installations are not
 required to provide a usable default font.
 
@@ -89,14 +90,15 @@ An encoding specifies the coder, whether frames are adjoined, and write options:
 
 ```rex
 IM.Encoding {
-    format = IM.Format { name = "webp" },
-    mode = IM.AdjoinFrames,
-    options = [IM.WriteQuality 82, IM.WriteStripMetadata]
+    format = IM.Format.Format { name = "webp" },
+    mode = IM.OutputMode.Adjoin,
+    options = [IM.WriteOption.Quality 82, IM.WriteOption.StripMetadata]
 }
 ```
 
-`AdjoinFrames` creates one encoded file. `SeparateFrames` creates a numbered series internally and
-returns `MultipleImages`. Rex never constructs or observes the numbered filenames.
+`OutputMode.Adjoin` creates one encoded file. `OutputMode.Separate` creates a numbered series
+internally and returns `ImageOutput.Multiple`. Rex never constructs or observes the numbered
+filenames.
 
 ## Failures
 

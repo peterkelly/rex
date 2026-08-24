@@ -29,7 +29,7 @@ HLS and DASH need more than an unordered collection of files because manifests r
 name. They therefore return `MediaPackage` values backed by CAS trees:
 
 ```rex
-FF.MediaPackage { content = tree_hash, kind = FF.HlsPackage }
+FF.MediaPackage { content = tree_hash, kind = FF.PackageKind.Hls }
 ```
 
 The fixed internal manifest names and all segments remain inside the tree. A package can be supplied
@@ -37,9 +37,9 @@ later as `StoredPackage` without unpacking it in Rex.
 
 `MediaArtifact` represents the three output shapes of a general media program:
 
-- `EncodedMedia Media` for a single container;
-- `MediaSequence (List Media)` for image sequences or independent segments;
-- `PackagedMedia MediaPackage` for HLS or DASH.
+- `MediaArtifact.Encoded Media` for a single container;
+- `MediaArtifact.Sequence (List Media)` for image sequences or independent segments;
+- `MediaArtifact.Packaged MediaPackage` for HLS or DASH.
 
 ## Functions
 
@@ -100,7 +100,7 @@ silence removal, and reversal.
 
 Encoder records expose semantic rate control, quality, presets, profiles, levels, pixel formats,
 sample formats, channel layouts, GOP structure, threading, and codec-specific options. Named common
-codecs have constructors; `OtherVideoCodec`, `OtherAudioCodec`, and `OtherSubtitleCodec` allow an
+codecs have constructors; `VideoCodec.Other`, `AudioCodec.Other`, and `SubtitleCodec.Other` allow an
 installed encoder to be selected without waiting for a new Rex release.
 
 ## General filter graphs
@@ -119,7 +119,8 @@ Each `MediaOutput` maps input streams or named filter outputs to `OutputStream` 
 record chooses copy or encoding behavior, metadata, and dispositions. Output modes describe single
 containers, numbered files, time-based segments, HLS trees, or DASH trees.
 
-`CustomFilter`, `CustomVideoFilter`, and `CustomAudioFilter` are semantic FFmpeg escape hatches. They
+`MediaFilter.Custom`, `VideoFilter.Custom`, and `AudioFilter.Custom` are semantic FFmpeg escape
+hatches. They
 accept a filter name and named or positional filter options, but they do not accept raw command-line
 arguments. This preserves graph structure and lets the executor continue to own all path handling.
 Path-bearing operations such as fonts and subtitle files have dedicated CAS-backed fields rather

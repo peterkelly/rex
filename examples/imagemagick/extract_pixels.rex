@@ -22,8 +22,8 @@ fn main (input: Hash) -> Result IM.PixelBuffer IM.ImageMagickError =
     IM.extract_pixels
         (Image { content = input })
         (IM.PixelSpec {
-            region = IM.PixelRectangle
-                (IM.Rectangle { width = 128, height = 128, x = 0, y = 0 }),
-            channels = [IM.ChannelRed, IM.ChannelGreen, IM.ChannelBlue],
-            storage_type = IM.PixelsChar
+            region = IM.PixelRegion.Rectangle
+                (IM.Rectangle.Rectangle { width = 128, height = 128, x = 0, y = 0 }),
+            channels = [IM.Channel.Red, IM.Channel.Green, IM.Channel.Blue],
+            storage_type = IM.PixelStorageType.Char
         });

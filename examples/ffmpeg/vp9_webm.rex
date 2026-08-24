@@ -24,9 +24,9 @@ fn main (input: Hash) -> Result Media FF.FfmpegError =
             format = FF.ContainerFormat { name = "webm" },
             video = Some (FF.VideoEncoding {
                 codec = FF.Vp9,
-                options = [FF.ConstantRateFactor 31.0, FF.VideoBitRate 0]
+                options = [FF.ConstantRateFactor 31.0, FF.VideoEncodeOption.BitRate 0]
             }),
-            audio = Some (FF.AudioEncoding { codec = FF.Opus, options = [FF.AudioBitRate 128000] }),
+            audio = Some (FF.AudioEncoding { codec = FF.Opus, options = [FF.AudioEncodeOption.BitRate 128000] }),
             subtitle = None,
             options = [],
             metadata = dict_empty

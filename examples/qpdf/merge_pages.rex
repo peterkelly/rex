@@ -20,4 +20,4 @@ fn main (first: Hash) -> (second: Hash) -> Result Q.PdfOutput Q.QpdfError =
             }
         ]
         None
-        [Q.ObjectStreams Q.ObjectStreamsGenerate];
+        [Q.ObjectStreams Q.ObjectStreamMode.Generate];

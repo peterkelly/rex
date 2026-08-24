@@ -19,25 +19,25 @@ import std.artifacts (Image);
 import tools.imagemagick as IM;
 
 fn read_frame (hash: Hash) -> IM.ImageInstruction =
-    IM.ReadImage
-        (IM.StoredImage (Image { content = hash }) IM.AllFrames []);
+    IM.ImageInstruction.Read
+        (IM.ImageSource.Stored (Image { content = hash }) IM.FrameSelection.All []);
 
 fn main (frames: List Hash) -> Result IM.ImageOutput IM.ImageMagickError =
     let
         reads = map read_frame frames,
         program = reads + [
-            IM.ApplySequenceOperation IM.CoalesceFrames,
-            IM.ApplyImageOperation
-                (IM.Resize (IM.FitWithin (IM.Size { width = 640, height = 640 }))),
-            IM.ApplyImageOperation
+            IM.ImageInstruction.Sequence IM.CoalesceFrames,
+            IM.ImageInstruction.Operation
+                (IM.Resize (IM.FitWithin (IM.Size.Size { width = 640, height = 640 }))),
+            IM.ImageInstruction.Operation
                 (IM.SetProperty "delay" "8"),
-            IM.ApplySequenceOperation IM.OptimizeFrames
+            IM.ImageInstruction.Sequence IM.OptimizeFrames
         ]
     in
         IM.render
             program
             (IM.Encoding {
-                format = IM.Format { name = "gif" },
-                mode = IM.AdjoinFrames,
+                format = IM.Format.Format { name = "gif" },
+                mode = IM.OutputMode.Adjoin,
                 options = []
             });

@@ -2,7 +2,7 @@
 import tools.gnuplot as G;
 
 let
-    histogram = G.Histogram {
+    histogram = G.Histogram.Histogram {
         samples = [
             0.2, 0.4, 0.5, 0.7, 0.8,
             1.0, 1.1, 1.2, 1.2, 1.4,
@@ -10,8 +10,8 @@ let
             2.4, 2.5, 2.7, 2.9, 3.0
         ],
         title = Some "samples",
-        bins = G.BinCount 8,
-        normalization = G.HistogramProbability,
+        bins = G.HistogramBins.Count 8,
+        normalization = G.HistogramNormalization.Probability,
         fill = G.FillStyle {
             color = Some "#009e73",
             opacity = 0.75,
@@ -22,9 +22,9 @@ let
         title = Some "Sample distribution",
         x_axis = G.Axis { label = Some "value" },
         y_axis = G.Axis { label = Some "probability" },
-        series = [G.HistogramSeries histogram]
+        series = [G.Series2D.Histogram histogram]
     }
 in
     G.render_svg
-        (G.Figure { panels = [Some (G.Panel2D plot)] })
+        (G.Figure { panels = [Some (G.Panel.TwoDimensional plot)] })
         G.SvgOptions {}

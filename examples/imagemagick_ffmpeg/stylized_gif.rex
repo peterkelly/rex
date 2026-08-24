@@ -26,31 +26,31 @@ type WorkflowError
     | ImageMagickFailed IM.ImageMagickError;
 
 fn read_frame (frame: Media) -> IM.ImageInstruction =
-    IM.ReadImage
-        (IM.StoredImage
+    IM.ImageInstruction.Read
+        (IM.ImageSource.Stored
             (Image { content = frame.content })
-            IM.AllFrames
+            IM.FrameSelection.All
             []);
 
 fn render_gif (frames: List Media) -> Result IM.ImageOutput WorkflowError =
     let
         reads = map read_frame frames,
         program = reads + [
-            IM.ApplyImageOperation
-                (IM.Resize (IM.FitWithin (IM.Size { width = 640, height = 640 }))),
-            IM.ApplyImageOperation
-                (IM.Grayscale IM.IntensityRec709Luminance),
-            IM.ApplyImageOperation (IM.SigmoidalContrast IM.Enabled 5.0 50.0),
-            IM.ApplyImageOperation (IM.SetProperty "delay" "20"),
-            IM.ApplySequenceOperation IM.OptimizeFrames
+            IM.ImageInstruction.Operation
+                (IM.Resize (IM.FitWithin (IM.Size.Size { width = 640, height = 640 }))),
+            IM.ImageInstruction.Operation
+                (IM.Grayscale IM.IntensityMethod.Rec709Luminance),
+            IM.ImageInstruction.Operation (IM.SigmoidalContrast IM.Enabled 5.0 50.0),
+            IM.ImageInstruction.Operation (IM.SetProperty "delay" "20"),
+            IM.ImageInstruction.Sequence IM.OptimizeFrames
         ]
     in
         match IM.render
             program
             (IM.Encoding {
-                format = IM.Format { name = "gif" },
-                mode = IM.AdjoinFrames,
-                options = [IM.WriteStripMetadata]
+                format = IM.Format.Format { name = "gif" },
+                mode = IM.OutputMode.Adjoin,
+                options = [IM.WriteOption.StripMetadata]
             })
         with {
             case Err error -> Err (ImageMagickFailed error);
@@ -68,7 +68,7 @@ fn main (video: Hash) -> Result IM.ImageOutput WorkflowError =
         ])
         (FF.ImageEncoding {
             format = FF.ContainerFormat { name = "png" },
-            video = FF.VideoEncoding { codec = FF.PngVideo, options = [] }
+            video = FF.VideoEncoding { codec = FF.VideoCodec.Png, options = [] }
         })
     with {
         case Err error -> Err (FfmpegFailed error);

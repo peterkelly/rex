@@ -22,13 +22,13 @@ fn main (input: Hash) -> Result Media FF.FfmpegError =
         (Media { content = input })
         (FF.ThumbnailSpec {
             at = Some (FF.Time { seconds = 10.0 }),
-            size = Some (FF.VideoSize { width = 640, height = 360 }),
+            size = Some (FF.VideoSize.VideoSize { width = 640, height = 360 }),
             preserve_aspect_ratio = true
         })
         (FF.ImageEncoding {
             format = FF.ContainerFormat { name = "jpg" },
             video = FF.VideoEncoding {
-                codec = FF.MjpegVideo,
-                options = [FF.VideoQuality 2.0]
+                codec = FF.VideoCodec.Mjpeg,
+                options = [FF.VideoEncodeOption.Quality 2.0]
             }
         });

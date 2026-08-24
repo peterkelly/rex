@@ -24,7 +24,7 @@ fn main (input: Hash) -> Result (List Media) FF.FfmpegError =
         (FF.Encoding {
             format = FF.ContainerFormat { name = "matroska" },
             video = Some (FF.VideoEncoding { codec = FF.H264, options = [FF.ConstantRateFactor 21.0] }),
-            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioBitRate 160000] }),
+            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioEncodeOption.BitRate 160000] }),
             subtitle = None,
             options = [],
             metadata = dict_empty

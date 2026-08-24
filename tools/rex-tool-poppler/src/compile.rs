@@ -93,9 +93,7 @@ pub(crate) fn pdftotext_plan(
     let mut builder = PlanBuilder::new(ToolProgram::new("pdftotext"));
     let input = builder.input_pdf(pdf);
     let extension = match options.format {
-        TextFormat::PlainText | TextFormat::PhysicalLayout | TextFormat::ContentStreamOrder => {
-            "txt"
-        }
+        TextFormat::Plain | TextFormat::PhysicalLayout | TextFormat::ContentStreamOrder => "txt",
         TextFormat::HtmlMetadata | TextFormat::BoundingBox | TextFormat::BoundingBoxLayout => {
             "html"
         }
@@ -104,7 +102,7 @@ pub(crate) fn pdftotext_plan(
     let output = builder.output(OutputKind::Single, extension);
     compile_pages(&mut builder, options.first_page, options.last_page);
     match options.format {
-        TextFormat::PlainText => {}
+        TextFormat::Plain => {}
         TextFormat::PhysicalLayout => builder.literal("-layout"),
         TextFormat::ContentStreamOrder => builder.literal("-raw"),
         TextFormat::HtmlMetadata => builder.literal("-htmlmeta"),
@@ -134,9 +132,9 @@ pub(crate) fn pdftotext_plan(
     builder.option(
         "-eol",
         match options.end_of_line {
-            EndOfLine::EolUnix => "unix",
-            EndOfLine::EolDos => "dos",
-            EndOfLine::EolMac => "mac",
+            EndOfLine::Unix => "unix",
+            EndOfLine::Dos => "dos",
+            EndOfLine::Mac => "mac",
         },
     );
     if options.no_page_breaks {
@@ -185,7 +183,7 @@ pub(crate) fn pdftocairo_plan(
     }
     let raster = matches!(
         format,
-        CairoFormat::CairoPng | CairoFormat::CairoJpeg | CairoFormat::CairoTiff
+        CairoFormat::Png | CairoFormat::Jpeg | CairoFormat::Tiff
     );
     if options.single_file && !raster {
         return Err(invalid(
@@ -194,27 +192,27 @@ pub(crate) fn pdftocairo_plan(
     }
     if matches!(
         format,
-        CairoFormat::CairoSvg | CairoFormat::CairoEncapsulatedPostScript
+        CairoFormat::Svg | CairoFormat::EncapsulatedPostScript
     ) && !(options.first_page.is_some() && options.first_page == options.last_page)
     {
         return Err(invalid(
             "SVG and EPS output require the same explicit first_page and last_page",
         ));
     }
-    if options.transparent && format != CairoFormat::CairoPng {
+    if options.transparent && format != CairoFormat::Png {
         return Err(invalid("transparent output is available only for PNG"));
     }
-    if options.color != CairoColorMode::CairoColor
-        && !matches!(format, CairoFormat::CairoPng | CairoFormat::CairoJpeg)
+    if options.color != CairoColorMode::Color
+        && !matches!(format, CairoFormat::Png | CairoFormat::Jpeg)
     {
         return Err(invalid(
             "grayscale and monochrome modes are available only for PNG and JPEG",
         ));
     }
-    if !options.jpeg_options.is_empty() && format != CairoFormat::CairoJpeg {
+    if !options.jpeg_options.is_empty() && format != CairoFormat::Jpeg {
         return Err(invalid("jpeg_options require CairoJpeg output"));
     }
-    if options.tiff_compression.is_some() && format != CairoFormat::CairoTiff {
+    if options.tiff_compression.is_some() && format != CairoFormat::Tiff {
         return Err(invalid("tiff_compression requires CairoTiff output"));
     }
     let multiple = raster && !options.single_file;
@@ -233,9 +231,9 @@ pub(crate) fn pdftocairo_plan(
     builder.literal(cairo_flag(&format));
     compile_pages(&mut builder, options.first_page, options.last_page);
     match options.page_selection {
-        PageSelection::AllPages => {}
-        PageSelection::OddPages => builder.literal("-o"),
-        PageSelection::EvenPages => builder.literal("-e"),
+        PageSelection::All => {}
+        PageSelection::Odd => builder.literal("-o"),
+        PageSelection::Even => builder.literal("-e"),
     }
     if options.single_file {
         builder.literal("-singlefile");
@@ -268,9 +266,9 @@ pub(crate) fn pdftocairo_plan(
         builder.literal("-cropbox");
     }
     match options.color {
-        CairoColorMode::CairoColor => {}
-        CairoColorMode::CairoGrayscale => builder.literal("-gray"),
-        CairoColorMode::CairoMonochrome => builder.literal("-mono"),
+        CairoColorMode::Color => {}
+        CairoColorMode::Grayscale => builder.literal("-gray"),
+        CairoColorMode::Monochrome => builder.literal("-mono"),
     }
     if options.transparent {
         builder.literal("-transp");
@@ -332,14 +330,14 @@ pub(crate) fn version_plan() -> ToolExecutionPlan {
 fn compile_pdfimages_options(builder: &mut PlanBuilder, options: &PdfImagesOptions) {
     compile_pages(builder, options.first_page, options.last_page);
     match options.format {
-        PdfImagesFormat::ImagesDefault => {}
-        PdfImagesFormat::ImagesPng => builder.literal("-png"),
-        PdfImagesFormat::ImagesTiff => builder.literal("-tiff"),
-        PdfImagesFormat::ImagesJpegNative => builder.literal("-j"),
-        PdfImagesFormat::ImagesJpeg2000Native => builder.literal("-jp2"),
-        PdfImagesFormat::ImagesJbig2Native => builder.literal("-jbig2"),
-        PdfImagesFormat::ImagesCcittNative => builder.literal("-ccitt"),
-        PdfImagesFormat::ImagesAll => builder.literal("-all"),
+        PdfImagesFormat::Default => {}
+        PdfImagesFormat::Png => builder.literal("-png"),
+        PdfImagesFormat::Tiff => builder.literal("-tiff"),
+        PdfImagesFormat::JpegNative => builder.literal("-j"),
+        PdfImagesFormat::Jpeg2000Native => builder.literal("-jp2"),
+        PdfImagesFormat::Jbig2Native => builder.literal("-jbig2"),
+        PdfImagesFormat::CcittNative => builder.literal("-ccitt"),
+        PdfImagesFormat::All => builder.literal("-all"),
     }
     if options.include_page_numbers {
         builder.literal("-p");
@@ -397,37 +395,37 @@ fn validate_positive_f64(value: Option<f64>, context: &str) -> Result<(), Popple
 
 fn cairo_flag(format: &CairoFormat) -> &'static str {
     match format {
-        CairoFormat::CairoPng => "-png",
-        CairoFormat::CairoJpeg => "-jpeg",
-        CairoFormat::CairoTiff => "-tiff",
-        CairoFormat::CairoPdf => "-pdf",
-        CairoFormat::CairoPostScript => "-ps",
-        CairoFormat::CairoEncapsulatedPostScript => "-eps",
-        CairoFormat::CairoSvg => "-svg",
+        CairoFormat::Png => "-png",
+        CairoFormat::Jpeg => "-jpeg",
+        CairoFormat::Tiff => "-tiff",
+        CairoFormat::Pdf => "-pdf",
+        CairoFormat::PostScript => "-ps",
+        CairoFormat::EncapsulatedPostScript => "-eps",
+        CairoFormat::Svg => "-svg",
     }
 }
 
 fn cairo_extension(format: &CairoFormat) -> &'static str {
     match format {
-        CairoFormat::CairoPng => "png",
-        CairoFormat::CairoJpeg => "jpg",
-        CairoFormat::CairoTiff => "tiff",
-        CairoFormat::CairoPdf => "pdf",
-        CairoFormat::CairoPostScript => "ps",
-        CairoFormat::CairoEncapsulatedPostScript => "eps",
-        CairoFormat::CairoSvg => "svg",
+        CairoFormat::Png => "png",
+        CairoFormat::Jpeg => "jpg",
+        CairoFormat::Tiff => "tiff",
+        CairoFormat::Pdf => "pdf",
+        CairoFormat::PostScript => "ps",
+        CairoFormat::EncapsulatedPostScript => "eps",
+        CairoFormat::Svg => "svg",
     }
 }
 
 fn antialias(value: CairoAntialias) -> &'static str {
     match value {
-        CairoAntialias::AntialiasDefault => "default",
-        CairoAntialias::AntialiasNone => "none",
-        CairoAntialias::AntialiasGray => "gray",
-        CairoAntialias::AntialiasSubpixel => "subpixel",
-        CairoAntialias::AntialiasFast => "fast",
-        CairoAntialias::AntialiasGood => "good",
-        CairoAntialias::AntialiasBest => "best",
+        CairoAntialias::Default => "default",
+        CairoAntialias::None => "none",
+        CairoAntialias::Gray => "gray",
+        CairoAntialias::Subpixel => "subpixel",
+        CairoAntialias::Fast => "fast",
+        CairoAntialias::Good => "good",
+        CairoAntialias::Best => "best",
     }
 }
 
@@ -491,7 +489,7 @@ mod tests {
                 crop_box: true,
                 discard_diagonal_text: false,
                 column_spacing: Some(0.7),
-                end_of_line: EndOfLine::EolUnix,
+                end_of_line: EndOfLine::Unix,
                 no_page_breaks: true,
                 owner_password: None,
                 user_password: None,
@@ -517,11 +515,11 @@ mod tests {
     fn raster_cairo_output_uses_a_private_output_directory() {
         let (plan, output) = pdftocairo_plan(
             pdf(),
-            CairoFormat::CairoPng,
+            CairoFormat::Png,
             PdfToCairoOptions {
                 first_page: None,
                 last_page: None,
-                page_selection: PageSelection::AllPages,
+                page_selection: PageSelection::All,
                 single_file: false,
                 resolution: Some(144.0),
                 resolution_x: None,
@@ -531,9 +529,9 @@ mod tests {
                 scale_to_y: None,
                 crop: None,
                 crop_box: false,
-                color: CairoColorMode::CairoColor,
+                color: CairoColorMode::Color,
                 transparent: true,
-                antialias: CairoAntialias::AntialiasDefault,
+                antialias: CairoAntialias::Default,
                 jpeg_options: vec![],
                 tiff_compression: None,
                 owner_password: None,
@@ -551,7 +549,7 @@ mod tests {
         let options = PdfToCairoOptions {
             first_page: None,
             last_page: None,
-            page_selection: PageSelection::AllPages,
+            page_selection: PageSelection::All,
             single_file: true,
             resolution: None,
             resolution_x: None,
@@ -561,14 +559,14 @@ mod tests {
             scale_to_y: None,
             crop: None,
             crop_box: false,
-            color: CairoColorMode::CairoColor,
+            color: CairoColorMode::Color,
             transparent: false,
-            antialias: CairoAntialias::AntialiasDefault,
+            antialias: CairoAntialias::Default,
             jpeg_options: vec![],
             tiff_compression: None,
             owner_password: None,
             user_password: None,
         };
-        assert!(pdftocairo_plan(pdf(), CairoFormat::CairoPdf, options).is_err());
+        assert!(pdftocairo_plan(pdf(), CairoFormat::Pdf, options).is_err());
     }
 }

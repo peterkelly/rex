@@ -188,11 +188,11 @@ async fn docker_gnuplot_renders_inline_data_as_svg() {
         G.render_svg
             (G.Figure {
                 panels = [
-                    Some (G.Panel2D (G.Plot2D {
+                    Some (G.Panel.TwoDimensional (G.Plot2D {
                         title = Some "Docker smoke test",
                         series = [
-                            G.CurveSeries (G.Curve2D {
-                                data = G.NumericXY [
+                            G.Series2D.Curve (G.Curve2D {
+                                data = G.XYData.Numeric [
                                     (0.0, 0.0),
                                     (1.0, 1.0),
                                     (2.0, 0.5)
@@ -240,8 +240,8 @@ async fn docker_graphviz_renders_declared_input_as_svg() {
                     }
                 ]
             })
-            G.LayoutDot
-            G.FormatSvg
+            G.LayoutEngine.Dot
+            G.RenderFormat.Svg
     "#;
 
     let result = eval_rex(source, None, fixture.state)
@@ -289,13 +289,13 @@ async fn docker_reimports_generated_media_and_images() {
                 }),
             IM.generate
                 (IM.LinearGradient
-                    (IM.Size { width = 16, height = 16 })
+                    (IM.Size.Size { width = 16, height = 16 })
                     (IM.Color { value = "#336699" })
                     (IM.Color { value = "#99ccff" }))
                 []
                 (IM.Encoding {
-                    format = IM.Format { name = "png" },
-                    mode = IM.AdjoinFrames,
+                    format = IM.Format.Format { name = "png" },
+                    mode = IM.OutputMode.Adjoin,
                     options = []
                 })
         )

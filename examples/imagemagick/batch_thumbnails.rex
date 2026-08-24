@@ -27,11 +27,11 @@ fn main (inputs: List Hash) -> Result (List Image) IM.ImageMagickError =
         (map to_image inputs)
         [
             IM.AutoOrient,
-            IM.Resize (IM.FitWithin (IM.Size { width = 320, height = 320 })),
+            IM.Resize (IM.FitWithin (IM.Size.Size { width = 320, height = 320 })),
             IM.StripMetadata
         ]
         (IM.Encoding {
-            format = IM.Format { name = "webp" },
-            mode = IM.AdjoinFrames,
-            options = [IM.WriteQuality 80]
+            format = IM.Format.Format { name = "webp" },
+            mode = IM.OutputMode.Adjoin,
+            options = [IM.WriteOption.Quality 80]
         });

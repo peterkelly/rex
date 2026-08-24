@@ -7,7 +7,8 @@ file-backed tables.
 
 ## Semantic model
 
-- A `Figure` owns a theme and a regular grid of optional `Panel2D` and `Panel3D` values.
+- A `Figure` owns a theme and a regular grid of optional `Panel.TwoDimensional` and
+  `Panel.ThreeDimensional` values.
 - A `Plot2D` owns axes, color scale, grid, legend, palette, annotations, and an ordered list of
   typed layers. Layers cover curves, error bars, uncertainty bands, categorical bars, statistical
   histograms, heatmaps, vectors, and data-driven labels.
@@ -44,10 +45,10 @@ import tools.gnuplot as G;
 G.render_svg
     (G.Figure {
         panels = [
-            Some (G.Panel2D (G.Plot2D {
+            Some (G.Panel.TwoDimensional (G.Plot2D {
                 series = [
-                    G.CurveSeries (G.Curve2D {
-                        data = G.NumericXY [(0.0, 0.0), (1.0, 1.0)],
+                    G.Series2D.Curve (G.Curve2D {
+                        data = G.XYData.Numeric [(0.0, 0.0), (1.0, 1.0)],
                         mode = G.LinesPoints
                     })
                 ]

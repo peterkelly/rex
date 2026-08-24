@@ -22,8 +22,8 @@ fn main (input: Hash) -> Result (List FF.InspectionRecord) FF.FfmpegError =
     FF.inspect
         (Media { content = input })
         (FF.InspectionQuery {
-            kind = FF.InspectPackets,
-            stream = Some (FF.StreamRef { input = 0, kind = FF.VideoStream, index = Some 0 }),
+            kind = FF.InspectionKind.Packets,
+            stream = Some (FF.StreamRef { input = 0, kind = FF.MediaKind.Video, index = Some 0 }),
             read_intervals = Some "%+5",
             entries = ["pts_time", "dts_time", "duration_time", "size", "flags"]
         });

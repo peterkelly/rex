@@ -9,15 +9,15 @@ use std::collections::BTreeMap;
 /// language.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum Label {
-    TextLabel(String),
-    HtmlLabel(String),
+    Text(String),
+    Html(String),
 }
 
 /// Whether the graph contains directed or undirected edges.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum GraphKind {
-    DirectedGraph,
-    UndirectedGraph,
+    Directed,
+    Undirected,
 }
 
 /// Maximum or desired graph dimensions in inches.
@@ -34,11 +34,11 @@ pub struct GraphSize {
 /// A graph aspect-ratio policy.
 #[derive(Clone, Copy, Debug, PartialEq, Rex)]
 pub enum GraphRatio {
-    RatioValue(f64),
-    RatioFill,
-    RatioCompress,
-    RatioExpand,
-    RatioAuto,
+    Value(f64),
+    Fill,
+    Compress,
+    Expand,
+    Auto,
 }
 
 /// Graph canvas margins in inches.
@@ -53,29 +53,29 @@ pub struct GraphMargin {
 /// The primary direction in which ranked graphs are laid out.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum RankDirection {
-    RankTopToBottom,
-    RankLeftToRight,
-    RankBottomToTop,
-    RankRightToLeft,
+    TopToBottom,
+    LeftToRight,
+    BottomToTop,
+    RightToLeft,
 }
 
 /// The input-order constraint applied to each node's incoming or outgoing edges.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum EdgeOrdering {
-    OrderIncoming,
-    OrderOutgoing,
+    Incoming,
+    Outgoing,
 }
 
 /// How Graphviz should represent edges.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum SplineMode {
-    SplinesNone,
-    SplinesLine,
-    SplinesPolyline,
-    SplinesCurved,
-    SplinesOrtho,
-    SplinesSpline,
-    SplinesCompound,
+    None,
+    Line,
+    Polyline,
+    Curved,
+    Ortho,
+    Spline,
+    Compound,
 }
 
 /// Final graph-level rendering and layout attributes.
@@ -105,16 +105,16 @@ pub struct GraphAttributes {
 /// A standard compass position used to attach an edge to a node or named port.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum CompassPoint {
-    CompassNorth,
-    CompassNorthEast,
-    CompassEast,
-    CompassSouthEast,
-    CompassSouth,
-    CompassSouthWest,
-    CompassWest,
-    CompassNorthWest,
-    CompassCenter,
-    CompassAny,
+    North,
+    NorthEast,
+    East,
+    SouthEast,
+    South,
+    SouthWest,
+    West,
+    NorthWest,
+    Center,
+    Any,
 }
 
 /// A named region and/or compass position on an edge endpoint.
@@ -152,9 +152,9 @@ pub struct Link {
 /// How explicit node dimensions interact with the node label.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum NodeSizing {
-    SizeAtLeast,
-    SizeFixed,
-    SizeFixedShape,
+    AtLeast,
+    Fixed,
+    FixedShape,
 }
 
 /// Optional node dimensions and sizing policy.
@@ -170,60 +170,60 @@ pub struct NodeSize {
 /// Synonyms are intentionally omitted: for example, use `ShapeBox` rather than `rect`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum NodeShape {
-    ShapeBox,
-    ShapePolygon,
-    ShapeEllipse,
-    ShapeCircle,
-    ShapePoint,
-    ShapeEgg,
-    ShapeTriangle,
-    ShapePlainText,
-    ShapePlain,
-    ShapeDiamond,
-    ShapeTrapezium,
-    ShapeParallelogram,
-    ShapeHouse,
-    ShapePentagon,
-    ShapeHexagon,
-    ShapeSeptagon,
-    ShapeOctagon,
-    ShapeDoubleCircle,
-    ShapeDoubleOctagon,
-    ShapeTripleOctagon,
-    ShapeInvertedTriangle,
-    ShapeInvertedTrapezium,
-    ShapeInvertedHouse,
-    ShapeSquare,
-    ShapeStar,
-    ShapeUnderline,
-    ShapeCylinder,
-    ShapeNote,
-    ShapeTab,
-    ShapeFolder,
-    ShapeThreeDimensionalBox,
-    ShapeComponent,
-    ShapePromoter,
-    ShapeCodingSequence,
-    ShapeTerminator,
-    ShapeUntranslatedRegion,
-    ShapePrimerSite,
-    ShapeRestrictionSite,
-    ShapeFivePrimeOverhang,
-    ShapeThreePrimeOverhang,
-    ShapeNoOverhang,
-    ShapeAssembly,
-    ShapeSignature,
-    ShapeInsulator,
-    ShapeRiboSite,
-    ShapeRnaStability,
-    ShapeProteaseSite,
-    ShapeProteinStability,
-    ShapeReversePromoter,
-    ShapeRightArrow,
-    ShapeLeftArrow,
-    ShapeLeftPromoter,
-    ShapeRecord,
-    ShapeRoundedRecord,
+    Box,
+    Polygon,
+    Ellipse,
+    Circle,
+    Point,
+    Egg,
+    Triangle,
+    PlainText,
+    Plain,
+    Diamond,
+    Trapezium,
+    Parallelogram,
+    House,
+    Pentagon,
+    Hexagon,
+    Septagon,
+    Octagon,
+    DoubleCircle,
+    DoubleOctagon,
+    TripleOctagon,
+    InvertedTriangle,
+    InvertedTrapezium,
+    InvertedHouse,
+    Square,
+    Star,
+    Underline,
+    Cylinder,
+    Note,
+    Tab,
+    Folder,
+    ThreeDimensionalBox,
+    Component,
+    Promoter,
+    CodingSequence,
+    Terminator,
+    UntranslatedRegion,
+    PrimerSite,
+    RestrictionSite,
+    FivePrimeOverhang,
+    ThreePrimeOverhang,
+    NoOverhang,
+    Assembly,
+    Signature,
+    Insulator,
+    RiboSite,
+    RnaStability,
+    ProteaseSite,
+    ProteinStability,
+    ReversePromoter,
+    RightArrow,
+    LeftArrow,
+    LeftPromoter,
+    Record,
+    RoundedRecord,
 }
 
 /// Optional geometry controls for polygon-based node shapes.
@@ -240,14 +240,14 @@ pub struct PolygonOptions {
 /// One built-in node appearance style.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum NodeStyle {
-    NodeFilled,
-    NodeInvisible,
-    NodeDiagonals,
-    NodeRounded,
-    NodeDashed,
-    NodeDotted,
-    NodeSolid,
-    NodeBold,
+    Filled,
+    Invisible,
+    Diagonals,
+    Rounded,
+    Dashed,
+    Dotted,
+    Solid,
+    Bold,
 }
 
 /// Final attributes of a node or graph-level node defaults.
@@ -272,42 +272,42 @@ pub struct NodeAttributes {
 /// One built-in edge line style.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum EdgeStyle {
-    EdgeSolid,
-    EdgeDashed,
-    EdgeDotted,
-    EdgeBold,
-    EdgeInvisible,
+    Solid,
+    Dashed,
+    Dotted,
+    Bold,
+    Invisible,
 }
 
 /// Which ends of an edge display arrow glyphs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum EdgeDirection {
-    ArrowsForward,
-    ArrowsBackward,
-    ArrowsBoth,
-    ArrowsNone,
+    Forward,
+    Backward,
+    Both,
+    None,
 }
 
 /// A commonly used built-in Graphviz arrow shape.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum ArrowShape {
-    ArrowNormal,
-    ArrowInverted,
-    ArrowDot,
-    ArrowOpenDot,
-    ArrowInvertedDot,
-    ArrowOpenInvertedDot,
-    ArrowTee,
-    ArrowEmpty,
-    ArrowInvertedEmpty,
-    ArrowOpen,
-    ArrowHalfOpen,
-    ArrowDiamond,
-    ArrowOpenDiamond,
-    ArrowBox,
-    ArrowOpenBox,
-    ArrowCrow,
-    ArrowNone,
+    Normal,
+    Inverted,
+    Dot,
+    OpenDot,
+    InvertedDot,
+    OpenInvertedDot,
+    Tee,
+    Empty,
+    InvertedEmpty,
+    Open,
+    HalfOpen,
+    Diamond,
+    OpenDiamond,
+    Box,
+    OpenBox,
+    Crow,
+    None,
 }
 
 /// Attributes attached specifically to the head or tail end of an edge.
@@ -361,18 +361,18 @@ pub struct Edge {
 /// Whether a node group is a plain layout subgraph or a visible cluster.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum SubgraphKind {
-    PlainSubgraph,
+    Plain,
     Cluster,
 }
 
 /// A rank constraint applied to the nodes in a plain subgraph or cluster.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum RankConstraint {
-    RankSame,
-    RankMinimum,
-    RankSource,
-    RankMaximum,
-    RankSink,
+    Same,
+    Minimum,
+    Source,
+    Maximum,
+    Sink,
 }
 
 /// Final attributes of a semantic subgraph.
@@ -404,7 +404,7 @@ pub struct Subgraph {
 impl Default for Subgraph {
     fn default() -> Self {
         Self {
-            kind: SubgraphKind::PlainSubgraph,
+            kind: SubgraphKind::Plain,
             id: None,
             attributes: SubgraphAttributes::default(),
             nodes: BTreeMap::new(),
@@ -436,7 +436,7 @@ impl Default for Graph {
     fn default() -> Self {
         Self {
             strict: false,
-            kind: GraphKind::DirectedGraph,
+            kind: GraphKind::Directed,
             id: None,
             attributes: GraphAttributes::default(),
             node_defaults: NodeAttributes::default(),
@@ -451,16 +451,16 @@ impl Default for Graph {
 /// A Graphviz layout engine selected for rendering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum LayoutEngine {
-    LayoutDot,
-    LayoutNeato,
-    LayoutFdp,
-    LayoutSfdp,
-    LayoutCirco,
-    LayoutTwopi,
-    LayoutOsage,
-    LayoutPatchwork,
-    LayoutNop,
-    LayoutNop2,
+    Dot,
+    Neato,
+    Fdp,
+    Sfdp,
+    Circo,
+    Twopi,
+    Osage,
+    Patchwork,
+    Nop,
+    Nop2,
 }
 
 /// A headless output format selected for rendering.
@@ -468,39 +468,39 @@ pub enum LayoutEngine {
 /// Actual availability depends on the packaged Graphviz installation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum RenderFormat {
-    FormatAscii,
-    FormatBmp,
-    FormatCanon,
-    FormatDot,
-    FormatDotJson,
-    FormatEps,
-    FormatFig,
-    FormatGd,
-    FormatGd2,
-    FormatGif,
-    FormatJpeg,
-    FormatJson,
-    FormatJson0,
-    FormatPdf,
-    FormatPic,
-    FormatPlain,
-    FormatPlainExt,
-    FormatPng,
-    FormatPostScript,
-    FormatPostScript2,
-    FormatPov,
-    FormatSvg,
-    FormatSvgz,
-    FormatTga,
-    FormatTiff,
-    FormatVml,
-    FormatVmlz,
-    FormatVrml,
-    FormatWebp,
-    FormatXDot,
-    FormatXDot12,
-    FormatXDot14,
-    FormatXDotJson,
+    Ascii,
+    Bmp,
+    Canon,
+    Dot,
+    DotJson,
+    Eps,
+    Fig,
+    Gd,
+    Gd2,
+    Gif,
+    Jpeg,
+    Json,
+    Json0,
+    Pdf,
+    Pic,
+    Plain,
+    PlainExt,
+    Png,
+    PostScript,
+    PostScript2,
+    Pov,
+    Svg,
+    Svgz,
+    Tga,
+    Tiff,
+    Vml,
+    Vmlz,
+    Vrml,
+    Webp,
+    XDot,
+    XDot12,
+    XDot14,
+    XDotJson,
 }
 
 /// One rendered Graphviz artifact stored in the workflow CAS.

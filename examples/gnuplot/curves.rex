@@ -2,8 +2,8 @@
 import tools.gnuplot as G;
 
 fn curve (title: String) -> (mode: G.CurveMode) -> (offset: f64) -> G.Series2D =
-    G.CurveSeries (G.Curve2D {
-        data = G.NumericXY [
+    G.Series2D.Curve (G.Curve2D {
+        data = G.XYData.Numeric [
             (0.0, offset + 0.0),
             (1.0, offset + 1.0),
             (2.0, offset + 0.4),
@@ -20,7 +20,7 @@ let
         x_axis = G.Axis { label = Some "x" },
         y_axis = G.Axis { label = Some "y" },
         legend = G.Legend {
-            position = G.LegendOutsideRight
+            position = G.LegendPosition.OutsideRight
         },
         series = [
             curve "lines" G.Lines 0.0,
@@ -33,7 +33,7 @@ let
         ]
     },
     figure = G.Figure {
-        panels = [Some (G.Panel2D plot)]
+        panels = [Some (G.Panel.TwoDimensional plot)]
     }
 in
     G.render_svg figure G.SvgOptions {}

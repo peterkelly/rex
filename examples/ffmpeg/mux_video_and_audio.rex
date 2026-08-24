@@ -25,13 +25,13 @@ fn main (video: Hash, audio: Hash) -> Result Media FF.FfmpegError =
         [
             FF.MuxMapping {
                 input = 0,
-                kind = FF.VideoStream,
+                kind = FF.MediaKind.Video,
                 stream_index = Some 0,
                 copy = true
             },
             FF.MuxMapping {
                 input = 1,
-                kind = FF.AudioStream,
+                kind = FF.MediaKind.Audio,
                 stream_index = Some 0,
                 copy = false
             }
@@ -39,8 +39,8 @@ fn main (video: Hash, audio: Hash) -> Result Media FF.FfmpegError =
         (FF.Encoding {
             format = FF.ContainerFormat { name = "mp4" },
             video = None,
-            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioBitRate 192000] }),
+            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioEncodeOption.BitRate 192000] }),
             subtitle = None,
-            options = [FF.ShortestOutput, FF.MovFlags ["faststart"]],
+            options = [FF.MuxOption.Shortest, FF.MovFlags ["faststart"]],
             metadata = dict_empty
         });

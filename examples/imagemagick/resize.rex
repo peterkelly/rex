@@ -19,16 +19,16 @@ import tools.imagemagick as IM;
 
 fn main (input: Hash) -> Result IM.ImageOutput IM.ImageMagickError =
     IM.transform
-        (IM.StoredImage
+        (IM.ImageSource.Stored
             (Image { content = input })
-            IM.AllFrames
+            IM.FrameSelection.All
             [])
         [
             IM.AutoOrient,
-            IM.Resize (IM.FitWithin (IM.Size { width = 1600, height = 1600 }))
+            IM.Resize (IM.FitWithin (IM.Size.Size { width = 1600, height = 1600 }))
         ]
         (IM.Encoding {
-            format = IM.Format { name = "webp" },
-            mode = IM.AdjoinFrames,
-            options = [IM.WriteQuality 82, IM.WriteStripMetadata]
+            format = IM.Format.Format { name = "webp" },
+            mode = IM.OutputMode.Adjoin,
+            options = [IM.WriteOption.Quality 82, IM.WriteOption.StripMetadata]
         });

@@ -24,8 +24,8 @@ fn connection (attributes: G.EdgeAttributes)
 let
     edge_attributes = G.EdgeAttributes {},
     normal_node = G.NodeAttributes {
-        shape = Some G.ShapeBox,
-        styles = Some [G.NodeRounded, G.NodeFilled],
+        shape = Some G.NodeShape.Box,
+        styles = Some [G.NodeStyle.Rounded, G.NodeStyle.Filled],
         fill_color = Some "aliceblue"
     },
     side_node = { normal_node with {
@@ -37,21 +37,21 @@ let
     } },
     success_edge = G.EdgeAttributes {
         colors = Some ["steelblue4"],
-        styles = Some [G.EdgeBold]
+        styles = Some [G.EdgeStyle.Bold]
     },
     error_edge = G.EdgeAttributes {
         colors = Some ["firebrick"],
-        styles = Some [G.EdgeDashed]
+        styles = Some [G.EdgeStyle.Dashed]
     },
     metric_edge = G.EdgeAttributes {
         colors = Some ["darkgreen"],
-        styles = Some [G.EdgeDotted]
+        styles = Some [G.EdgeStyle.Dotted]
     },
     graph = G.Graph {
         id = Some "compass_ports",
         attributes = G.GraphAttributes {
-            rank_direction = Some G.RankLeftToRight,
-            splines = Some G.SplinesPolyline
+            rank_direction = Some G.RankDirection.LeftToRight,
+            splines = Some G.SplineMode.Polyline
         },
         nodes = {
             receive = normal_node,
@@ -65,20 +65,20 @@ let
             reject = error_node
         },
         edges = [
-            connection success_edge "receive" G.CompassEast "validate" G.CompassWest,
-            connection success_edge "validate" G.CompassEast "transform" G.CompassWest,
-            connection success_edge "transform" G.CompassEast "persist" G.CompassWest,
-            connection success_edge "persist" G.CompassEast "publish" G.CompassWest,
-            connection error_edge "validate" G.CompassSouth "reject" G.CompassNorth,
-            connection error_edge "transform" G.CompassSouth "retry" G.CompassNorth,
-            connection edge_attributes "retry" G.CompassEast "transform" G.CompassSouth,
-            connection edge_attributes "persist" G.CompassSouth "audit" G.CompassNorth,
-            connection metric_edge "receive" G.CompassNorth "metrics" G.CompassSouth,
-            connection metric_edge "validate" G.CompassNorth "metrics" G.CompassSouth,
-            connection metric_edge "transform" G.CompassNorth "metrics" G.CompassSouth,
-            connection metric_edge "persist" G.CompassNorth "metrics" G.CompassSouth,
-            connection metric_edge "publish" G.CompassNorth "metrics" G.CompassSouth
+            connection success_edge "receive" G.CompassPoint.East "validate" G.CompassPoint.West,
+            connection success_edge "validate" G.CompassPoint.East "transform" G.CompassPoint.West,
+            connection success_edge "transform" G.CompassPoint.East "persist" G.CompassPoint.West,
+            connection success_edge "persist" G.CompassPoint.East "publish" G.CompassPoint.West,
+            connection error_edge "validate" G.CompassPoint.South "reject" G.CompassPoint.North,
+            connection error_edge "transform" G.CompassPoint.South "retry" G.CompassPoint.North,
+            connection edge_attributes "retry" G.CompassPoint.East "transform" G.CompassPoint.South,
+            connection edge_attributes "persist" G.CompassPoint.South "audit" G.CompassPoint.North,
+            connection metric_edge "receive" G.CompassPoint.North "metrics" G.CompassPoint.South,
+            connection metric_edge "validate" G.CompassPoint.North "metrics" G.CompassPoint.South,
+            connection metric_edge "transform" G.CompassPoint.North "metrics" G.CompassPoint.South,
+            connection metric_edge "persist" G.CompassPoint.North "metrics" G.CompassPoint.South,
+            connection metric_edge "publish" G.CompassPoint.North "metrics" G.CompassPoint.South
         ]
     }
 in
-    G.render graph G.LayoutDot G.FormatSvg
+    G.render graph G.LayoutEngine.Dot G.RenderFormat.Svg

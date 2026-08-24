@@ -249,7 +249,7 @@ fn ast_edge (parent: String) -> (child: String) -> (label: String) -> G.Edge = G
     from = endpoint parent,
     to = endpoint child,
     attributes = G.EdgeAttributes {
-        label = Some (G.TextLabel label)
+        label = Some (G.Label.Text label)
     }
 };
 
@@ -262,14 +262,14 @@ fn operator_label (operator: BinaryOperator) -> String =
     };
 
 fn integer_node (value: i32) -> G.NodeAttributes = G.NodeAttributes {
-    label = Some (G.TextLabel (show value)),
-    shape = Some G.ShapeBox,
+    label = Some (G.Label.Text (show value)),
+    shape = Some G.NodeShape.Box,
     fill_color = Some "lightgoldenrod1"
 };
 
 fn operator_node (operator: BinaryOperator) -> G.NodeAttributes = G.NodeAttributes {
-    label = Some (G.TextLabel (operator_label operator)),
-    shape = Some G.ShapeCircle,
+    label = Some (G.Label.Text (operator_label operator)),
+    shape = Some G.NodeShape.Circle,
     fill_color = Some "lightblue"
 };
 
@@ -313,12 +313,12 @@ let
         strict = true,
         id = Some "expression_ast",
         attributes = G.GraphAttributes {
-            label = Some (G.TextLabel ("AST for: " + source)),
+            label = Some (G.Label.Text ("AST for: " + source)),
             background_color = Some "white",
-            splines = Some G.SplinesPolyline
+            splines = Some G.SplineMode.Polyline
         },
         node_defaults = G.NodeAttributes {
-            styles = Some [G.NodeFilled]
+            styles = Some [G.NodeStyle.Filled]
         },
         edge_defaults = G.EdgeAttributes {
             colors = Some ["slategray4"]
@@ -327,4 +327,4 @@ let
         edges = syntax_tree.edges
     }
 in
-    G.render graph G.LayoutDot G.FormatSvg
+    G.render graph G.LayoutEngine.Dot G.RenderFormat.Svg

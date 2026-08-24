@@ -3,7 +3,7 @@ import tools.gnuplot as G;
 
 let
     band = G.Band2D {
-        data = G.BandPoints [
+        data = G.BandData.Points [
             G.BandPoint2D { x = 0.0, lower = 0.7, upper = 1.3 },
             G.BandPoint2D { x = 1.0, lower = 1.5, upper = 2.3 },
             G.BandPoint2D { x = 2.0, lower = 2.2, upper = 3.4 },
@@ -17,7 +17,7 @@ let
         }
     },
     fit = G.Curve2D {
-        data = G.NumericXY [
+        data = G.XYData.Numeric [
             (0.0, 1.0),
             (1.0, 1.9),
             (2.0, 2.8),
@@ -33,11 +33,11 @@ let
     plot = G.Plot2D {
         title = Some "Confidence band",
         series = [
-            G.BandSeries band,
-            G.CurveSeries fit
+            G.Series2D.Band band,
+            G.Series2D.Curve fit
         ]
     }
 in
     G.render_svg
-        (G.Figure { panels = [Some (G.Panel2D plot)] })
+        (G.Figure { panels = [Some (G.Panel.TwoDimensional plot)] })
         G.SvgOptions {}

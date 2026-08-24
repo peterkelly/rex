@@ -23,7 +23,6 @@
 import std.artifacts (Image, Media);
 import tools.ffmpeg as FF;
 import tools.imagemagick as IM;
-import tools.imagemagick (SingleImage, MultipleImages);
 
 type WorkflowError
     = FfmpegFailed FF.FfmpegError
@@ -47,16 +46,16 @@ fn overlay_watermark (video: Hash, watermark: Image)
             chains = [
                 FF.FilterChain {
                     inputs = [
-                        FF.InputPad
+                        FF.FilterPad.Input
                             (FF.StreamRef {
                                 input = 0,
-                                kind = FF.VideoStream,
+                                kind = FF.MediaKind.Video,
                                 index = Some 0
                             }),
-                        FF.InputPad
+                        FF.FilterPad.Input
                             (FF.StreamRef {
                                 input = 1,
-                                kind = FF.VideoStream,
+                                kind = FF.MediaKind.Video,
                                 index = Some 0
                             })
                     ],
@@ -79,8 +78,8 @@ fn overlay_watermark (video: Hash, watermark: Image)
                 mode = FF.SingleFile,
                 streams = [
                     FF.OutputStream {
-                        source = FF.FilterOutput "watermarked",
-                        encoding = FF.EncodeVideo (FF.VideoEncoding {
+                        source = FF.StreamSource.Filter "watermarked",
+                        encoding = FF.StreamEncoding.Video (FF.VideoEncoding {
                             codec = FF.H264,
                             options = [
                                 FF.ConstantRateFactor 21.0,
@@ -89,21 +88,21 @@ fn overlay_watermark (video: Hash, watermark: Image)
                             ]
                         }),
                         metadata = dict_empty,
-                        dispositions = [FF.DefaultDisposition]
+                        dispositions = [FF.StreamDisposition.Default]
                     },
                     FF.OutputStream {
-                        source = FF.InputStream
+                        source = FF.StreamSource.Input
                             (FF.StreamRef {
                                 input = 0,
-                                kind = FF.AudioStream,
+                                kind = FF.MediaKind.Audio,
                                 index = Some 0
                             }),
-                        encoding = FF.EncodeAudio (FF.AudioEncoding {
+                        encoding = FF.StreamEncoding.Audio (FF.AudioEncoding {
                             codec = FF.Aac,
-                            options = [FF.AudioBitRate 160000]
+                            options = [FF.AudioEncodeOption.BitRate 160000]
                         }),
                         metadata = dict_empty,
-                        dispositions = [FF.DefaultDisposition]
+                        dispositions = [FF.StreamDisposition.Default]
                     }
                 ],
                 options = [FF.MovFlags ["faststart"]],
@@ -118,24 +117,24 @@ fn overlay_watermark (video: Hash, watermark: Image)
 fn main (video: Hash, watermark: Hash)
     -> Result (List FF.MediaArtifact) WorkflowError =
     match IM.transform
-        (IM.StoredImage
+        (IM.ImageSource.Stored
             (Image { content = watermark })
-            IM.AllFrames
+            IM.FrameSelection.All
             [])
         [
-            IM.Resize (IM.FitWithin (IM.Size { width = 240, height = 120 })),
+            IM.Resize (IM.FitWithin (IM.Size.Size { width = 240, height = 120 })),
             IM.StripMetadata
         ]
         (IM.Encoding {
-            format = IM.Format { name = "png" },
-            mode = IM.AdjoinFrames,
+            format = IM.Format.Format { name = "png" },
+            mode = IM.OutputMode.Adjoin,
             options = []
         })
     with {
         case Err error -> Err (ImageMagickFailed error);
         case Ok output ->
             match output with {
-                case SingleImage image -> overlay_watermark video image;
-                case MultipleImages _ -> Err UnexpectedImageOutput;
+                case IM.ImageOutput.Single image -> overlay_watermark video image;
+                case IM.ImageOutput.Multiple _ -> Err UnexpectedImageOutput;
             };
     };

@@ -20,21 +20,21 @@ import tools.imagemagick as IM;
 
 fn main (input: Hash) -> Result IM.ImageOutput IM.ImageMagickError =
     IM.transform
-        (IM.StoredImage
+        (IM.ImageSource.Stored
             (Image { content = input })
-            IM.AllFrames
-            [IM.ReadBackground (IM.Color { value = "white" })])
+            IM.FrameSelection.All
+            [IM.ReadOption.Background (IM.Color { value = "white" })])
         [
             IM.AutoOrient,
-            IM.Alpha IM.AlphaDeactivate,
-            IM.ConvertColorspace IM.ColorspaceSrgb
+            IM.Alpha IM.AlphaMode.Deactivate,
+            IM.ConvertColorspace IM.Colorspace.Srgb
         ]
         (IM.Encoding {
-            format = IM.Format { name = "jpeg" },
-            mode = IM.AdjoinFrames,
+            format = IM.Format.Format { name = "jpeg" },
+            mode = IM.OutputMode.Adjoin,
             options = [
-                IM.WriteQuality 88,
-                IM.WriteSamplingFactor "4:2:0",
-                IM.WriteStripMetadata
+                IM.WriteOption.Quality 88,
+                IM.WriteOption.SamplingFactor "4:2:0",
+                IM.WriteOption.StripMetadata
             ]
         });

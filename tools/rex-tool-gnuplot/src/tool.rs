@@ -212,9 +212,9 @@ mod tests {
 
     fn simple_figure() -> Figure {
         Figure {
-            panels: vec![Some(Panel::Panel2D(Plot2D {
-                series: vec![Series2D::CurveSeries(Curve2D {
-                    data: XYData::NumericXY(vec![(0.0, 0.0), (1.0, 1.0)]),
+            panels: vec![Some(Panel::TwoDimensional(Plot2D {
+                series: vec![Series2D::Curve(Curve2D {
+                    data: XYData::Numeric(vec![(0.0, 0.0), (1.0, 1.0)]),
                     ..Curve2D::default()
                 })],
                 ..Plot2D::default()

@@ -2,13 +2,13 @@
 import tools.gnuplot as G;
 
 fn panel (title: String) -> (mode: G.SurfaceMode) -> (show_colorbox: Bool) -> G.Panel =
-    G.Panel3D (G.Plot3D {
+    G.Panel.ThreeDimensional (G.Plot3D {
         title = Some title,
         x_axis = G.Axis { label = Some "x" },
         y_axis = G.Axis { label = Some "y" },
         z_axis = G.Axis { label = Some "z" },
         color_axis = G.Axis {
-            range = G.NumericRange (G.NumericBounds {
+            range = G.AxisRange.Numeric (G.NumericBounds {
                 minimum = -1.0,
                 maximum = 1.0
             })
@@ -20,7 +20,7 @@ fn panel (title: String) -> (mode: G.SurfaceMode) -> (show_colorbox: Bool) -> G.
             scale = 0.9
         },
         series = [
-            G.SurfaceSeries3D (G.Surface3D {
+            G.Series3D.Surface (G.Surface3D {
                 grid = G.Grid2D {
                     x = [-2.0, -1.0, 0.0, 1.0, 2.0],
                     y = [-2.0, -1.0, 0.0, 1.0, 2.0],
@@ -45,8 +45,8 @@ let
             columns = 2
         },
         panels = [
-            Some (panel "Wireframe" G.WireframeSurface false),
-            Some (panel "Colored surface" G.ColoredSurface true),
+            Some (panel "Wireframe" G.SurfaceMode.Wireframe false),
+            Some (panel "Colored surface" G.SurfaceMode.Colored true),
             Some (panel "Contour lines" G.ContourLines false),
             Some (panel "Filled contours" G.FilledContours true)
         ]

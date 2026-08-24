@@ -6,7 +6,7 @@ import tools.poppler as P;
 fn main (input: Hash) -> Result P.CairoOutput P.PopplerError =
     P.pdftocairo
         (Pdf { content = input })
-        P.CairoPng
+        P.CairoFormat.Png
         P.PdfToCairoOptions {
             resolution = Some 144.0,
         };

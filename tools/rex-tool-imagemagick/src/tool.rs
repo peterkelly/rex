@@ -350,8 +350,8 @@ async fn image_output(
     let outputs = execution.outputs.get(&0).cloned().unwrap_or_default();
     match outputs.as_slice() {
         [] => Ok(Err(unexpected("ImageMagick produced no output image"))),
-        [content] => Ok(Ok(ImageOutput::SingleImage(Image { content: *content }))),
-        _ => Ok(Ok(ImageOutput::MultipleImages(
+        [content] => Ok(Ok(ImageOutput::Single(Image { content: *content }))),
+        _ => Ok(Ok(ImageOutput::Multiple(
             outputs
                 .into_iter()
                 .map(|content| Image { content })
@@ -472,17 +472,17 @@ mod tests {
                 format: Format {
                     name: "png".to_string(),
                 },
-                mode: OutputMode::AdjoinFrames,
+                mode: OutputMode::Adjoin,
                 options: vec![],
             },
         )
         .await
         .unwrap()
         .unwrap();
-        let ImageOutput::SingleImage(image) = generated else {
+        let ImageOutput::Single(image) = generated else {
             panic!("expected one generated image")
         };
-        let info = identify(state, image, vec![IdentifyOption::IdentifyPing])
+        let info = identify(state, image, vec![IdentifyOption::Ping])
             .await
             .unwrap()
             .unwrap();
@@ -501,19 +501,17 @@ mod tests {
         let source = generated_image(&state, 32, 24, "#336699").await;
         let output = transform(
             state.clone(),
-            ImageSource::StoredImage(source, FrameSelection::AllFrames, vec![]),
-            vec![ImageOperation::Grayscale(
-                IntensityMethod::IntensityRec709Luminance,
-            )],
+            ImageSource::Stored(source, FrameSelection::All, vec![]),
+            vec![ImageOperation::Grayscale(IntensityMethod::Rec709Luminance)],
             png_encoding(),
         )
         .await
         .unwrap()
         .unwrap();
-        let ImageOutput::SingleImage(image) = output else {
+        let ImageOutput::Single(image) = output else {
             panic!("expected one grayscale image")
         };
-        let info = identify(state, image, vec![IdentifyOption::IdentifyPing])
+        let info = identify(state, image, vec![IdentifyOption::Ping])
             .await
             .unwrap()
             .unwrap();
@@ -534,7 +532,7 @@ mod tests {
             state.clone(),
             first.clone(),
             first.clone(),
-            ComparisonMetric::MetricRootMeanSquaredError,
+            ComparisonMetric::RootMeanSquaredError,
             vec![],
         )
         .await
@@ -548,26 +546,26 @@ mod tests {
             first.clone(),
             second.clone(),
             None,
-            ComposeOperator::ComposeOver,
-            vec![CompositeOption::CompositeGravity(Gravity::GravityCenter)],
+            ComposeOperator::Over,
+            vec![CompositeOption::Gravity(Gravity::Center)],
             png_encoding(),
         )
         .await
         .unwrap()
         .unwrap();
-        assert!(matches!(composited, ImageOutput::SingleImage(_)));
+        assert!(matches!(composited, ImageOutput::Single(_)));
 
         let sheet = montage(
             state.clone(),
             vec![first.clone(), second.clone()],
-            MontageLayout::MontageColumns(2),
+            MontageLayout::Columns(2),
             vec![],
             png_encoding(),
         )
         .await
         .unwrap();
         match sheet {
-            Ok(output) => assert!(matches!(output, ImageOutput::SingleImage(_))),
+            Ok(output) => assert!(matches!(output, ImageOutput::Single(_))),
             Err(error) => assert!(
                 error.message.contains("unable to read font"),
                 "unexpected montage error: {error:?}"
@@ -578,18 +576,14 @@ mod tests {
             state.clone(),
             first.clone(),
             PixelSpec {
-                region: PixelRegion::PixelRectangle(Rectangle {
+                region: PixelRegion::Rectangle(Rectangle {
                     width: 2,
                     height: 2,
                     x: 0,
                     y: 0,
                 }),
-                channels: vec![
-                    Channel::ChannelRed,
-                    Channel::ChannelGreen,
-                    Channel::ChannelBlue,
-                ],
-                storage_type: PixelStorageType::PixelsChar,
+                channels: vec![Channel::Red, Channel::Green, Channel::Blue],
+                storage_type: PixelStorageType::Char,
             },
         )
         .await
@@ -617,7 +611,7 @@ mod tests {
             format: Format {
                 name: "png".to_string(),
             },
-            mode: OutputMode::AdjoinFrames,
+            mode: OutputMode::Adjoin,
             options: vec![],
         }
     }
@@ -637,7 +631,7 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
-        let ImageOutput::SingleImage(image) = output else {
+        let ImageOutput::Single(image) = output else {
             panic!("expected one generated image")
         };
         image

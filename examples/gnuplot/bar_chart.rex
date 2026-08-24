@@ -3,7 +3,7 @@ import tools.gnuplot as G;
 
 let
     chart = G.BarChart {
-        arrangement = G.ClusteredBars,
+        arrangement = G.BarArrangement.Clustered,
         gap = 1.0,
         series = [
             G.BarSeries {
@@ -35,9 +35,9 @@ let
     plot = G.Plot2D {
         title = Some "Grouped observations",
         y_axis = G.Axis { label = Some "value" },
-        series = [G.BarSeries2D chart]
+        series = [G.Series2D.Bar chart]
     }
 in
     G.render_svg
-        (G.Figure { panels = [Some (G.Panel2D plot)] })
+        (G.Figure { panels = [Some (G.Panel.TwoDimensional plot)] })
         G.SvgOptions {}

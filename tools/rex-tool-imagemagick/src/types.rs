@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 /// The physical result of encoding an image sequence as one adjoined file or separate files.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum ImageOutput {
-    SingleImage(Image),
-    MultipleImages(Vec<Image>),
+    Single(Image),
+    Multiple(Vec<Image>),
 }
 
 /// Image dimensions in pixels.
@@ -70,178 +70,178 @@ pub struct Define {
 /// Frames selected from a stored multi-frame image; indices are zero-based and inclusive in ranges.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum FrameSelection {
-    AllFrames,
+    All,
     Frame(u64),
-    FrameRange(u64, u64),
-    Frames(Vec<u64>),
+    Range(u64, u64),
+    Selected(Vec<u64>),
 }
 
 /// ImageMagick gravity used to anchor geometry, text, montage tiles, and composition.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum Gravity {
-    GravityNorthWest,
-    GravityNorth,
-    GravityNorthEast,
-    GravityWest,
-    GravityCenter,
-    GravityEast,
-    GravitySouthWest,
-    GravitySouth,
-    GravitySouthEast,
+    NorthWest,
+    North,
+    NorthEast,
+    West,
+    Center,
+    East,
+    SouthWest,
+    South,
+    SouthEast,
 }
 
 /// A reconstruction filter for resizing or related sampling operations.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum Filter {
-    FilterPoint,
-    FilterBox,
-    FilterTriangle,
-    FilterHermite,
-    FilterHann,
-    FilterHamming,
-    FilterBlackman,
-    FilterGaussian,
-    FilterQuadratic,
-    FilterCubic,
-    FilterCatrom,
-    FilterMitchell,
-    FilterLanczos,
-    FilterRobidoux,
-    OtherFilter(String),
+    Point,
+    Box,
+    Triangle,
+    Hermite,
+    Hann,
+    Hamming,
+    Blackman,
+    Gaussian,
+    Quadratic,
+    Cubic,
+    Catrom,
+    Mitchell,
+    Lanczos,
+    Robidoux,
+    Other(String),
 }
 
 /// An ImageMagick colorspace name used for conversion, reading, or writing.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum Colorspace {
-    ColorspaceSrgb,
-    ColorspaceRgb,
-    ColorspaceGray,
-    ColorspaceCmyk,
-    ColorspaceLab,
-    ColorspaceLch,
-    ColorspaceHsl,
-    ColorspaceHsv,
-    ColorspaceXyz,
-    ColorspaceYuv,
-    OtherColorspace(String),
+    Srgb,
+    Rgb,
+    Gray,
+    Cmyk,
+    Lab,
+    Lch,
+    Hsl,
+    Hsv,
+    Xyz,
+    Yuv,
+    Other(String),
 }
 
 /// The channel-intensity formula used by grayscale and related operations.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum IntensityMethod {
-    IntensityAverage,
-    IntensityBrightness,
-    IntensityLightness,
-    IntensityMean,
-    IntensityMeanSquare,
-    IntensityRec601Luma,
-    IntensityRec601Luminance,
-    IntensityRec709Luma,
-    IntensityRec709Luminance,
-    IntensityRootMeanSquare,
-    OtherIntensityMethod(String),
+    Average,
+    Brightness,
+    Lightness,
+    Mean,
+    MeanSquare,
+    Rec601Luma,
+    Rec601Luminance,
+    Rec709Luma,
+    Rec709Luminance,
+    RootMeanSquare,
+    Other(String),
 }
 
 /// One channel or channel group selected for subsequent channel-aware operations.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum Channel {
-    ChannelRed,
-    ChannelGreen,
-    ChannelBlue,
-    ChannelAlpha,
-    ChannelBlack,
-    ChannelCyan,
-    ChannelMagenta,
-    ChannelYellow,
-    ChannelGray,
-    ChannelRgb,
-    ChannelRgba,
-    ChannelCmyk,
-    ChannelCmyka,
-    ChannelAll,
-    OtherChannel(String),
+    Red,
+    Green,
+    Blue,
+    Alpha,
+    Black,
+    Cyan,
+    Magenta,
+    Yellow,
+    Gray,
+    Rgb,
+    Rgba,
+    Cmyk,
+    Cmyka,
+    All,
+    Other(String),
 }
 
 /// An ImageMagick alpha-channel operation mode.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum AlphaMode {
-    AlphaActivate,
-    AlphaDeactivate,
-    AlphaSet,
-    AlphaOpaque,
-    AlphaTransparent,
-    AlphaExtract,
-    AlphaCopy,
-    AlphaShape,
-    AlphaBackground,
-    OtherAlphaMode(String),
+    Activate,
+    Deactivate,
+    Set,
+    Opaque,
+    Transparent,
+    Extract,
+    Copy,
+    Shape,
+    Background,
+    Other(String),
 }
 
 /// A built-in ImageMagick noise distribution.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum NoiseKind {
-    NoiseGaussian,
-    NoiseImpulse,
-    NoiseLaplacian,
-    NoiseMultiplicativeGaussian,
-    NoisePoisson,
-    NoiseRandom,
-    NoiseUniform,
-    OtherNoise(String),
+    Gaussian,
+    Impulse,
+    Laplacian,
+    MultiplicativeGaussian,
+    Poisson,
+    Random,
+    Uniform,
+    Other(String),
 }
 
 /// An ImageMagick alpha-composition operator used when combining images.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum ComposeOperator {
-    ComposeOver,
-    ComposeAtop,
-    ComposeIn,
-    ComposeOut,
-    ComposeXor,
-    ComposeMultiply,
-    ComposeScreen,
-    ComposeOverlay,
-    ComposeDarken,
-    ComposeLighten,
-    ComposeDifference,
-    ComposeExclusion,
-    ComposePlus,
-    ComposeMinus,
-    ComposeCopy,
-    ComposeCopyAlpha,
-    ComposeDstOver,
-    ComposeSrc,
-    ComposeDst,
-    OtherCompose(String),
+    Over,
+    Atop,
+    In,
+    Out,
+    Xor,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    Difference,
+    Exclusion,
+    Plus,
+    Minus,
+    Copy,
+    CopyAlpha,
+    DstOver,
+    Src,
+    Dst,
+    Other(String),
 }
 
 /// A coder compression method; support depends on the selected output format and delegates.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum Compression {
-    CompressionNone,
-    CompressionBZip,
-    CompressionFax,
-    CompressionGroup4,
-    CompressionJpeg,
-    CompressionLosslessJpeg,
-    CompressionLzw,
-    CompressionRle,
-    CompressionZip,
-    CompressionZstd,
-    OtherCompression(String),
+    None,
+    BZip,
+    Fax,
+    Group4,
+    Jpeg,
+    LosslessJpeg,
+    Lzw,
+    Rle,
+    Zip,
+    Zstd,
+    Other(String),
 }
 
 /// A format-specific scan/interlace scheme for encoded output.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum Interlace {
-    InterlaceNone,
-    InterlaceLine,
-    InterlacePlane,
-    InterlacePartition,
-    InterlaceGif,
-    InterlaceJpeg,
-    InterlacePng,
-    OtherInterlace(String),
+    None,
+    Line,
+    Plane,
+    Partition,
+    Gif,
+    Jpeg,
+    Png,
+    Other(String),
 }
 
 /// Typed ImageMagick resize geometry with explicit fit, fill, exact, area, or percentage semantics.
@@ -259,161 +259,161 @@ pub enum ResizeGeometry {
 /// A setting applied before a stored image is decoded.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum ReadOption {
-    ReadDensity(Resolution),
-    ReadColorspace(Colorspace),
-    ReadDepth(u64),
-    ReadPage(Rectangle),
-    ReadSize(Size),
-    ReadAlpha(AlphaMode),
-    ReadBackground(Color),
-    ReadProfile(Hash),
-    ReadDefine(Define),
-    ReadFormatHint(Format),
+    Density(Resolution),
+    Colorspace(Colorspace),
+    Depth(u64),
+    Page(Rectangle),
+    Size(Size),
+    Alpha(AlphaMode),
+    Background(Color),
+    Profile(Hash),
+    Define(Define),
+    FormatHint(Format),
 }
 
 /// One bundled, headless ImageMagick pseudo-image.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum BuiltinImageKind {
-    BuiltinLogo,
-    BuiltinRose,
-    BuiltinWizard,
-    BuiltinGranite,
-    BuiltinNetscape,
+    Logo,
+    Rose,
+    Wizard,
+    Granite,
+    Netscape,
 }
 
 /// A stored image selection or a synthetic ImageMagick image source.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum ImageSource {
-    StoredImage(Image, FrameSelection, Vec<ReadOption>),
+    Stored(Image, FrameSelection, Vec<ReadOption>),
     Canvas(Size, Color),
     LinearGradient(Size, Color, Color),
     RadialGradient(Size, Color, Color),
     Checkerboard(Size),
-    NoiseImage(Size, NoiseKind),
-    BuiltinImage(BuiltinImageKind),
+    Noise(Size, NoiseKind),
+    Builtin(BuiltinImageKind),
 }
 
 /// A persistent ImageMagick setting that affects later reads or operations until changed.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum ImageSetting {
-    SettingAntialias(bool),
-    SettingAuthenticate(String),
-    SettingBias(String),
-    SettingBackground(Color),
-    SettingBorderColor(Color),
-    SettingFill(Color),
-    SettingStroke(Color),
-    SettingStrokeWidth(f64),
-    SettingFont(Hash),
-    SettingPointSize(f64),
-    SettingGravity(Gravity),
-    SettingFilter(Filter),
-    SettingDensity(Resolution),
-    SettingDepth(u64),
-    SettingDirection(String),
-    SettingDispose(String),
-    SettingDither(String),
-    SettingEndian(String),
-    SettingIntent(String),
-    SettingInterpolate(String),
-    SettingLabel(String),
-    SettingPage(Rectangle),
-    SettingPrecision(u64),
-    SettingQuality(u64),
-    SettingSamplingFactor(String),
-    SettingScene(u64),
-    SettingSupport(f64),
-    SettingUnits(String),
-    SettingVirtualPixel(String),
-    SettingSeed(u64),
-    SettingFuzz(String),
-    SettingDefine(Define),
+    Antialias(bool),
+    Authenticate(String),
+    Bias(String),
+    Background(Color),
+    BorderColor(Color),
+    Fill(Color),
+    Stroke(Color),
+    StrokeWidth(f64),
+    Font(Hash),
+    PointSize(f64),
+    Gravity(Gravity),
+    Filter(Filter),
+    Density(Resolution),
+    Depth(u64),
+    Direction(String),
+    Dispose(String),
+    Dither(String),
+    Endian(String),
+    Intent(String),
+    Interpolate(String),
+    Label(String),
+    Page(Rectangle),
+    Precision(u64),
+    Quality(u64),
+    SamplingFactor(String),
+    Scene(u64),
+    Support(f64),
+    Units(String),
+    VirtualPixel(String),
+    Seed(u64),
+    Fuzz(String),
+    Define(Define),
 }
 
 /// A morphology method applied with an ImageMagick kernel specification.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum MorphologyMethod {
-    MorphologyConvolve,
-    MorphologyCorrelate,
-    MorphologyErode,
-    MorphologyDilate,
-    MorphologyOpen,
-    MorphologyClose,
-    MorphologyEdgeIn,
-    MorphologyEdgeOut,
-    MorphologyEdge,
-    MorphologyTopHat,
-    MorphologyBottomHat,
-    MorphologyHitAndMiss,
-    MorphologyThinning,
-    MorphologyThicken,
-    OtherMorphology(String),
+    Convolve,
+    Correlate,
+    Erode,
+    Dilate,
+    Open,
+    Close,
+    EdgeIn,
+    EdgeOut,
+    Edge,
+    TopHat,
+    BottomHat,
+    HitAndMiss,
+    Thinning,
+    Thicken,
+    Other(String),
 }
 
 /// A geometric distortion method and its method-specific control points or coefficients.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum DistortMethod {
-    DistortAffine,
-    DistortAffineProjection,
-    DistortScaleRotateTranslate,
-    DistortPerspective,
-    DistortPerspectiveProjection,
-    DistortBilinearForward,
-    DistortBilinearReverse,
-    DistortPolynomial,
-    DistortArc,
-    DistortPolar,
-    DistortDePolar,
-    DistortBarrel,
-    DistortBarrelInverse,
-    OtherDistort(String),
+    Affine,
+    AffineProjection,
+    ScaleRotateTranslate,
+    Perspective,
+    PerspectiveProjection,
+    BilinearForward,
+    BilinearReverse,
+    Polynomial,
+    Arc,
+    Polar,
+    DePolar,
+    Barrel,
+    BarrelInverse,
+    Other(String),
 }
 
 /// A per-pixel arithmetic, threshold, or bitwise evaluate operator.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum EvaluateOperator {
-    EvaluateAdd,
-    EvaluateSubtract,
-    EvaluateMultiply,
-    EvaluateDivide,
-    EvaluatePow,
-    EvaluateLog,
-    EvaluateMin,
-    EvaluateMax,
-    EvaluateSet,
-    EvaluateThreshold,
-    EvaluateAnd,
-    EvaluateOr,
-    EvaluateXor,
-    OtherEvaluate(String),
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Pow,
+    Log,
+    Min,
+    Max,
+    Set,
+    Threshold,
+    And,
+    Or,
+    Xor,
+    Other(String),
 }
 
 /// A persistent drawing style applied to the accompanying drawing primitives.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum DrawStyle {
-    DrawFill(Color),
-    DrawNoFill,
-    DrawStroke(Color),
-    DrawNoStroke,
-    DrawStrokeWidth(f64),
-    DrawFont(Hash),
-    DrawPointSize(f64),
-    DrawGravity(Gravity),
+    Fill(Color),
+    NoFill,
+    Stroke(Color),
+    NoStroke,
+    StrokeWidth(f64),
+    Font(Hash),
+    PointSize(f64),
+    Gravity(Gravity),
 }
 
 /// An ImageMagick vector-drawing primitive; coordinates are in the current image coordinate space.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum DrawingPrimitive {
-    DrawLine(Point, Point),
-    DrawRectangle(Rectangle),
-    DrawRoundedRectangle(Rectangle, f64, f64),
-    DrawCircle(Point, Point),
-    DrawEllipse(Point, f64, f64, f64, f64),
-    DrawPolygon(Vec<Point>),
-    DrawPolyline(Vec<Point>),
-    DrawBezier(Vec<Point>),
-    DrawText(Point, String),
-    DrawPath(String),
+    Line(Point, Point),
+    Rectangle(Rectangle),
+    RoundedRectangle(Rectangle, f64, f64),
+    Circle(Point, Point),
+    Ellipse(Point, f64, f64, f64, f64),
+    Polygon(Vec<Point>),
+    Polyline(Vec<Point>),
+    Bezier(Vec<Point>),
+    Text(Point, String),
+    Path(String),
 }
 
 /// An immediate image operator; operations are compiled and applied in list order.
@@ -548,7 +548,7 @@ pub enum ImageOperation {
     Shadow(String),
     Border(Size, Color),
     Frame(String, Color),
-    OperationDefine(Define),
+    Define(Define),
 }
 
 /// An explicit on/off value for ImageMagick operators whose polarity changes their spelling.
@@ -570,7 +570,7 @@ pub enum SequenceOperation {
     MosaicLayers,
     OptimizeFrames,
     OptimizeTransparency,
-    ReverseSequence,
+    Reverse,
     DeleteFrames(FrameSelection),
     DuplicateFrames(FrameSelection, u64),
     SwapFrames(u64, u64),
@@ -579,32 +579,32 @@ pub enum SequenceOperation {
 /// One ordered instruction in the general ImageMagick `render` program.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum ImageInstruction {
-    ReadImage(ImageSource),
-    SetImageSetting(ImageSetting),
-    ApplyImageOperation(ImageOperation),
-    ApplyOperationGroup(Vec<ImageOperation>),
-    ApplySequenceOperation(SequenceOperation),
+    Read(ImageSource),
+    Setting(ImageSetting),
+    Operation(ImageOperation),
+    Group(Vec<ImageOperation>),
+    Sequence(SequenceOperation),
 }
 
 /// Whether an image sequence is encoded into one file or one file per frame.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum OutputMode {
-    AdjoinFrames,
-    SeparateFrames,
+    Adjoin,
+    Separate,
 }
 
 /// An output setting applied while encoding an image or image sequence.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum WriteOption {
-    WriteQuality(u64),
-    WriteDepth(u64),
-    WriteCompression(Compression),
-    WriteColorspace(Colorspace),
-    WriteInterlace(Interlace),
-    WriteDensity(Resolution),
-    WriteSamplingFactor(String),
-    WriteStripMetadata,
-    WriteDefine(Define),
+    Quality(u64),
+    Depth(u64),
+    Compression(Compression),
+    Colorspace(Colorspace),
+    Interlace(Interlace),
+    Density(Resolution),
+    SamplingFactor(String),
+    StripMetadata,
+    Define(Define),
 }
 
 /// Output coder, frame-adjoining mode, and ordered write settings.
@@ -618,73 +618,73 @@ pub struct Encoding {
 /// An ImageMagick image-comparison metric; custom names must be supported by the host build.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum ComparisonMetric {
-    MetricAbsoluteError,
-    MetricFuzz,
-    MetricMeanAbsoluteError,
-    MetricMeanErrorPerPixel,
-    MetricMeanSquaredError,
-    MetricNormalizedCrossCorrelation,
-    MetricPeakAbsoluteError,
-    MetricPeakSignalToNoiseRatio,
-    MetricRootMeanSquaredError,
-    MetricStructuralSimilarity,
-    MetricStructuralDissimilarity,
-    OtherMetric(String),
+    AbsoluteError,
+    Fuzz,
+    MeanAbsoluteError,
+    MeanErrorPerPixel,
+    MeanSquaredError,
+    NormalizedCrossCorrelation,
+    PeakAbsoluteError,
+    PeakSignalToNoiseRatio,
+    RootMeanSquaredError,
+    StructuralSimilarity,
+    StructuralDissimilarity,
+    Other(String),
 }
 
 /// An option controlling comparison fuzz, colors, composition, or selected channels.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum CompareOption {
-    CompareFuzz(String),
-    CompareHighlightColor(Color),
-    CompareLowlightColor(Color),
-    CompareCompose(ComposeOperator),
-    CompareChannels(Vec<Channel>),
+    Fuzz(String),
+    HighlightColor(Color),
+    LowlightColor(Color),
+    Compose(ComposeOperator),
+    Channels(Vec<Channel>),
 }
 
 /// An option controlling image composition placement and blending behavior.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum CompositeOption {
-    CompositeGravity(Gravity),
-    CompositeGeometry(Rectangle),
-    CompositeBlend(String),
-    CompositeDissolve(String),
-    CompositeTile,
-    CompositeClamp,
-    CompositeDefine(Define),
+    Gravity(Gravity),
+    Geometry(Rectangle),
+    Blend(String),
+    Dissolve(String),
+    Tile,
+    Clamp,
+    Define(Define),
 }
 
 /// A contact-sheet tile layout; row and column counts must be positive when supplied.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum MontageLayout {
-    MontageAutomatic,
-    MontageColumns(u64),
-    MontageRows(u64),
-    MontageGrid(u64, u64),
+    Automatic,
+    Columns(u64),
+    Rows(u64),
+    Grid(u64, u64),
 }
 
 /// A montage geometry, appearance, label, font, or spacing option.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum MontageOption {
-    MontageGeometry(String),
-    MontageGravity(Gravity),
-    MontageBackground(Color),
-    MontageBorder(u64, Color),
-    MontageFrame(String),
-    MontageShadow,
-    MontageLabel(String),
-    MontageFont(Hash),
-    MontagePointSize(f64),
-    MontageSpacing(Size),
+    Geometry(String),
+    Gravity(Gravity),
+    Background(Color),
+    Border(u64, Color),
+    Frame(String),
+    Shadow,
+    Label(String),
+    Font(Hash),
+    PointSize(f64),
+    Spacing(Size),
 }
 
 /// An image-identification mode; feature distances are measured in pixels.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum IdentifyOption {
-    IdentifyPing,
-    IdentifyVerbose,
-    IdentifyFeatures(u64),
-    IdentifyMoments,
+    Ping,
+    Verbose,
+    Features(u64),
+    Moments,
 }
 
 /// Typed metadata for one frame returned by ImageMagick `identify`.
@@ -714,20 +714,20 @@ pub struct Comparison {
 /// The whole image or one pixel rectangle exported by `extract_pixels`.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum PixelRegion {
-    WholeImage,
-    PixelRectangle(Rectangle),
+    Whole,
+    Rectangle(Rectangle),
 }
 
 /// The numeric storage representation of samples in a raw pixel buffer.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum PixelStorageType {
-    PixelsChar,
-    PixelsShort,
-    PixelsInteger,
-    PixelsLong,
-    PixelsFloat,
-    PixelsDouble,
-    PixelsQuantum,
+    Char,
+    Short,
+    Integer,
+    Long,
+    Float,
+    Double,
+    Quantum,
 }
 
 /// Region, channel order, and sample representation requested from `extract_pixels`.
@@ -774,31 +774,31 @@ pub struct VersionInfo {
 /// A category accepted by ImageMagick's `-list` capability query.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum CapabilityDomain {
-    CapabilityAlign,
-    CapabilityAlpha,
-    CapabilityChannel,
-    CapabilityColorspace,
-    CapabilityCommand,
-    CapabilityCompose,
-    CapabilityCompress,
-    CapabilityDistort,
-    CapabilityDither,
-    CapabilityEvaluate,
-    CapabilityFilter,
-    CapabilityFont,
-    CapabilityFormat,
-    CapabilityGravity,
-    CapabilityInterlace,
-    CapabilityInterpolate,
-    CapabilityKernel,
-    CapabilityMetric,
-    CapabilityMorphology,
-    CapabilityNoise,
-    CapabilityOrientation,
-    CapabilityPolicy,
-    CapabilityStorage,
-    CapabilityTool,
-    CapabilityType,
-    CapabilityUnits,
-    OtherCapability(String),
+    Align,
+    Alpha,
+    Channel,
+    Colorspace,
+    Command,
+    Compose,
+    Compress,
+    Distort,
+    Dither,
+    Evaluate,
+    Filter,
+    Font,
+    Format,
+    Gravity,
+    Interlace,
+    Interpolate,
+    Kernel,
+    Metric,
+    Morphology,
+    Noise,
+    Orientation,
+    Policy,
+    Storage,
+    Tool,
+    Type,
+    Units,
+    Other(String),
 }

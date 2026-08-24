@@ -14,7 +14,7 @@ import tools.ffmpeg as FF;
 FF.transcode
     (FF.TestVideo (FF.TestVideoSource {
         pattern = FF.TestSource2,
-        size = FF.VideoSize { width = 1280, height = 720 },
+        size = FF.VideoSize.VideoSize { width = 1280, height = 720 },
         frame_rate = FF.Rational { numerator = 30, denominator = 1 },
         duration = Some (FF.Time { seconds = 5.0 })
     }))

@@ -26,15 +26,15 @@ let
         }),
         color_axis = G.Axis {
             label = Some "intensity",
-            range = G.NumericRange (G.NumericBounds {
+            range = G.AxisRange.Numeric (G.NumericBounds {
                 minimum = 0.0,
                 maximum = 5.0
             })
         },
         show_colorbox = true,
-        series = [G.HeatmapSeries heatmap]
+        series = [G.Series2D.Heatmap heatmap]
     }
 in
     G.render_svg
-        (G.Figure { panels = [Some (G.Panel2D plot)] })
+        (G.Figure { panels = [Some (G.Panel.TwoDimensional plot)] })
         G.SvgOptions {}

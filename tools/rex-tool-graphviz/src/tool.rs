@@ -170,15 +170,10 @@ mod tests {
         }
         let store = Store::new_in_memory();
         let state = crate::development_state(store.clone());
-        let output = render(
-            state,
-            simple_graph(),
-            LayoutEngine::LayoutDot,
-            RenderFormat::FormatSvg,
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let output = render(state, simple_graph(), LayoutEngine::Dot, RenderFormat::Svg)
+            .await
+            .unwrap()
+            .unwrap();
         let bytes = store.get(output.content).await.unwrap();
         let svg = String::from_utf8(bytes).unwrap();
         assert!(svg.contains("<svg"));

@@ -8,5 +8,5 @@ fn main (input: Hash) -> Result Q.JsonOutput Q.QpdfError =
         (Pdf { content = input })
         None
         Q.JsonOptions {
-            keys = [Q.JsonPages, Q.JsonOutlines, Q.JsonEncrypt]
+            keys = [Q.JsonKey.Pages, Q.JsonKey.Outlines, Q.JsonKey.Encrypt]
         };

@@ -21,4 +21,4 @@ import tools.imagemagick as IM;
 fn main (input: Hash) -> Result (List IM.ImageInfo) IM.ImageMagickError =
     IM.identify
         (Image { content = input })
-        [IM.IdentifyPing];
+        [IM.IdentifyOption.Ping];

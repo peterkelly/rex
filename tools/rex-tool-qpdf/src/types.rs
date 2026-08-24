@@ -45,8 +45,8 @@ pub struct OverlaySpec {
 /// Absolute or relative page rotation accepted by QPDF's `--rotate` option.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum Rotation {
-    AbsoluteRotation(i64),
-    RelativeRotation(i64),
+    Absolute(i64),
+    Relative(i64),
 }
 
 /// A QPDF rotation and the optional page range to which it applies.
@@ -59,68 +59,68 @@ pub struct RotationSpec {
 /// QPDF's `--object-streams` mode.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum ObjectStreamMode {
-    ObjectStreamsPreserve,
-    ObjectStreamsDisable,
-    ObjectStreamsGenerate,
+    Preserve,
+    Disable,
+    Generate,
 }
 
 /// QPDF's `--stream-data` mode.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum StreamDataMode {
-    StreamDataCompress,
-    StreamDataPreserve,
-    StreamDataUncompress,
+    Compress,
+    Preserve,
+    Uncompress,
 }
 
 /// QPDF's stream decoding level used by transformations and JSON output.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Rex)]
 pub enum DecodeLevel {
-    DecodeNone,
+    None,
     #[default]
-    DecodeGeneralized,
-    DecodeSpecialized,
-    DecodeAll,
+    Generalized,
+    Specialized,
+    All,
 }
 
 /// QPDF's `--remove-unreferenced-resources` policy.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum RemoveUnreferencedResourcesMode {
-    RemoveResourcesAuto,
-    RemoveResourcesYes,
-    RemoveResourcesNo,
+    Auto,
+    Yes,
+    No,
 }
 
 /// Annotation appearances retained by QPDF's `--flatten-annotations` option.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum FlattenAnnotationsMode {
-    FlattenAllAnnotations,
-    FlattenPrintAnnotations,
-    FlattenScreenAnnotations,
+    All,
+    Print,
+    Screen,
 }
 
 /// Printing permission stored in a 128-bit or 256-bit encrypted PDF.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum PrintPermission {
-    PrintNone,
-    PrintLowResolution,
-    PrintFullResolution,
+    None,
+    LowResolution,
+    FullResolution,
 }
 
 /// Modification permission stored in a 128-bit or 256-bit encrypted PDF.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum ModifyPermission {
-    ModifyNone,
-    ModifyAssembly,
-    ModifyForms,
-    ModifyAnnotations,
-    ModifyAll,
+    None,
+    Assembly,
+    Forms,
+    Annotations,
+    All,
 }
 
 /// Modern encryption algorithms exposed by this QPDF wrapper.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum EncryptionMethod {
-    EncryptionAes128,
-    EncryptionAes256,
+    Aes128,
+    Aes256,
 }
 
 /// Passwords and permissions supplied to QPDF's `--encrypt` option group.
@@ -172,23 +172,23 @@ pub enum WriteOption {
 /// A top-level key accepted by QPDF's `--json-key` option.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum JsonKey {
-    JsonAcroform,
-    JsonAttachments,
-    JsonEncrypt,
-    JsonObjectInfo,
-    JsonObjects,
-    JsonOutlines,
-    JsonPageLabels,
-    JsonPages,
-    JsonQpdf,
+    Acroform,
+    Attachments,
+    Encrypt,
+    ObjectInfo,
+    Objects,
+    Outlines,
+    PageLabels,
+    Pages,
+    Qpdf,
 }
 
 /// How QPDF includes stream data in JSON output.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Rex)]
 pub enum JsonStreamData {
     #[default]
-    JsonStreamDataNone,
-    JsonStreamDataInline,
+    None,
+    Inline,
 }
 
 /// Selection and stream options for QPDF JSON version 2 output.
@@ -206,9 +206,9 @@ pub struct JsonOptions {
 /// Outcome category reported by `qpdf --check`.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum CheckStatus {
-    CheckClean,
-    CheckWarnings,
-    CheckErrors,
+    Clean,
+    Warnings,
+    Errors,
 }
 
 /// QPDF syntax-check status and its complete diagnostic output.

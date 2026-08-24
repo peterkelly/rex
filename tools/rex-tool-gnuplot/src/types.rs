@@ -20,26 +20,26 @@ pub struct TimeBounds {
 #[derive(Clone, Debug, Default, PartialEq, Rex)]
 pub enum AxisRange {
     #[default]
-    AutoRange,
-    NumericRange(NumericBounds),
-    TimeRange(TimeBounds),
+    Auto,
+    Numeric(NumericBounds),
+    Time(TimeBounds),
 }
 
 /// A linear scale or logarithmic scale with an explicit base.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Rex)]
 pub enum AxisScale {
     #[default]
-    LinearScale,
-    LogScale(f64),
+    Linear,
+    Log(f64),
 }
 
 /// Automatic tick labels or a safely quoted numeric or UTC time format.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Rex)]
 pub enum TickFormat {
     #[default]
-    AutomaticTicks,
-    NumericTicks(String),
-    TimeTicks(String),
+    Automatic,
+    Numeric(String),
+    Time(String),
 }
 
 /// Final settings for one numeric or timestamped plot axis.
@@ -149,8 +149,8 @@ impl Default for Theme {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum GridFillOrder {
     #[default]
-    FillRowsFirst,
-    FillColumnsFirst,
+    RowsFirst,
+    ColumnsFirst,
 }
 
 /// A regular panel grid; omitted rows are inferred from the number of cells.
@@ -168,7 +168,7 @@ impl Default for GridLayout {
         Self {
             columns: 1,
             rows: None,
-            fill_order: GridFillOrder::FillRowsFirst,
+            fill_order: GridFillOrder::RowsFirst,
             horizontal_spacing: 0.05,
             vertical_spacing: 0.08,
         }
@@ -187,18 +187,18 @@ pub struct Figure {
 /// A two-dimensional or three-dimensional figure panel.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum Panel {
-    Panel2D(Plot2D),
-    Panel3D(Plot3D),
+    TwoDimensional(Plot2D),
+    ThreeDimensional(Plot3D),
 }
 
 /// Which axes a two-dimensional series uses.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum AxisBinding {
     #[default]
-    PrimaryAxes,
+    Primary,
     SecondaryX,
     SecondaryY,
-    SecondaryAxes,
+    Secondary,
 }
 
 /// Major and minor grid-line visibility for one panel.
@@ -222,13 +222,13 @@ impl Default for Grid {
 /// A standard legend location within or outside a panel.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum LegendPosition {
-    LegendTopLeft,
+    TopLeft,
     #[default]
-    LegendTopRight,
-    LegendBottomLeft,
-    LegendBottomRight,
-    LegendOutsideRight,
-    LegendBelow,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    OutsideRight,
+    Below,
 }
 
 /// Final legend visibility, placement, orientation, and item ordering.
@@ -244,7 +244,7 @@ impl Default for Legend {
     fn default() -> Self {
         Self {
             visible: true,
-            position: LegendPosition::LegendTopRight,
+            position: LegendPosition::TopRight,
             horizontal: false,
             reversed: false,
         }
@@ -255,10 +255,10 @@ impl Default for Legend {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum DashPattern {
     #[default]
-    SolidLine,
-    DashedLine,
-    DottedLine,
-    DashDotLine,
+    Solid,
+    Dashed,
+    Dotted,
+    DashDot,
 }
 
 /// Final appearance of one line.
@@ -274,7 +274,7 @@ impl Default for LineStyle {
         Self {
             color: None,
             width: 1.5,
-            dash: DashPattern::SolidLine,
+            dash: DashPattern::Solid,
         }
     }
 }
@@ -282,18 +282,18 @@ impl Default for LineStyle {
 /// A portable point glyph.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum PointShape {
-    PointPlus,
-    PointCross,
-    PointStar,
-    PointSquare,
-    PointFilledSquare,
+    Plus,
+    Cross,
+    Star,
+    Square,
+    FilledSquare,
     #[default]
-    PointCircle,
-    PointFilledCircle,
-    PointTriangle,
-    PointFilledTriangle,
-    PointDiamond,
-    PointFilledDiamond,
+    Circle,
+    FilledCircle,
+    Triangle,
+    FilledTriangle,
+    Diamond,
+    FilledDiamond,
 }
 
 /// Final appearance of point glyphs.
@@ -309,7 +309,7 @@ impl Default for PointStyle {
         Self {
             color: None,
             size: 1.0,
-            shape: PointShape::PointCircle,
+            shape: PointShape::Circle,
         }
     }
 }
@@ -318,8 +318,8 @@ impl Default for PointStyle {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum FillMode {
     #[default]
-    SolidFill,
-    PatternFill(i64),
+    Solid,
+    Pattern(i64),
 }
 
 /// Final appearance of a filled region.
@@ -337,7 +337,7 @@ impl Default for FillStyle {
         Self {
             color: None,
             opacity: 0.35,
-            mode: FillMode::SolidFill,
+            mode: FillMode::Solid,
             border: false,
         }
     }
@@ -346,15 +346,15 @@ impl Default for FillStyle {
 /// Numeric or UTC-timestamped XY points, optionally split into explicit path segments.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum XYData {
-    NumericXY(Vec<(f64, f64)>),
+    Numeric(Vec<(f64, f64)>),
     NumericSegments(Vec<Vec<(f64, f64)>>),
-    TimeXY(Vec<(DateTime<Utc>, f64)>),
+    Time(Vec<(DateTime<Utc>, f64)>),
     TimeSegments(Vec<Vec<(DateTime<Utc>, f64)>>),
 }
 
 impl Default for XYData {
     fn default() -> Self {
-        Self::NumericXY(Vec::new())
+        Self::Numeric(Vec::new())
     }
 }
 
@@ -385,8 +385,8 @@ pub struct Curve2D {
 /// A symmetric error magnitude or explicit lower and upper bounds.
 #[derive(Clone, Copy, Debug, PartialEq, Rex)]
 pub enum ErrorExtent {
-    SymmetricError(f64),
-    AbsoluteError(NumericBounds),
+    Symmetric(f64),
+    Absolute(NumericBounds),
 }
 
 /// One numeric point with optional horizontal and vertical errors.
@@ -420,13 +420,13 @@ pub struct BandPoint2D {
 /// One band or a set of explicitly disconnected band segments.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum BandData {
-    BandPoints(Vec<BandPoint2D>),
-    BandSegments(Vec<Vec<BandPoint2D>>),
+    Points(Vec<BandPoint2D>),
+    Segments(Vec<Vec<BandPoint2D>>),
 }
 
 impl Default for BandData {
     fn default() -> Self {
-        Self::BandPoints(Vec::new())
+        Self::Points(Vec::new())
     }
 }
 
@@ -451,8 +451,8 @@ pub struct BarSeries {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum BarArrangement {
     #[default]
-    ClusteredBars,
-    StackedBars,
+    Clustered,
+    Stacked,
 }
 
 /// A categorical chart containing one or more aligned bar series.
@@ -476,13 +476,13 @@ impl Default for BarChart {
 /// A fixed number of equal-width bins or an explicit bin width.
 #[derive(Clone, Copy, Debug, PartialEq, Rex)]
 pub enum HistogramBins {
-    BinCount(u64),
-    BinWidth(f64),
+    Count(u64),
+    Width(f64),
 }
 
 impl Default for HistogramBins {
     fn default() -> Self {
-        Self::BinCount(20)
+        Self::Count(20)
     }
 }
 
@@ -490,9 +490,9 @@ impl Default for HistogramBins {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum HistogramNormalization {
     #[default]
-    HistogramCounts,
-    HistogramProbability,
-    HistogramDensity,
+    Counts,
+    Probability,
+    Density,
 }
 
 /// A statistical histogram computed from inline numeric samples.
@@ -535,10 +535,10 @@ pub struct Vector2D {
 /// Whether vector arrows have no head, an open head, or a filled head.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum ArrowHead {
-    NoArrowHead,
-    OpenArrowHead,
+    None,
+    Open,
     #[default]
-    FilledArrowHead,
+    Filled,
 }
 
 /// A set of two-dimensional vectors with a shared appearance.
@@ -554,10 +554,10 @@ pub struct Vectors2D {
 /// Horizontal text alignment relative to an anchor point.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum TextAlignment {
-    AlignLeft,
+    Left,
     #[default]
-    AlignCenter,
-    AlignRight,
+    Center,
+    Right,
 }
 
 /// One text label anchored at numeric x and y coordinates.
@@ -582,21 +582,21 @@ pub struct Labels2D {
 /// One semantic two-dimensional plot layer.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum Series2D {
-    CurveSeries(Curve2D),
-    ErrorSeries(ErrorBars2D),
-    BandSeries(Band2D),
-    BarSeries2D(BarChart),
-    HistogramSeries(Histogram),
-    HeatmapSeries(Heatmap2D),
-    VectorSeries(Vectors2D),
-    LabelSeries(Labels2D),
+    Curve(Curve2D),
+    Error(ErrorBars2D),
+    Band(Band2D),
+    Bar(BarChart),
+    Histogram(Histogram),
+    Heatmap(Heatmap2D),
+    Vector(Vectors2D),
+    Label(Labels2D),
 }
 
 /// A numeric point or a panel-relative point used by annotations.
 #[derive(Clone, Copy, Debug, PartialEq, Rex)]
 pub enum Position2D {
-    DataPosition2D(f64, f64),
-    PanelPosition2D(f64, f64),
+    Data(f64, f64),
+    Panel(f64, f64),
 }
 
 /// One fixed text annotation in a two-dimensional panel.
@@ -620,8 +620,8 @@ pub struct ArrowAnnotation2D {
 /// The orientation of a numeric reference line.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Rex)]
 pub enum ReferenceOrientation {
-    HorizontalReference,
-    VerticalReference,
+    Horizontal,
+    Vertical,
 }
 
 /// One horizontal or vertical reference line with an optional label.
@@ -636,8 +636,8 @@ pub struct ReferenceLine2D {
 /// One fixed two-dimensional annotation.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum Annotation2D {
-    TextAnnotation(TextAnnotation2D),
-    ArrowAnnotation(ArrowAnnotation2D),
+    Text(TextAnnotation2D),
+    Arrow(ArrowAnnotation2D),
     ReferenceLine(ReferenceLine2D),
 }
 
@@ -679,13 +679,13 @@ pub struct PointCloud3D {
 /// One three-dimensional path or a set of explicitly disconnected path segments.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum PathData3D {
-    PathPoints3D(Vec<Point3D>),
-    PathSegments3D(Vec<Vec<Point3D>>),
+    Points(Vec<Point3D>),
+    Segments(Vec<Vec<Point3D>>),
 }
 
 impl Default for PathData3D {
     fn default() -> Self {
-        Self::PathPoints3D(Vec::new())
+        Self::Points(Vec::new())
     }
 }
 
@@ -702,8 +702,8 @@ pub struct Path3D {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Rex)]
 pub enum SurfaceMode {
     #[default]
-    WireframeSurface,
-    ColoredSurface,
+    Wireframe,
+    Colored,
     ContourLines,
     FilledContours,
 }
@@ -720,9 +720,9 @@ pub struct Surface3D {
 /// One semantic three-dimensional plot layer.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum Series3D {
-    PointSeries3D(PointCloud3D),
-    PathSeries3D(Path3D),
-    SurfaceSeries3D(Surface3D),
+    Point(PointCloud3D),
+    Path(Path3D),
+    Surface(Surface3D),
 }
 
 /// Camera angles and scale for a three-dimensional panel.
@@ -764,8 +764,8 @@ pub struct ArrowAnnotation3D {
 /// One fixed three-dimensional annotation.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum Annotation3D {
-    TextAnnotation3DValue(TextAnnotation3D),
-    ArrowAnnotation3DValue(ArrowAnnotation3D),
+    Text(TextAnnotation3D),
+    Arrow(ArrowAnnotation3D),
 }
 
 /// A complete three-dimensional Cartesian plot.

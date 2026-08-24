@@ -111,7 +111,7 @@ pub(crate) fn transform_many_plan(
     if images.is_empty() {
         return Err(invalid("transform_many requires at least one image"));
     }
-    if encoding.mode != OutputMode::AdjoinFrames {
+    if encoding.mode != OutputMode::Adjoin {
         return Err(invalid(
             "transform_many requires AdjoinFrames; each input already produces a separate output",
         ));
@@ -140,12 +140,10 @@ pub(crate) fn identify_plan(
     let mut builder = PlanBuilder::new(ToolProgram::with_prefix_arguments("magick", ["identify"]));
     for option in options {
         match option {
-            IdentifyOption::IdentifyPing => builder.literal("-ping"),
-            IdentifyOption::IdentifyVerbose => builder.literal("-verbose"),
-            IdentifyOption::IdentifyFeatures(distance) => {
-                builder.option("-features", distance.to_string())
-            }
-            IdentifyOption::IdentifyMoments => builder.literal("-moments"),
+            IdentifyOption::Ping => builder.literal("-ping"),
+            IdentifyOption::Verbose => builder.literal("-verbose"),
+            IdentifyOption::Features(distance) => builder.option("-features", distance.to_string()),
+            IdentifyOption::Moments => builder.literal("-moments"),
         }
     }
     builder.option(
@@ -166,17 +164,11 @@ pub(crate) fn compare_plan(
     let mut builder = PlanBuilder::new(ToolProgram::with_prefix_arguments("magick", ["compare"]));
     for option in options {
         match option {
-            CompareOption::CompareFuzz(value) => builder.option("-fuzz", value),
-            CompareOption::CompareHighlightColor(color) => {
-                builder.option("-highlight-color", color.value)
-            }
-            CompareOption::CompareLowlightColor(color) => {
-                builder.option("-lowlight-color", color.value)
-            }
-            CompareOption::CompareCompose(operator) => {
-                builder.option("-compose", compose_name(&operator))
-            }
-            CompareOption::CompareChannels(channels) => {
+            CompareOption::Fuzz(value) => builder.option("-fuzz", value),
+            CompareOption::HighlightColor(color) => builder.option("-highlight-color", color.value),
+            CompareOption::LowlightColor(color) => builder.option("-lowlight-color", color.value),
+            CompareOption::Compose(operator) => builder.option("-compose", compose_name(&operator)),
+            CompareOption::Channels(channels) => {
                 builder.option("-channel", channel_list(&channels))
             }
         }
@@ -203,17 +195,15 @@ pub(crate) fn composite_plan(
     builder.option("-compose", compose_name(&operator));
     for option in options {
         match option {
-            CompositeOption::CompositeGravity(gravity) => {
-                builder.option("-gravity", gravity_name(&gravity))
-            }
-            CompositeOption::CompositeGeometry(rectangle) => {
+            CompositeOption::Gravity(gravity) => builder.option("-gravity", gravity_name(&gravity)),
+            CompositeOption::Geometry(rectangle) => {
                 builder.option("-geometry", rectangle_geometry(rectangle))
             }
-            CompositeOption::CompositeBlend(value) => builder.option("-blend", value),
-            CompositeOption::CompositeDissolve(value) => builder.option("-dissolve", value),
-            CompositeOption::CompositeTile => builder.literal("-tile"),
-            CompositeOption::CompositeClamp => builder.literal("-clamp"),
-            CompositeOption::CompositeDefine(define) => compile_define(&mut builder, define),
+            CompositeOption::Blend(value) => builder.option("-blend", value),
+            CompositeOption::Dissolve(value) => builder.option("-dissolve", value),
+            CompositeOption::Tile => builder.literal("-tile"),
+            CompositeOption::Clamp => builder.literal("-clamp"),
+            CompositeOption::Define(define) => compile_define(&mut builder, define),
         }
     }
     let overlay = builder.input(overlay.content, "bin");
@@ -240,34 +230,30 @@ pub(crate) fn montage_plan(
     let mut builder = PlanBuilder::new(ToolProgram::with_prefix_arguments("magick", ["montage"]));
     builder.literal("+label");
     match layout {
-        MontageLayout::MontageAutomatic => {}
-        MontageLayout::MontageColumns(columns) => builder.option("-tile", format!("{columns}x")),
-        MontageLayout::MontageRows(rows) => builder.option("-tile", format!("x{rows}")),
-        MontageLayout::MontageGrid(columns, rows) => {
-            builder.option("-tile", format!("{columns}x{rows}"))
-        }
+        MontageLayout::Automatic => {}
+        MontageLayout::Columns(columns) => builder.option("-tile", format!("{columns}x")),
+        MontageLayout::Rows(rows) => builder.option("-tile", format!("x{rows}")),
+        MontageLayout::Grid(columns, rows) => builder.option("-tile", format!("{columns}x{rows}")),
     }
     for option in options {
         match option {
-            MontageOption::MontageGeometry(value) => builder.option("-geometry", value),
-            MontageOption::MontageGravity(gravity) => {
-                builder.option("-gravity", gravity_name(&gravity))
-            }
-            MontageOption::MontageBackground(color) => builder.option("-background", color.value),
-            MontageOption::MontageBorder(width, color) => {
+            MontageOption::Geometry(value) => builder.option("-geometry", value),
+            MontageOption::Gravity(gravity) => builder.option("-gravity", gravity_name(&gravity)),
+            MontageOption::Background(color) => builder.option("-background", color.value),
+            MontageOption::Border(width, color) => {
                 builder.option("-bordercolor", color.value);
                 builder.option("-border", width.to_string());
             }
-            MontageOption::MontageFrame(value) => builder.option("-frame", value),
-            MontageOption::MontageShadow => builder.literal("-shadow"),
-            MontageOption::MontageLabel(value) => builder.option("-label", value),
-            MontageOption::MontageFont(hash) => {
+            MontageOption::Frame(value) => builder.option("-frame", value),
+            MontageOption::Shadow => builder.literal("-shadow"),
+            MontageOption::Label(value) => builder.option("-label", value),
+            MontageOption::Font(hash) => {
                 let font = builder.input(hash, "font");
                 builder.literal("-font");
                 builder.input_path(font);
             }
-            MontageOption::MontagePointSize(value) => builder.option("-pointsize", number(value)),
-            MontageOption::MontageSpacing(size) => {
+            MontageOption::PointSize(value) => builder.option("-pointsize", number(value)),
+            MontageOption::Spacing(size) => {
                 builder.option("-geometry", format!("+{}+{}", size.width, size.height))
             }
         }
@@ -288,7 +274,7 @@ pub(crate) fn stream_plan(
         return Err(invalid("extract_pixels requires at least one channel"));
     }
     let mut builder = PlanBuilder::new(ToolProgram::with_prefix_arguments("magick", ["stream"]));
-    if let PixelRegion::PixelRectangle(rectangle) = spec.region {
+    if let PixelRegion::Rectangle(rectangle) = spec.region {
         builder.option("-extract", rectangle_geometry(rectangle));
     }
     builder.option("-map", stream_channel_map(&spec.channels));
@@ -325,10 +311,10 @@ fn compile_instruction(
     instruction: ImageInstruction,
 ) -> Result<(), ImageMagickError> {
     match instruction {
-        ImageInstruction::ReadImage(source) => compile_source(builder, source),
-        ImageInstruction::SetImageSetting(setting) => compile_setting(builder, setting),
-        ImageInstruction::ApplyImageOperation(operation) => compile_operation(builder, operation),
-        ImageInstruction::ApplyOperationGroup(operations) => {
+        ImageInstruction::Read(source) => compile_source(builder, source),
+        ImageInstruction::Setting(setting) => compile_setting(builder, setting),
+        ImageInstruction::Operation(operation) => compile_operation(builder, operation),
+        ImageInstruction::Group(operations) => {
             builder.literal("(");
             for operation in operations {
                 compile_operation(builder, operation)?;
@@ -336,7 +322,7 @@ fn compile_instruction(
             builder.literal(")");
             Ok(())
         }
-        ImageInstruction::ApplySequenceOperation(operation) => {
+        ImageInstruction::Sequence(operation) => {
             compile_sequence(builder, operation);
             Ok(())
         }
@@ -345,28 +331,28 @@ fn compile_instruction(
 
 fn compile_source(builder: &mut PlanBuilder, source: ImageSource) -> Result<(), ImageMagickError> {
     match source {
-        ImageSource::StoredImage(image, frames, options) => {
+        ImageSource::Stored(image, frames, options) => {
             let mut format_hint = None;
             for option in options {
                 match option {
-                    ReadOption::ReadDensity(resolution) => {
+                    ReadOption::Density(resolution) => {
                         builder.option("-density", resolution_geometry(resolution))
                     }
-                    ReadOption::ReadColorspace(colorspace) => {
+                    ReadOption::Colorspace(colorspace) => {
                         builder.option("-colorspace", colorspace_name(&colorspace))
                     }
-                    ReadOption::ReadDepth(depth) => builder.option("-depth", depth.to_string()),
-                    ReadOption::ReadPage(page) => builder.option("-page", rectangle_geometry(page)),
-                    ReadOption::ReadSize(size) => builder.option("-size", size_geometry(size)),
-                    ReadOption::ReadAlpha(mode) => builder.option("-alpha", alpha_name(&mode)),
-                    ReadOption::ReadBackground(color) => builder.option("-background", color.value),
-                    ReadOption::ReadProfile(hash) => {
+                    ReadOption::Depth(depth) => builder.option("-depth", depth.to_string()),
+                    ReadOption::Page(page) => builder.option("-page", rectangle_geometry(page)),
+                    ReadOption::Size(size) => builder.option("-size", size_geometry(size)),
+                    ReadOption::Alpha(mode) => builder.option("-alpha", alpha_name(&mode)),
+                    ReadOption::Background(color) => builder.option("-background", color.value),
+                    ReadOption::Profile(hash) => {
                         let profile = builder.input(hash, "profile");
                         builder.literal("-profile");
                         builder.input_path(profile);
                     }
-                    ReadOption::ReadDefine(define) => compile_define(builder, define),
-                    ReadOption::ReadFormatHint(format) => format_hint = Some(format_name(&format)?),
+                    ReadOption::Define(define) => compile_define(builder, define),
+                    ReadOption::FormatHint(format) => format_hint = Some(format_name(&format)?),
                 }
             }
             let extension = format_hint.clone().unwrap_or_else(|| "bin".to_string());
@@ -392,12 +378,12 @@ fn compile_source(builder: &mut PlanBuilder, source: ImageSource) -> Result<(), 
             builder.option("-size", size_geometry(size));
             builder.literal("pattern:checkerboard");
         }
-        ImageSource::NoiseImage(size, noise) => {
+        ImageSource::Noise(size, noise) => {
             builder.option("-size", size_geometry(size));
             builder.literal("xc:gray");
             builder.option("+noise", noise_name(&noise));
         }
-        ImageSource::BuiltinImage(kind) => builder.literal(builtin_name(&kind)),
+        ImageSource::Builtin(kind) => builder.literal(builtin_name(&kind)),
     }
     Ok(())
 }
@@ -407,46 +393,44 @@ fn compile_setting(
     setting: ImageSetting,
 ) -> Result<(), ImageMagickError> {
     match setting {
-        ImageSetting::SettingAntialias(enabled) => {
+        ImageSetting::Antialias(enabled) => {
             builder.literal(if enabled { "-antialias" } else { "+antialias" })
         }
-        ImageSetting::SettingAuthenticate(password) => builder.option("-authenticate", password),
-        ImageSetting::SettingBias(value) => builder.option("-bias", value),
-        ImageSetting::SettingBackground(color) => builder.option("-background", color.value),
-        ImageSetting::SettingBorderColor(color) => builder.option("-bordercolor", color.value),
-        ImageSetting::SettingFill(color) => builder.option("-fill", color.value),
-        ImageSetting::SettingStroke(color) => builder.option("-stroke", color.value),
-        ImageSetting::SettingStrokeWidth(width) => builder.option("-strokewidth", number(width)),
-        ImageSetting::SettingFont(hash) => {
+        ImageSetting::Authenticate(password) => builder.option("-authenticate", password),
+        ImageSetting::Bias(value) => builder.option("-bias", value),
+        ImageSetting::Background(color) => builder.option("-background", color.value),
+        ImageSetting::BorderColor(color) => builder.option("-bordercolor", color.value),
+        ImageSetting::Fill(color) => builder.option("-fill", color.value),
+        ImageSetting::Stroke(color) => builder.option("-stroke", color.value),
+        ImageSetting::StrokeWidth(width) => builder.option("-strokewidth", number(width)),
+        ImageSetting::Font(hash) => {
             let font = builder.input(hash, "font");
             builder.literal("-font");
             builder.input_path(font);
         }
-        ImageSetting::SettingPointSize(size) => builder.option("-pointsize", number(size)),
-        ImageSetting::SettingGravity(gravity) => builder.option("-gravity", gravity_name(&gravity)),
-        ImageSetting::SettingFilter(filter) => builder.option("-filter", filter_name(&filter)),
-        ImageSetting::SettingDensity(value) => {
-            builder.option("-density", resolution_geometry(value))
-        }
-        ImageSetting::SettingDepth(value) => builder.option("-depth", value.to_string()),
-        ImageSetting::SettingDirection(value) => builder.option("-direction", value),
-        ImageSetting::SettingDispose(value) => builder.option("-dispose", value),
-        ImageSetting::SettingDither(value) => builder.option("-dither", value),
-        ImageSetting::SettingEndian(value) => builder.option("-endian", value),
-        ImageSetting::SettingIntent(value) => builder.option("-intent", value),
-        ImageSetting::SettingInterpolate(value) => builder.option("-interpolate", value),
-        ImageSetting::SettingLabel(value) => builder.option("-label", value),
-        ImageSetting::SettingPage(value) => builder.option("-page", rectangle_geometry(value)),
-        ImageSetting::SettingPrecision(value) => builder.option("-precision", value.to_string()),
-        ImageSetting::SettingQuality(value) => builder.option("-quality", value.to_string()),
-        ImageSetting::SettingSamplingFactor(value) => builder.option("-sampling-factor", value),
-        ImageSetting::SettingScene(value) => builder.option("-scene", value.to_string()),
-        ImageSetting::SettingSupport(value) => builder.option("-support", number(value)),
-        ImageSetting::SettingUnits(value) => builder.option("-units", value),
-        ImageSetting::SettingVirtualPixel(method) => builder.option("-virtual-pixel", method),
-        ImageSetting::SettingSeed(seed) => builder.option("-seed", seed.to_string()),
-        ImageSetting::SettingFuzz(value) => builder.option("-fuzz", value),
-        ImageSetting::SettingDefine(define) => compile_define(builder, define),
+        ImageSetting::PointSize(size) => builder.option("-pointsize", number(size)),
+        ImageSetting::Gravity(gravity) => builder.option("-gravity", gravity_name(&gravity)),
+        ImageSetting::Filter(filter) => builder.option("-filter", filter_name(&filter)),
+        ImageSetting::Density(value) => builder.option("-density", resolution_geometry(value)),
+        ImageSetting::Depth(value) => builder.option("-depth", value.to_string()),
+        ImageSetting::Direction(value) => builder.option("-direction", value),
+        ImageSetting::Dispose(value) => builder.option("-dispose", value),
+        ImageSetting::Dither(value) => builder.option("-dither", value),
+        ImageSetting::Endian(value) => builder.option("-endian", value),
+        ImageSetting::Intent(value) => builder.option("-intent", value),
+        ImageSetting::Interpolate(value) => builder.option("-interpolate", value),
+        ImageSetting::Label(value) => builder.option("-label", value),
+        ImageSetting::Page(value) => builder.option("-page", rectangle_geometry(value)),
+        ImageSetting::Precision(value) => builder.option("-precision", value.to_string()),
+        ImageSetting::Quality(value) => builder.option("-quality", value.to_string()),
+        ImageSetting::SamplingFactor(value) => builder.option("-sampling-factor", value),
+        ImageSetting::Scene(value) => builder.option("-scene", value.to_string()),
+        ImageSetting::Support(value) => builder.option("-support", number(value)),
+        ImageSetting::Units(value) => builder.option("-units", value),
+        ImageSetting::VirtualPixel(method) => builder.option("-virtual-pixel", method),
+        ImageSetting::Seed(seed) => builder.option("-seed", seed.to_string()),
+        ImageSetting::Fuzz(value) => builder.option("-fuzz", value),
+        ImageSetting::Define(define) => compile_define(builder, define),
     }
     Ok(())
 }
@@ -756,7 +740,7 @@ fn compile_operation(
             builder.option("-mattecolor", color.value);
             builder.option("-frame", value);
         }
-        ImageOperation::OperationDefine(define) => compile_define(builder, define),
+        ImageOperation::Define(define) => compile_define(builder, define),
     }
     Ok(())
 }
@@ -766,18 +750,18 @@ fn compile_draw_style(
     style: &DrawStyle,
 ) -> Result<(), ImageMagickError> {
     match style {
-        DrawStyle::DrawFill(color) => builder.option("-fill", color.value.clone()),
-        DrawStyle::DrawNoFill => builder.option("-fill", "none"),
-        DrawStyle::DrawStroke(color) => builder.option("-stroke", color.value.clone()),
-        DrawStyle::DrawNoStroke => builder.option("-stroke", "none"),
-        DrawStyle::DrawStrokeWidth(width) => builder.option("-strokewidth", number(*width)),
-        DrawStyle::DrawFont(hash) => {
+        DrawStyle::Fill(color) => builder.option("-fill", color.value.clone()),
+        DrawStyle::NoFill => builder.option("-fill", "none"),
+        DrawStyle::Stroke(color) => builder.option("-stroke", color.value.clone()),
+        DrawStyle::NoStroke => builder.option("-stroke", "none"),
+        DrawStyle::StrokeWidth(width) => builder.option("-strokewidth", number(*width)),
+        DrawStyle::Font(hash) => {
             let font = builder.input(*hash, "font");
             builder.literal("-font");
             builder.input_path(font);
         }
-        DrawStyle::DrawPointSize(size) => builder.option("-pointsize", number(*size)),
-        DrawStyle::DrawGravity(gravity) => builder.option("-gravity", gravity_name(gravity)),
+        DrawStyle::PointSize(size) => builder.option("-pointsize", number(*size)),
+        DrawStyle::Gravity(gravity) => builder.option("-gravity", gravity_name(gravity)),
     }
     Ok(())
 }
@@ -795,7 +779,7 @@ fn compile_sequence(builder: &mut PlanBuilder, operation: SequenceOperation) {
         SequenceOperation::OptimizeTransparency => {
             builder.option("-layers", "optimize-transparency")
         }
-        SequenceOperation::ReverseSequence => builder.literal("-reverse"),
+        SequenceOperation::Reverse => builder.literal("-reverse"),
         SequenceOperation::DeleteFrames(selection) => {
             builder.option("-delete", frame_expression(&selection))
         }
@@ -813,8 +797,8 @@ fn compile_encoding(builder: &mut PlanBuilder, encoding: Encoding) -> Result<(),
     let format = format_name(&encoding.format)?;
     compile_write_options(builder, encoding.options)?;
     let kind = match encoding.mode {
-        OutputMode::AdjoinFrames => OutputKind::Single,
-        OutputMode::SeparateFrames => OutputKind::Numbered,
+        OutputMode::Adjoin => OutputKind::Single,
+        OutputMode::Separate => OutputKind::Numbered,
     };
     let output = builder.output(kind, &format);
     builder.output_argument(output, &format);
@@ -827,23 +811,19 @@ fn compile_write_options(
 ) -> Result<(), ImageMagickError> {
     for option in options {
         match option {
-            WriteOption::WriteQuality(value) => builder.option("-quality", value.to_string()),
-            WriteOption::WriteDepth(value) => builder.option("-depth", value.to_string()),
-            WriteOption::WriteCompression(value) => {
+            WriteOption::Quality(value) => builder.option("-quality", value.to_string()),
+            WriteOption::Depth(value) => builder.option("-depth", value.to_string()),
+            WriteOption::Compression(value) => {
                 builder.option("-compress", compression_name(&value))
             }
-            WriteOption::WriteColorspace(value) => {
+            WriteOption::Colorspace(value) => {
                 builder.option("-colorspace", colorspace_name(&value))
             }
-            WriteOption::WriteInterlace(value) => {
-                builder.option("-interlace", interlace_name(&value))
-            }
-            WriteOption::WriteDensity(value) => {
-                builder.option("-density", resolution_geometry(value))
-            }
-            WriteOption::WriteSamplingFactor(value) => builder.option("-sampling-factor", value),
-            WriteOption::WriteStripMetadata => builder.literal("-strip"),
-            WriteOption::WriteDefine(define) => compile_define(builder, define),
+            WriteOption::Interlace(value) => builder.option("-interlace", interlace_name(&value)),
+            WriteOption::Density(value) => builder.option("-density", resolution_geometry(value)),
+            WriteOption::SamplingFactor(value) => builder.option("-sampling-factor", value),
+            WriteOption::StripMetadata => builder.literal("-strip"),
+            WriteOption::Define(define) => compile_define(builder, define),
         }
     }
     Ok(())
@@ -863,21 +843,21 @@ fn draw_program(primitives: &[DrawingPrimitive]) -> Result<String, ImageMagickEr
     primitives
         .iter()
         .map(|primitive| match primitive {
-            DrawingPrimitive::DrawLine(first, second) => Ok(format!(
+            DrawingPrimitive::Line(first, second) => Ok(format!(
                 "line {},{} {},{}",
                 number(first.x),
                 number(first.y),
                 number(second.x),
                 number(second.y)
             )),
-            DrawingPrimitive::DrawRectangle(rectangle) => Ok(format!(
+            DrawingPrimitive::Rectangle(rectangle) => Ok(format!(
                 "rectangle {},{} {},{}",
                 rectangle.x,
                 rectangle.y,
                 rectangle.x + rectangle.width as i64,
                 rectangle.y + rectangle.height as i64
             )),
-            DrawingPrimitive::DrawRoundedRectangle(rectangle, rx, ry) => Ok(format!(
+            DrawingPrimitive::RoundedRectangle(rectangle, rx, ry) => Ok(format!(
                 "roundrectangle {},{} {},{} {},{}",
                 rectangle.x,
                 rectangle.y,
@@ -886,14 +866,14 @@ fn draw_program(primitives: &[DrawingPrimitive]) -> Result<String, ImageMagickEr
                 number(*rx),
                 number(*ry)
             )),
-            DrawingPrimitive::DrawCircle(center, edge) => Ok(format!(
+            DrawingPrimitive::Circle(center, edge) => Ok(format!(
                 "circle {},{} {},{}",
                 number(center.x),
                 number(center.y),
                 number(edge.x),
                 number(edge.y)
             )),
-            DrawingPrimitive::DrawEllipse(center, rx, ry, start, end) => Ok(format!(
+            DrawingPrimitive::Ellipse(center, rx, ry, start, end) => Ok(format!(
                 "ellipse {},{} {},{} {},{}",
                 number(center.x),
                 number(center.y),
@@ -902,22 +882,18 @@ fn draw_program(primitives: &[DrawingPrimitive]) -> Result<String, ImageMagickEr
                 number(*start),
                 number(*end)
             )),
-            DrawingPrimitive::DrawPolygon(points) => {
-                Ok(format!("polygon {}", points_string(points)?))
-            }
-            DrawingPrimitive::DrawPolyline(points) => {
+            DrawingPrimitive::Polygon(points) => Ok(format!("polygon {}", points_string(points)?)),
+            DrawingPrimitive::Polyline(points) => {
                 Ok(format!("polyline {}", points_string(points)?))
             }
-            DrawingPrimitive::DrawBezier(points) => {
-                Ok(format!("bezier {}", points_string(points)?))
-            }
-            DrawingPrimitive::DrawText(point, text) => Ok(format!(
+            DrawingPrimitive::Bezier(points) => Ok(format!("bezier {}", points_string(points)?)),
+            DrawingPrimitive::Text(point, text) => Ok(format!(
                 "text {},{} '{}'",
                 number(point.x),
                 number(point.y),
                 text.replace('\\', "\\\\").replace('\'', "\\'")
             )),
-            DrawingPrimitive::DrawPath(path) => Ok(format!("path '{path}'")),
+            DrawingPrimitive::Path(path) => Ok(format!("path '{path}'")),
         })
         .collect::<Result<Vec<_>, _>>()
         .map(|parts| parts.join(" "))
@@ -958,10 +934,10 @@ fn format_name(format: &Format) -> Result<String, ImageMagickError> {
 
 fn frame_suffix(selection: &FrameSelection) -> String {
     match selection {
-        FrameSelection::AllFrames => String::new(),
+        FrameSelection::All => String::new(),
         FrameSelection::Frame(frame) => format!("[{frame}]"),
-        FrameSelection::FrameRange(first, last) => format!("[{first}-{last}]"),
-        FrameSelection::Frames(frames) => format!(
+        FrameSelection::Range(first, last) => format!("[{first}-{last}]"),
+        FrameSelection::Selected(frames) => format!(
             "[{}]",
             frames
                 .iter()
@@ -974,10 +950,10 @@ fn frame_suffix(selection: &FrameSelection) -> String {
 
 fn frame_expression(selection: &FrameSelection) -> String {
     match selection {
-        FrameSelection::AllFrames => "0--1".to_string(),
+        FrameSelection::All => "0--1".to_string(),
         FrameSelection::Frame(frame) => frame.to_string(),
-        FrameSelection::FrameRange(first, last) => format!("{first}-{last}"),
-        FrameSelection::Frames(frames) => frames
+        FrameSelection::Range(first, last) => format!("{first}-{last}"),
+        FrameSelection::Selected(frames) => frames
             .iter()
             .map(u64::to_string)
             .collect::<Vec<_>>()
@@ -1038,91 +1014,91 @@ fn number_list(values: &[f64]) -> String {
 
 fn gravity_name(value: &Gravity) -> String {
     match value {
-        Gravity::GravityNorthWest => "NorthWest",
-        Gravity::GravityNorth => "North",
-        Gravity::GravityNorthEast => "NorthEast",
-        Gravity::GravityWest => "West",
-        Gravity::GravityCenter => "Center",
-        Gravity::GravityEast => "East",
-        Gravity::GravitySouthWest => "SouthWest",
-        Gravity::GravitySouth => "South",
-        Gravity::GravitySouthEast => "SouthEast",
+        Gravity::NorthWest => "NorthWest",
+        Gravity::North => "North",
+        Gravity::NorthEast => "NorthEast",
+        Gravity::West => "West",
+        Gravity::Center => "Center",
+        Gravity::East => "East",
+        Gravity::SouthWest => "SouthWest",
+        Gravity::South => "South",
+        Gravity::SouthEast => "SouthEast",
     }
     .to_string()
 }
 
 fn filter_name(value: &Filter) -> String {
     match value {
-        Filter::FilterPoint => "Point",
-        Filter::FilterBox => "Box",
-        Filter::FilterTriangle => "Triangle",
-        Filter::FilterHermite => "Hermite",
-        Filter::FilterHann => "Hann",
-        Filter::FilterHamming => "Hamming",
-        Filter::FilterBlackman => "Blackman",
-        Filter::FilterGaussian => "Gaussian",
-        Filter::FilterQuadratic => "Quadratic",
-        Filter::FilterCubic => "Cubic",
-        Filter::FilterCatrom => "Catrom",
-        Filter::FilterMitchell => "Mitchell",
-        Filter::FilterLanczos => "Lanczos",
-        Filter::FilterRobidoux => "Robidoux",
-        Filter::OtherFilter(value) => return value.clone(),
+        Filter::Point => "Point",
+        Filter::Box => "Box",
+        Filter::Triangle => "Triangle",
+        Filter::Hermite => "Hermite",
+        Filter::Hann => "Hann",
+        Filter::Hamming => "Hamming",
+        Filter::Blackman => "Blackman",
+        Filter::Gaussian => "Gaussian",
+        Filter::Quadratic => "Quadratic",
+        Filter::Cubic => "Cubic",
+        Filter::Catrom => "Catrom",
+        Filter::Mitchell => "Mitchell",
+        Filter::Lanczos => "Lanczos",
+        Filter::Robidoux => "Robidoux",
+        Filter::Other(value) => return value.clone(),
     }
     .to_string()
 }
 
 fn colorspace_name(value: &Colorspace) -> String {
     match value {
-        Colorspace::ColorspaceSrgb => "sRGB",
-        Colorspace::ColorspaceRgb => "RGB",
-        Colorspace::ColorspaceGray => "Gray",
-        Colorspace::ColorspaceCmyk => "CMYK",
-        Colorspace::ColorspaceLab => "Lab",
-        Colorspace::ColorspaceLch => "LCH",
-        Colorspace::ColorspaceHsl => "HSL",
-        Colorspace::ColorspaceHsv => "HSV",
-        Colorspace::ColorspaceXyz => "XYZ",
-        Colorspace::ColorspaceYuv => "YUV",
-        Colorspace::OtherColorspace(value) => return value.clone(),
+        Colorspace::Srgb => "sRGB",
+        Colorspace::Rgb => "RGB",
+        Colorspace::Gray => "Gray",
+        Colorspace::Cmyk => "CMYK",
+        Colorspace::Lab => "Lab",
+        Colorspace::Lch => "LCH",
+        Colorspace::Hsl => "HSL",
+        Colorspace::Hsv => "HSV",
+        Colorspace::Xyz => "XYZ",
+        Colorspace::Yuv => "YUV",
+        Colorspace::Other(value) => return value.clone(),
     }
     .to_string()
 }
 
 fn intensity_method_name(value: &IntensityMethod) -> String {
     match value {
-        IntensityMethod::IntensityAverage => "Average",
-        IntensityMethod::IntensityBrightness => "Brightness",
-        IntensityMethod::IntensityLightness => "Lightness",
-        IntensityMethod::IntensityMean => "Mean",
-        IntensityMethod::IntensityMeanSquare => "MS",
-        IntensityMethod::IntensityRec601Luma => "Rec601Luma",
-        IntensityMethod::IntensityRec601Luminance => "Rec601Luminance",
-        IntensityMethod::IntensityRec709Luma => "Rec709Luma",
-        IntensityMethod::IntensityRec709Luminance => "Rec709Luminance",
-        IntensityMethod::IntensityRootMeanSquare => "RMS",
-        IntensityMethod::OtherIntensityMethod(value) => return value.clone(),
+        IntensityMethod::Average => "Average",
+        IntensityMethod::Brightness => "Brightness",
+        IntensityMethod::Lightness => "Lightness",
+        IntensityMethod::Mean => "Mean",
+        IntensityMethod::MeanSquare => "MS",
+        IntensityMethod::Rec601Luma => "Rec601Luma",
+        IntensityMethod::Rec601Luminance => "Rec601Luminance",
+        IntensityMethod::Rec709Luma => "Rec709Luma",
+        IntensityMethod::Rec709Luminance => "Rec709Luminance",
+        IntensityMethod::RootMeanSquare => "RMS",
+        IntensityMethod::Other(value) => return value.clone(),
     }
     .to_string()
 }
 
 fn channel_name(value: &Channel) -> String {
     match value {
-        Channel::ChannelRed => "R",
-        Channel::ChannelGreen => "G",
-        Channel::ChannelBlue => "B",
-        Channel::ChannelAlpha => "A",
-        Channel::ChannelBlack => "K",
-        Channel::ChannelCyan => "C",
-        Channel::ChannelMagenta => "M",
-        Channel::ChannelYellow => "Y",
-        Channel::ChannelGray => "Gray",
-        Channel::ChannelRgb => "RGB",
-        Channel::ChannelRgba => "RGBA",
-        Channel::ChannelCmyk => "CMYK",
-        Channel::ChannelCmyka => "CMYKA",
-        Channel::ChannelAll => "All",
-        Channel::OtherChannel(value) => return value.clone(),
+        Channel::Red => "R",
+        Channel::Green => "G",
+        Channel::Blue => "B",
+        Channel::Alpha => "A",
+        Channel::Black => "K",
+        Channel::Cyan => "C",
+        Channel::Magenta => "M",
+        Channel::Yellow => "Y",
+        Channel::Gray => "Gray",
+        Channel::Rgb => "RGB",
+        Channel::Rgba => "RGBA",
+        Channel::Cmyk => "CMYK",
+        Channel::Cmyka => "CMYKA",
+        Channel::All => "All",
+        Channel::Other(value) => return value.clone(),
     }
     .to_string()
 }
@@ -1141,223 +1117,223 @@ fn stream_channel_map(values: &[Channel]) -> String {
 
 fn alpha_name(value: &AlphaMode) -> String {
     match value {
-        AlphaMode::AlphaActivate => "on",
-        AlphaMode::AlphaDeactivate => "off",
-        AlphaMode::AlphaSet => "set",
-        AlphaMode::AlphaOpaque => "opaque",
-        AlphaMode::AlphaTransparent => "transparent",
-        AlphaMode::AlphaExtract => "extract",
-        AlphaMode::AlphaCopy => "copy",
-        AlphaMode::AlphaShape => "shape",
-        AlphaMode::AlphaBackground => "background",
-        AlphaMode::OtherAlphaMode(value) => return value.clone(),
+        AlphaMode::Activate => "on",
+        AlphaMode::Deactivate => "off",
+        AlphaMode::Set => "set",
+        AlphaMode::Opaque => "opaque",
+        AlphaMode::Transparent => "transparent",
+        AlphaMode::Extract => "extract",
+        AlphaMode::Copy => "copy",
+        AlphaMode::Shape => "shape",
+        AlphaMode::Background => "background",
+        AlphaMode::Other(value) => return value.clone(),
     }
     .to_string()
 }
 
 fn noise_name(value: &NoiseKind) -> String {
     match value {
-        NoiseKind::NoiseGaussian => "Gaussian",
-        NoiseKind::NoiseImpulse => "Impulse",
-        NoiseKind::NoiseLaplacian => "Laplacian",
-        NoiseKind::NoiseMultiplicativeGaussian => "Multiplicative",
-        NoiseKind::NoisePoisson => "Poisson",
-        NoiseKind::NoiseRandom => "Random",
-        NoiseKind::NoiseUniform => "Uniform",
-        NoiseKind::OtherNoise(value) => return value.clone(),
+        NoiseKind::Gaussian => "Gaussian",
+        NoiseKind::Impulse => "Impulse",
+        NoiseKind::Laplacian => "Laplacian",
+        NoiseKind::MultiplicativeGaussian => "Multiplicative",
+        NoiseKind::Poisson => "Poisson",
+        NoiseKind::Random => "Random",
+        NoiseKind::Uniform => "Uniform",
+        NoiseKind::Other(value) => return value.clone(),
     }
     .to_string()
 }
 
 fn compose_name(value: &ComposeOperator) -> String {
     match value {
-        ComposeOperator::ComposeOver => "Over",
-        ComposeOperator::ComposeAtop => "Atop",
-        ComposeOperator::ComposeIn => "In",
-        ComposeOperator::ComposeOut => "Out",
-        ComposeOperator::ComposeXor => "Xor",
-        ComposeOperator::ComposeMultiply => "Multiply",
-        ComposeOperator::ComposeScreen => "Screen",
-        ComposeOperator::ComposeOverlay => "Overlay",
-        ComposeOperator::ComposeDarken => "Darken",
-        ComposeOperator::ComposeLighten => "Lighten",
-        ComposeOperator::ComposeDifference => "Difference",
-        ComposeOperator::ComposeExclusion => "Exclusion",
-        ComposeOperator::ComposePlus => "Plus",
-        ComposeOperator::ComposeMinus => "Minus",
-        ComposeOperator::ComposeCopy => "Copy",
-        ComposeOperator::ComposeCopyAlpha => "CopyAlpha",
-        ComposeOperator::ComposeDstOver => "DstOver",
-        ComposeOperator::ComposeSrc => "Src",
-        ComposeOperator::ComposeDst => "Dst",
-        ComposeOperator::OtherCompose(value) => return value.clone(),
+        ComposeOperator::Over => "Over",
+        ComposeOperator::Atop => "Atop",
+        ComposeOperator::In => "In",
+        ComposeOperator::Out => "Out",
+        ComposeOperator::Xor => "Xor",
+        ComposeOperator::Multiply => "Multiply",
+        ComposeOperator::Screen => "Screen",
+        ComposeOperator::Overlay => "Overlay",
+        ComposeOperator::Darken => "Darken",
+        ComposeOperator::Lighten => "Lighten",
+        ComposeOperator::Difference => "Difference",
+        ComposeOperator::Exclusion => "Exclusion",
+        ComposeOperator::Plus => "Plus",
+        ComposeOperator::Minus => "Minus",
+        ComposeOperator::Copy => "Copy",
+        ComposeOperator::CopyAlpha => "CopyAlpha",
+        ComposeOperator::DstOver => "DstOver",
+        ComposeOperator::Src => "Src",
+        ComposeOperator::Dst => "Dst",
+        ComposeOperator::Other(value) => return value.clone(),
     }
     .to_string()
 }
 
 fn compression_name(value: &Compression) -> String {
     match value {
-        Compression::CompressionNone => "None",
-        Compression::CompressionBZip => "BZip",
-        Compression::CompressionFax => "Fax",
-        Compression::CompressionGroup4 => "Group4",
-        Compression::CompressionJpeg => "JPEG",
-        Compression::CompressionLosslessJpeg => "LosslessJPEG",
-        Compression::CompressionLzw => "LZW",
-        Compression::CompressionRle => "RLE",
-        Compression::CompressionZip => "Zip",
-        Compression::CompressionZstd => "Zstd",
-        Compression::OtherCompression(value) => return value.clone(),
+        Compression::None => "None",
+        Compression::BZip => "BZip",
+        Compression::Fax => "Fax",
+        Compression::Group4 => "Group4",
+        Compression::Jpeg => "JPEG",
+        Compression::LosslessJpeg => "LosslessJPEG",
+        Compression::Lzw => "LZW",
+        Compression::Rle => "RLE",
+        Compression::Zip => "Zip",
+        Compression::Zstd => "Zstd",
+        Compression::Other(value) => return value.clone(),
     }
     .to_string()
 }
 
 fn interlace_name(value: &Interlace) -> String {
     match value {
-        Interlace::InterlaceNone => "None",
-        Interlace::InterlaceLine => "Line",
-        Interlace::InterlacePlane => "Plane",
-        Interlace::InterlacePartition => "Partition",
-        Interlace::InterlaceGif => "GIF",
-        Interlace::InterlaceJpeg => "JPEG",
-        Interlace::InterlacePng => "PNG",
-        Interlace::OtherInterlace(value) => return value.clone(),
+        Interlace::None => "None",
+        Interlace::Line => "Line",
+        Interlace::Plane => "Plane",
+        Interlace::Partition => "Partition",
+        Interlace::Gif => "GIF",
+        Interlace::Jpeg => "JPEG",
+        Interlace::Png => "PNG",
+        Interlace::Other(value) => return value.clone(),
     }
     .to_string()
 }
 
 fn morphology_name(value: &MorphologyMethod) -> String {
     match value {
-        MorphologyMethod::MorphologyConvolve => "Convolve",
-        MorphologyMethod::MorphologyCorrelate => "Correlate",
-        MorphologyMethod::MorphologyErode => "Erode",
-        MorphologyMethod::MorphologyDilate => "Dilate",
-        MorphologyMethod::MorphologyOpen => "Open",
-        MorphologyMethod::MorphologyClose => "Close",
-        MorphologyMethod::MorphologyEdgeIn => "EdgeIn",
-        MorphologyMethod::MorphologyEdgeOut => "EdgeOut",
-        MorphologyMethod::MorphologyEdge => "Edge",
-        MorphologyMethod::MorphologyTopHat => "TopHat",
-        MorphologyMethod::MorphologyBottomHat => "BottomHat",
-        MorphologyMethod::MorphologyHitAndMiss => "HitAndMiss",
-        MorphologyMethod::MorphologyThinning => "Thinning",
-        MorphologyMethod::MorphologyThicken => "Thicken",
-        MorphologyMethod::OtherMorphology(value) => return value.clone(),
+        MorphologyMethod::Convolve => "Convolve",
+        MorphologyMethod::Correlate => "Correlate",
+        MorphologyMethod::Erode => "Erode",
+        MorphologyMethod::Dilate => "Dilate",
+        MorphologyMethod::Open => "Open",
+        MorphologyMethod::Close => "Close",
+        MorphologyMethod::EdgeIn => "EdgeIn",
+        MorphologyMethod::EdgeOut => "EdgeOut",
+        MorphologyMethod::Edge => "Edge",
+        MorphologyMethod::TopHat => "TopHat",
+        MorphologyMethod::BottomHat => "BottomHat",
+        MorphologyMethod::HitAndMiss => "HitAndMiss",
+        MorphologyMethod::Thinning => "Thinning",
+        MorphologyMethod::Thicken => "Thicken",
+        MorphologyMethod::Other(value) => return value.clone(),
     }
     .to_string()
 }
 
 fn distort_name(value: &DistortMethod) -> String {
     match value {
-        DistortMethod::DistortAffine => "Affine",
-        DistortMethod::DistortAffineProjection => "AffineProjection",
-        DistortMethod::DistortScaleRotateTranslate => "ScaleRotateTranslate",
-        DistortMethod::DistortPerspective => "Perspective",
-        DistortMethod::DistortPerspectiveProjection => "PerspectiveProjection",
-        DistortMethod::DistortBilinearForward => "BilinearForward",
-        DistortMethod::DistortBilinearReverse => "BilinearReverse",
-        DistortMethod::DistortPolynomial => "Polynomial",
-        DistortMethod::DistortArc => "Arc",
-        DistortMethod::DistortPolar => "Polar",
-        DistortMethod::DistortDePolar => "DePolar",
-        DistortMethod::DistortBarrel => "Barrel",
-        DistortMethod::DistortBarrelInverse => "BarrelInverse",
-        DistortMethod::OtherDistort(value) => return value.clone(),
+        DistortMethod::Affine => "Affine",
+        DistortMethod::AffineProjection => "AffineProjection",
+        DistortMethod::ScaleRotateTranslate => "ScaleRotateTranslate",
+        DistortMethod::Perspective => "Perspective",
+        DistortMethod::PerspectiveProjection => "PerspectiveProjection",
+        DistortMethod::BilinearForward => "BilinearForward",
+        DistortMethod::BilinearReverse => "BilinearReverse",
+        DistortMethod::Polynomial => "Polynomial",
+        DistortMethod::Arc => "Arc",
+        DistortMethod::Polar => "Polar",
+        DistortMethod::DePolar => "DePolar",
+        DistortMethod::Barrel => "Barrel",
+        DistortMethod::BarrelInverse => "BarrelInverse",
+        DistortMethod::Other(value) => return value.clone(),
     }
     .to_string()
 }
 
 fn evaluate_name(value: &EvaluateOperator) -> String {
     match value {
-        EvaluateOperator::EvaluateAdd => "Add",
-        EvaluateOperator::EvaluateSubtract => "Subtract",
-        EvaluateOperator::EvaluateMultiply => "Multiply",
-        EvaluateOperator::EvaluateDivide => "Divide",
-        EvaluateOperator::EvaluatePow => "Pow",
-        EvaluateOperator::EvaluateLog => "Log",
-        EvaluateOperator::EvaluateMin => "Min",
-        EvaluateOperator::EvaluateMax => "Max",
-        EvaluateOperator::EvaluateSet => "Set",
-        EvaluateOperator::EvaluateThreshold => "Threshold",
-        EvaluateOperator::EvaluateAnd => "And",
-        EvaluateOperator::EvaluateOr => "Or",
-        EvaluateOperator::EvaluateXor => "Xor",
-        EvaluateOperator::OtherEvaluate(value) => return value.clone(),
+        EvaluateOperator::Add => "Add",
+        EvaluateOperator::Subtract => "Subtract",
+        EvaluateOperator::Multiply => "Multiply",
+        EvaluateOperator::Divide => "Divide",
+        EvaluateOperator::Pow => "Pow",
+        EvaluateOperator::Log => "Log",
+        EvaluateOperator::Min => "Min",
+        EvaluateOperator::Max => "Max",
+        EvaluateOperator::Set => "Set",
+        EvaluateOperator::Threshold => "Threshold",
+        EvaluateOperator::And => "And",
+        EvaluateOperator::Or => "Or",
+        EvaluateOperator::Xor => "Xor",
+        EvaluateOperator::Other(value) => return value.clone(),
     }
     .to_string()
 }
 
 fn metric_name(value: &ComparisonMetric) -> String {
     match value {
-        ComparisonMetric::MetricAbsoluteError => "AE",
-        ComparisonMetric::MetricFuzz => "FUZZ",
-        ComparisonMetric::MetricMeanAbsoluteError => "MAE",
-        ComparisonMetric::MetricMeanErrorPerPixel => "MEPP",
-        ComparisonMetric::MetricMeanSquaredError => "MSE",
-        ComparisonMetric::MetricNormalizedCrossCorrelation => "NCC",
-        ComparisonMetric::MetricPeakAbsoluteError => "PAE",
-        ComparisonMetric::MetricPeakSignalToNoiseRatio => "PSNR",
-        ComparisonMetric::MetricRootMeanSquaredError => "RMSE",
-        ComparisonMetric::MetricStructuralSimilarity => "SSIM",
-        ComparisonMetric::MetricStructuralDissimilarity => "DSSIM",
-        ComparisonMetric::OtherMetric(value) => return value.clone(),
+        ComparisonMetric::AbsoluteError => "AE",
+        ComparisonMetric::Fuzz => "FUZZ",
+        ComparisonMetric::MeanAbsoluteError => "MAE",
+        ComparisonMetric::MeanErrorPerPixel => "MEPP",
+        ComparisonMetric::MeanSquaredError => "MSE",
+        ComparisonMetric::NormalizedCrossCorrelation => "NCC",
+        ComparisonMetric::PeakAbsoluteError => "PAE",
+        ComparisonMetric::PeakSignalToNoiseRatio => "PSNR",
+        ComparisonMetric::RootMeanSquaredError => "RMSE",
+        ComparisonMetric::StructuralSimilarity => "SSIM",
+        ComparisonMetric::StructuralDissimilarity => "DSSIM",
+        ComparisonMetric::Other(value) => return value.clone(),
     }
     .to_string()
 }
 
 fn pixel_storage_name(value: &PixelStorageType) -> String {
     match value {
-        PixelStorageType::PixelsChar => "char",
-        PixelStorageType::PixelsShort => "short",
-        PixelStorageType::PixelsInteger => "integer",
-        PixelStorageType::PixelsLong => "long",
-        PixelStorageType::PixelsFloat => "float",
-        PixelStorageType::PixelsDouble => "double",
-        PixelStorageType::PixelsQuantum => "quantum",
+        PixelStorageType::Char => "char",
+        PixelStorageType::Short => "short",
+        PixelStorageType::Integer => "integer",
+        PixelStorageType::Long => "long",
+        PixelStorageType::Float => "float",
+        PixelStorageType::Double => "double",
+        PixelStorageType::Quantum => "quantum",
     }
     .to_string()
 }
 
 fn builtin_name(value: &BuiltinImageKind) -> String {
     match value {
-        BuiltinImageKind::BuiltinLogo => "logo:",
-        BuiltinImageKind::BuiltinRose => "rose:",
-        BuiltinImageKind::BuiltinWizard => "wizard:",
-        BuiltinImageKind::BuiltinGranite => "granite:",
-        BuiltinImageKind::BuiltinNetscape => "netscape:",
+        BuiltinImageKind::Logo => "logo:",
+        BuiltinImageKind::Rose => "rose:",
+        BuiltinImageKind::Wizard => "wizard:",
+        BuiltinImageKind::Granite => "granite:",
+        BuiltinImageKind::Netscape => "netscape:",
     }
     .to_string()
 }
 
 fn capability_name(value: &CapabilityDomain) -> String {
     match value {
-        CapabilityDomain::CapabilityAlign => "Align",
-        CapabilityDomain::CapabilityAlpha => "Alpha",
-        CapabilityDomain::CapabilityChannel => "Channel",
-        CapabilityDomain::CapabilityColorspace => "Colorspace",
-        CapabilityDomain::CapabilityCommand => "Command",
-        CapabilityDomain::CapabilityCompose => "Compose",
-        CapabilityDomain::CapabilityCompress => "Compress",
-        CapabilityDomain::CapabilityDistort => "Distort",
-        CapabilityDomain::CapabilityDither => "Dither",
-        CapabilityDomain::CapabilityEvaluate => "Evaluate",
-        CapabilityDomain::CapabilityFilter => "Filter",
-        CapabilityDomain::CapabilityFont => "Font",
-        CapabilityDomain::CapabilityFormat => "Format",
-        CapabilityDomain::CapabilityGravity => "Gravity",
-        CapabilityDomain::CapabilityInterlace => "Interlace",
-        CapabilityDomain::CapabilityInterpolate => "Interpolate",
-        CapabilityDomain::CapabilityKernel => "Kernel",
-        CapabilityDomain::CapabilityMetric => "Metric",
-        CapabilityDomain::CapabilityMorphology => "Morphology",
-        CapabilityDomain::CapabilityNoise => "Noise",
-        CapabilityDomain::CapabilityOrientation => "Orientation",
-        CapabilityDomain::CapabilityPolicy => "Policy",
-        CapabilityDomain::CapabilityStorage => "Storage",
-        CapabilityDomain::CapabilityTool => "Tool",
-        CapabilityDomain::CapabilityType => "Type",
-        CapabilityDomain::CapabilityUnits => "Units",
-        CapabilityDomain::OtherCapability(value) => return value.clone(),
+        CapabilityDomain::Align => "Align",
+        CapabilityDomain::Alpha => "Alpha",
+        CapabilityDomain::Channel => "Channel",
+        CapabilityDomain::Colorspace => "Colorspace",
+        CapabilityDomain::Command => "Command",
+        CapabilityDomain::Compose => "Compose",
+        CapabilityDomain::Compress => "Compress",
+        CapabilityDomain::Distort => "Distort",
+        CapabilityDomain::Dither => "Dither",
+        CapabilityDomain::Evaluate => "Evaluate",
+        CapabilityDomain::Filter => "Filter",
+        CapabilityDomain::Font => "Font",
+        CapabilityDomain::Format => "Format",
+        CapabilityDomain::Gravity => "Gravity",
+        CapabilityDomain::Interlace => "Interlace",
+        CapabilityDomain::Interpolate => "Interpolate",
+        CapabilityDomain::Kernel => "Kernel",
+        CapabilityDomain::Metric => "Metric",
+        CapabilityDomain::Morphology => "Morphology",
+        CapabilityDomain::Noise => "Noise",
+        CapabilityDomain::Orientation => "Orientation",
+        CapabilityDomain::Policy => "Policy",
+        CapabilityDomain::Storage => "Storage",
+        CapabilityDomain::Tool => "Tool",
+        CapabilityDomain::Type => "Type",
+        CapabilityDomain::Units => "Units",
+        CapabilityDomain::Other(value) => return value.clone(),
     }
     .to_string()
 }
@@ -1379,7 +1355,7 @@ mod tests {
             format: Format {
                 name: "png".to_string(),
             },
-            mode: OutputMode::AdjoinFrames,
+            mode: OutputMode::Adjoin,
             options: vec![],
         }
     }
@@ -1390,7 +1366,7 @@ mod tests {
             content: blake3::hash(b"input"),
         };
         let plan = transform_plan(
-            ImageSource::StoredImage(image, FrameSelection::Frame(2), vec![]),
+            ImageSource::Stored(image, FrameSelection::Frame(2), vec![]),
             vec![
                 ImageOperation::AutoOrient,
                 ImageOperation::Resize(ResizeGeometry::FitWithin(Size {
@@ -1437,16 +1413,14 @@ mod tests {
     #[test]
     fn grayscale_compiles_an_intensity_method() {
         let plan = transform_plan(
-            ImageSource::StoredImage(
+            ImageSource::Stored(
                 Image {
                     content: blake3::hash(b"input"),
                 },
-                FrameSelection::AllFrames,
+                FrameSelection::All,
                 vec![],
             ),
-            vec![ImageOperation::Grayscale(
-                IntensityMethod::IntensityRec709Luminance,
-            )],
+            vec![ImageOperation::Grayscale(IntensityMethod::Rec709Luminance)],
             png(),
         )
         .unwrap();
@@ -1467,8 +1441,8 @@ mod tests {
             vec![Image {
                 content: blake3::hash(b"image"),
             }],
-            MontageLayout::MontageColumns(1),
-            vec![MontageOption::MontageFont(blake3::hash(b"font"))],
+            MontageLayout::Columns(1),
+            vec![MontageOption::Font(blake3::hash(b"font"))],
             png(),
         )
         .unwrap();

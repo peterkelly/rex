@@ -16,28 +16,28 @@ let
             color = Some "#0072b2",
             width = 1.8
         },
-        head = G.FilledArrowHead
+        head = G.ArrowHead.Filled
     },
     plot = G.Plot2D {
         title = Some "Vector field",
         x_axis = G.Axis {
             label = Some "x",
-            range = G.NumericRange (G.NumericBounds {
+            range = G.AxisRange.Numeric (G.NumericBounds {
                 minimum = -0.25,
                 maximum = 2.75
             })
         },
         y_axis = G.Axis {
             label = Some "y",
-            range = G.NumericRange (G.NumericBounds {
+            range = G.AxisRange.Numeric (G.NumericBounds {
                 minimum = -0.25,
                 maximum = 2.0
             })
         },
         aspect_ratio = Some 1.0,
-        series = [G.VectorSeries vectors]
+        series = [G.Series2D.Vector vectors]
     }
 in
     G.render_svg
-        (G.Figure { panels = [Some (G.Panel2D plot)] })
+        (G.Figure { panels = [Some (G.Panel.TwoDimensional plot)] })
         G.SvgOptions {}

@@ -23,7 +23,7 @@ FF.transcode
         video = None,
         audio = Some (FF.AudioEncoding {
             codec = FF.PcmS16Le,
-            options = [FF.AudioChannels 2]
+            options = [FF.AudioEncodeOption.Channels 2]
         }),
         subtitle = None,
         options = [],

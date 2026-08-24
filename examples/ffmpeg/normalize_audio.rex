@@ -22,7 +22,7 @@ fn main (input: Hash) -> Result Media FF.FfmpegError =
         (FF.StoredMedia (Media { content = input }))
         [
             FF.DropVideo,
-            FF.AudioOperation
+            FF.MediaOperation.Audio
                 (FF.NormalizeLoudness (FF.LoudnessNormalization {
                     integrated_loudness = -16.0,
                     loudness_range = 11.0,
@@ -34,7 +34,7 @@ fn main (input: Hash) -> Result Media FF.FfmpegError =
             video = None,
             audio = Some (FF.AudioEncoding {
                 codec = FF.Aac,
-                options = [FF.AudioBitRate 192000]
+                options = [FF.AudioEncodeOption.BitRate 192000]
             }),
             subtitle = None,
             options = [],

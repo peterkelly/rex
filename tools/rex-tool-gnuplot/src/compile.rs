@@ -91,8 +91,8 @@ impl<'a> Serializer<'a> {
         let mut panels = Vec::with_capacity(self.figure.panels.len());
         for panel in &self.figure.panels {
             panels.push(match panel {
-                Some(Panel::Panel2D(plot)) => Some(self.serialize_plot2d(plot)?),
-                Some(Panel::Panel3D(plot)) => Some(self.serialize_plot3d(plot)?),
+                Some(Panel::TwoDimensional(plot)) => Some(self.serialize_plot2d(plot)?),
+                Some(Panel::ThreeDimensional(plot)) => Some(self.serialize_plot3d(plot)?),
                 None => None,
             });
         }
@@ -117,8 +117,8 @@ impl<'a> Serializer<'a> {
         }
         write!(output, " layout {rows},{columns}").unwrap();
         match self.figure.layout.fill_order {
-            GridFillOrder::FillRowsFirst => output.push_str(" rowsfirst"),
-            GridFillOrder::FillColumnsFirst => output.push_str(" columnsfirst"),
+            GridFillOrder::RowsFirst => output.push_str(" rowsfirst"),
+            GridFillOrder::ColumnsFirst => output.push_str(" columnsfirst"),
         }
         writeln!(
             output,
@@ -194,7 +194,7 @@ impl<'a> Serializer<'a> {
         let bar_count = plot
             .series
             .iter()
-            .filter(|series| matches!(series, Series2D::BarSeries2D(_)))
+            .filter(|series| matches!(series, Series2D::Bar(_)))
             .count();
         if bar_count > 0 && (bar_count != 1 || plot.series.len() != 1) {
             return Err(invalid(
@@ -264,7 +264,7 @@ impl<'a> Serializer<'a> {
         }
         self.write_annotations2d(&mut output, &plot.annotations)?;
 
-        if let [Series2D::BarSeries2D(chart)] = plot.series.as_slice() {
+        if let [Series2D::Bar(chart)] = plot.series.as_slice() {
             let (setting, clauses) = self.serialize_bar_chart(chart)?;
             output.push_str(&setting);
             writeln!(output, "plot {}", clauses.join(", \\\n    ")).unwrap();
@@ -292,7 +292,7 @@ impl<'a> Serializer<'a> {
             .filter(|series| {
                 matches!(
                     series,
-                    Series3D::SurfaceSeries3D(Surface3D {
+                    Series3D::Surface(Surface3D {
                         mode: SurfaceMode::ContourLines,
                         ..
                     })
@@ -412,8 +412,8 @@ impl<'a> Serializer<'a> {
             }
         }
         match axis.scale {
-            AxisScale::LinearScale => writeln!(output, "unset logscale {name}").unwrap(),
-            AxisScale::LogScale(base) => {
+            AxisScale::Linear => writeln!(output, "unset logscale {name}").unwrap(),
+            AxisScale::Log(base) => {
                 writeln!(output, "set logscale {name} {}", number(base)?).unwrap()
             }
         }
@@ -429,8 +429,8 @@ impl<'a> Serializer<'a> {
         )
         .unwrap();
         match &axis.tick_format {
-            TickFormat::AutomaticTicks => writeln!(output, "set format {name}").unwrap(),
-            TickFormat::NumericTicks(format) | TickFormat::TimeTicks(format) => {
+            TickFormat::Automatic => writeln!(output, "set format {name}").unwrap(),
+            TickFormat::Numeric(format) | TickFormat::Time(format) => {
                 writeln!(output, "set format {name} {}", quoted(format)?).unwrap()
             }
         }
@@ -454,7 +454,7 @@ impl<'a> Serializer<'a> {
         clauses: &mut Vec<String>,
     ) -> Result<(), GnuplotError> {
         match series {
-            Series2D::CurveSeries(curve) => {
+            Series2D::Curve(curve) => {
                 let block = serialize_xy_data(&curve.data)?;
                 let data = self.add_data(block);
                 let title = title_clause(curve.title.as_deref())?;
@@ -462,7 +462,7 @@ impl<'a> Serializer<'a> {
                 let style = curve_style(curve, fallback)?;
                 clauses.push(format!("{data} using 1:2 {axes} {title} {style}"));
             }
-            Series2D::ErrorSeries(errors) => {
+            Series2D::Error(errors) => {
                 let (block, kind) = serialize_errors(errors)?;
                 let data = self.add_data(block);
                 let title = title_clause(errors.title.as_deref())?;
@@ -482,7 +482,7 @@ impl<'a> Serializer<'a> {
                     error_using(kind)
                 ));
             }
-            Series2D::BandSeries(band) => {
+            Series2D::Band(band) => {
                 let block = serialize_band(&band.data)?;
                 let data = self.add_data(block);
                 let title = title_clause(band.title.as_deref())?;
@@ -492,7 +492,7 @@ impl<'a> Serializer<'a> {
                     "{data} using 1:2:3 {axes} {title} with filledcurves {fill}"
                 ));
             }
-            Series2D::HistogramSeries(histogram) => {
+            Series2D::Histogram(histogram) => {
                 let block = serialize_histogram(histogram)?;
                 let data = self.add_data(block);
                 let title = title_clause(histogram.title.as_deref())?;
@@ -502,7 +502,7 @@ impl<'a> Serializer<'a> {
                     "{data} using 1:2:3 {axes} {title} with boxes {fill}"
                 ));
             }
-            Series2D::HeatmapSeries(heatmap) => {
+            Series2D::Heatmap(heatmap) => {
                 validate_grid(&heatmap.grid, "heatmap")?;
                 let block = serialize_grid(&heatmap.grid)?;
                 let data = self.add_data(block);
@@ -510,7 +510,7 @@ impl<'a> Serializer<'a> {
                 let axes = axes_clause(heatmap.axes);
                 clauses.push(format!("{data} using 1:2:3 {axes} {title} with image"));
             }
-            Series2D::VectorSeries(vectors) => {
+            Series2D::Vector(vectors) => {
                 if vectors.data.is_empty() {
                     return Err(invalid("a vector series must contain at least one vector"));
                 }
@@ -538,7 +538,7 @@ impl<'a> Serializer<'a> {
                     arrow_head(vectors.head)
                 ));
             }
-            Series2D::LabelSeries(labels) => {
+            Series2D::Label(labels) => {
                 if labels.data.is_empty() {
                     return Err(invalid("a label series must contain at least one label"));
                 }
@@ -571,7 +571,7 @@ impl<'a> Serializer<'a> {
                     quoted(color)?
                 ));
             }
-            Series2D::BarSeries2D(_) => {
+            Series2D::Bar(_) => {
                 return Err(invalid("internal bar-chart placement error"));
             }
         }
@@ -633,10 +633,10 @@ impl<'a> Serializer<'a> {
             ));
         }
         let setting = match chart.arrangement {
-            BarArrangement::ClusteredBars => {
+            BarArrangement::Clustered => {
                 format!("set style histogram clustered gap {}\n", number(chart.gap)?)
             }
-            BarArrangement::StackedBars => "set style histogram rowstacked\n".to_owned(),
+            BarArrangement::Stacked => "set style histogram rowstacked\n".to_owned(),
         };
         Ok((setting, clauses))
     }
@@ -648,14 +648,14 @@ impl<'a> Serializer<'a> {
         clauses: &mut Vec<String>,
     ) -> Result<(), GnuplotError> {
         match series {
-            Series3D::PointSeries3D(points) => {
+            Series3D::Point(points) => {
                 let block = serialize_points3d(&points.data, "point cloud")?;
                 let data = self.add_data(block);
                 let title = title_clause(points.title.as_deref())?;
                 let style = point_options(&points.points, fallback, true)?;
                 clauses.push(format!("{data} using 1:2:3 {title} with points {style}"));
             }
-            Series3D::PathSeries3D(path) => {
+            Series3D::Path(path) => {
                 let block = serialize_path3d(&path.data)?;
                 let data = self.add_data(block);
                 let title = title_clause(path.title.as_deref())?;
@@ -670,17 +670,17 @@ impl<'a> Serializer<'a> {
                     None => clauses.push(format!("{data} using 1:2:3 {title} with lines {line}")),
                 }
             }
-            Series3D::SurfaceSeries3D(surface) => {
+            Series3D::Surface(surface) => {
                 validate_grid(&surface.grid, "surface")?;
                 let block = serialize_grid(&surface.grid)?;
                 let data = self.add_data(block);
                 let title = title_clause(surface.title.as_deref())?;
                 let line = line_options(&surface.line, fallback, true)?;
                 let clause = match surface.mode {
-                    SurfaceMode::WireframeSurface => {
+                    SurfaceMode::Wireframe => {
                         format!("{data} using 1:2:3 {title} with lines {line}")
                     }
-                    SurfaceMode::ColoredSurface => {
+                    SurfaceMode::Colored => {
                         format!("{data} using 1:2:3 {title} with pm3d")
                     }
                     SurfaceMode::ContourLines => {
@@ -704,7 +704,7 @@ impl<'a> Serializer<'a> {
         for annotation in annotations {
             let tag = self.take_tag();
             match annotation {
-                Annotation2D::TextAnnotation(text) => {
+                Annotation2D::Text(text) => {
                     validate_font(&text.font)?;
                     writeln!(
                         output,
@@ -721,7 +721,7 @@ impl<'a> Serializer<'a> {
                     )
                     .unwrap();
                 }
-                Annotation2D::ArrowAnnotation(arrow) => {
+                Annotation2D::Arrow(arrow) => {
                     let line =
                         line_options(&arrow.line, &self.figure.theme.foreground_color, true)?;
                     writeln!(
@@ -738,14 +738,14 @@ impl<'a> Serializer<'a> {
                     let line =
                         line_options(&reference.line, &self.figure.theme.foreground_color, true)?;
                     match reference.orientation {
-                        ReferenceOrientation::HorizontalReference => writeln!(
+                        ReferenceOrientation::Horizontal => writeln!(
                             output,
                             "set arrow {tag} from graph 0, first {} to graph 1, first {} nohead {line}",
                             number(reference.value)?,
                             number(reference.value)?
                         )
                         .unwrap(),
-                        ReferenceOrientation::VerticalReference => writeln!(
+                        ReferenceOrientation::Vertical => writeln!(
                             output,
                             "set arrow {tag} from first {}, graph 0 to first {}, graph 1 nohead {line}",
                             number(reference.value)?,
@@ -756,7 +756,7 @@ impl<'a> Serializer<'a> {
                     if let Some(label) = &reference.label {
                         let label_tag = self.take_tag();
                         match reference.orientation {
-                            ReferenceOrientation::HorizontalReference => writeln!(
+                            ReferenceOrientation::Horizontal => writeln!(
                                 output,
                                 "set label {label_tag} {} at graph 0.02, first {} left front textcolor rgb {} noenhanced",
                                 quoted(label)?,
@@ -764,7 +764,7 @@ impl<'a> Serializer<'a> {
                                 quoted(&self.figure.theme.foreground_color)?
                             )
                             .unwrap(),
-                            ReferenceOrientation::VerticalReference => writeln!(
+                            ReferenceOrientation::Vertical => writeln!(
                                 output,
                                 "set label {label_tag} {} at first {}, graph 0.98 right front rotate by 90 textcolor rgb {} noenhanced",
                                 quoted(label)?,
@@ -788,7 +788,7 @@ impl<'a> Serializer<'a> {
         for annotation in annotations {
             let tag = self.take_tag();
             match annotation {
-                Annotation3D::TextAnnotation3DValue(text) => {
+                Annotation3D::Text(text) => {
                     validate_point3d(text.position, "3-D annotation")?;
                     validate_font(&text.font)?;
                     writeln!(
@@ -808,7 +808,7 @@ impl<'a> Serializer<'a> {
                     )
                     .unwrap();
                 }
-                Annotation3D::ArrowAnnotation3DValue(arrow) => {
+                Annotation3D::Arrow(arrow) => {
                     validate_point3d(arrow.from, "3-D arrow start")?;
                     validate_point3d(arrow.to, "3-D arrow end")?;
                     let line =
@@ -864,24 +864,24 @@ fn domains_2d(plot: &Plot2D) -> Result<Domains2D, GnuplotError> {
     };
     for series in &plot.series {
         let (binding, domain) = match series {
-            Series2D::CurveSeries(curve) => (
+            Series2D::Curve(curve) => (
                 curve.axes,
                 match curve.data {
-                    XYData::NumericXY(_) | XYData::NumericSegments(_) => AxisDomain::Numeric,
-                    XYData::TimeXY(_) | XYData::TimeSegments(_) => AxisDomain::Time,
+                    XYData::Numeric(_) | XYData::NumericSegments(_) => AxisDomain::Numeric,
+                    XYData::Time(_) | XYData::TimeSegments(_) => AxisDomain::Time,
                 },
             ),
-            Series2D::ErrorSeries(value) => (value.axes, AxisDomain::Numeric),
-            Series2D::BandSeries(value) => (value.axes, AxisDomain::Numeric),
-            Series2D::HistogramSeries(value) => (value.axes, AxisDomain::Numeric),
-            Series2D::HeatmapSeries(value) => (value.axes, AxisDomain::Numeric),
-            Series2D::VectorSeries(value) => (value.axes, AxisDomain::Numeric),
-            Series2D::LabelSeries(value) => (value.axes, AxisDomain::Numeric),
-            Series2D::BarSeries2D(_) => (AxisBinding::PrimaryAxes, AxisDomain::Numeric),
+            Series2D::Error(value) => (value.axes, AxisDomain::Numeric),
+            Series2D::Band(value) => (value.axes, AxisDomain::Numeric),
+            Series2D::Histogram(value) => (value.axes, AxisDomain::Numeric),
+            Series2D::Heatmap(value) => (value.axes, AxisDomain::Numeric),
+            Series2D::Vector(value) => (value.axes, AxisDomain::Numeric),
+            Series2D::Label(value) => (value.axes, AxisDomain::Numeric),
+            Series2D::Bar(_) => (AxisBinding::Primary, AxisDomain::Numeric),
         };
         let target = match binding {
-            AxisBinding::PrimaryAxes | AxisBinding::SecondaryY => &mut domains.x1,
-            AxisBinding::SecondaryX | AxisBinding::SecondaryAxes => &mut domains.x2,
+            AxisBinding::Primary | AxisBinding::SecondaryY => &mut domains.x1,
+            AxisBinding::SecondaryX | AxisBinding::Secondary => &mut domains.x2,
         };
         merge_domain(target, domain)?;
     }
@@ -1042,8 +1042,8 @@ fn validate_palette(palette: &Palette) -> Result<(), GnuplotError> {
 
 fn validate_axis(name: &str, axis: &Axis, domain: AxisDomain) -> Result<(), GnuplotError> {
     match axis.scale {
-        AxisScale::LinearScale => {}
-        AxisScale::LogScale(base) => {
+        AxisScale::Linear => {}
+        AxisScale::Log(base) => {
             validate_finite(base, "logarithm base")?;
             if base <= 0.0 || base == 1.0 {
                 return Err(invalid(format!(
@@ -1058,29 +1058,29 @@ fn validate_axis(name: &str, axis: &Axis, domain: AxisDomain) -> Result<(), Gnup
         }
     }
     match (&axis.range, domain) {
-        (AxisRange::NumericRange(_), AxisDomain::Time) => {
+        (AxisRange::Numeric(_), AxisDomain::Time) => {
             return Err(invalid(format!(
                 "timestamped {name} axis requires a TimeRange or AutoRange"
             )));
         }
-        (AxisRange::TimeRange(_), AxisDomain::Numeric | AxisDomain::Unspecified) => {
+        (AxisRange::Time(_), AxisDomain::Numeric | AxisDomain::Unspecified) => {
             return Err(invalid(format!(
                 "numeric {name} axis cannot use a TimeRange"
             )));
         }
-        (AxisRange::NumericRange(bounds), _) => validate_bounds(*bounds, "axis range")?,
-        (AxisRange::TimeRange(bounds), _) if bounds.minimum >= bounds.maximum => {
+        (AxisRange::Numeric(bounds), _) => validate_bounds(*bounds, "axis range")?,
+        (AxisRange::Time(bounds), _) if bounds.minimum >= bounds.maximum => {
             return Err(invalid("time axis minimum must be before its maximum"));
         }
         _ => {}
     }
     match (&axis.tick_format, domain) {
-        (TickFormat::TimeTicks(_), AxisDomain::Numeric | AxisDomain::Unspecified) => {
+        (TickFormat::Time(_), AxisDomain::Numeric | AxisDomain::Unspecified) => {
             return Err(invalid(format!(
                 "numeric {name} axis cannot use a time tick format"
             )));
         }
-        (TickFormat::NumericTicks(_), AxisDomain::Time) => {
+        (TickFormat::Numeric(_), AxisDomain::Time) => {
             return Err(invalid(format!(
                 "timestamped {name} axis cannot use a numeric tick format"
             )));
@@ -1093,26 +1093,22 @@ fn validate_axis(name: &str, axis: &Axis, domain: AxisDomain) -> Result<(), Gnup
 fn validate_secondary_axes(plot: &Plot2D) -> Result<(), GnuplotError> {
     for series in &plot.series {
         let binding = match series {
-            Series2D::CurveSeries(value) => value.axes,
-            Series2D::ErrorSeries(value) => value.axes,
-            Series2D::BandSeries(value) => value.axes,
-            Series2D::HistogramSeries(value) => value.axes,
-            Series2D::HeatmapSeries(value) => value.axes,
-            Series2D::VectorSeries(value) => value.axes,
-            Series2D::LabelSeries(value) => value.axes,
-            Series2D::BarSeries2D(_) => AxisBinding::PrimaryAxes,
+            Series2D::Curve(value) => value.axes,
+            Series2D::Error(value) => value.axes,
+            Series2D::Band(value) => value.axes,
+            Series2D::Histogram(value) => value.axes,
+            Series2D::Heatmap(value) => value.axes,
+            Series2D::Vector(value) => value.axes,
+            Series2D::Label(value) => value.axes,
+            Series2D::Bar(_) => AxisBinding::Primary,
         };
-        if matches!(
-            binding,
-            AxisBinding::SecondaryX | AxisBinding::SecondaryAxes
-        ) && plot.x2_axis.is_none()
+        if matches!(binding, AxisBinding::SecondaryX | AxisBinding::Secondary)
+            && plot.x2_axis.is_none()
         {
             return Err(invalid("a series uses x2 but x2_axis is absent"));
         }
-        if matches!(
-            binding,
-            AxisBinding::SecondaryY | AxisBinding::SecondaryAxes
-        ) && plot.y2_axis.is_none()
+        if matches!(binding, AxisBinding::SecondaryY | AxisBinding::Secondary)
+            && plot.y2_axis.is_none()
         {
             return Err(invalid("a series uses y2 but y2_axis is absent"));
         }
@@ -1165,7 +1161,7 @@ fn ensure_strictly_increasing(values: &[f64], name: &str) -> Result<(), GnuplotE
 fn serialize_xy_data(data: &XYData) -> Result<String, GnuplotError> {
     let mut output = String::new();
     match data {
-        XYData::NumericXY(points) => write_numeric_xy(&mut output, points, "curve")?,
+        XYData::Numeric(points) => write_numeric_xy(&mut output, points, "curve")?,
         XYData::NumericSegments(segments) => {
             validate_segments(segments, "curve")?;
             for (index, points) in segments.iter().enumerate() {
@@ -1175,7 +1171,7 @@ fn serialize_xy_data(data: &XYData) -> Result<String, GnuplotError> {
                 write_numeric_xy(&mut output, points, "curve segment")?;
             }
         }
-        XYData::TimeXY(points) => write_time_xy(&mut output, points, "time curve")?,
+        XYData::Time(points) => write_time_xy(&mut output, points, "time curve")?,
         XYData::TimeSegments(segments) => {
             validate_segments(segments, "time curve")?;
             for (index, points) in segments.iter().enumerate() {
@@ -1300,7 +1296,7 @@ fn error_bounds(
     name: &str,
 ) -> Result<NumericBounds, GnuplotError> {
     match error {
-        ErrorExtent::SymmetricError(delta) => {
+        ErrorExtent::Symmetric(delta) => {
             validate_finite(delta, name)?;
             if delta < 0.0 {
                 return Err(invalid(format!("{name} magnitude cannot be negative")));
@@ -1310,7 +1306,7 @@ fn error_bounds(
                 maximum: center + delta,
             })
         }
-        ErrorExtent::AbsoluteError(bounds) => {
+        ErrorExtent::Absolute(bounds) => {
             validate_bounds(bounds, name)?;
             if center < bounds.minimum || center > bounds.maximum {
                 return Err(invalid(format!(
@@ -1332,8 +1328,8 @@ fn error_using(kind: ErrorKind) -> &'static str {
 fn serialize_band(data: &BandData) -> Result<String, GnuplotError> {
     let mut output = String::new();
     match data {
-        BandData::BandPoints(points) => write_band(&mut output, points, "band")?,
-        BandData::BandSegments(segments) => {
+        BandData::Points(points) => write_band(&mut output, points, "band")?,
+        BandData::Segments(segments) => {
             validate_segments(segments, "band")?;
             for (index, points) in segments.iter().enumerate() {
                 if index > 0 {
@@ -1403,12 +1399,12 @@ fn serialize_histogram(histogram: &Histogram) -> Result<String, GnuplotError> {
         }
     };
     let (count, width) = match histogram.bins {
-        HistogramBins::BinCount(count) if count > 0 => (
+        HistogramBins::Count(count) if count > 0 => (
             count as usize,
             (bounds.maximum - bounds.minimum) / count as f64,
         ),
-        HistogramBins::BinCount(_) => return Err(invalid("histogram bin count must be positive")),
-        HistogramBins::BinWidth(width) => {
+        HistogramBins::Count(_) => return Err(invalid("histogram bin count must be positive")),
+        HistogramBins::Width(width) => {
             validate_finite(width, "histogram bin width")?;
             if width <= 0.0 {
                 return Err(invalid("histogram bin width must be positive"));
@@ -1442,11 +1438,9 @@ fn serialize_histogram(histogram: &Histogram) -> Result<String, GnuplotError> {
     for (index, count_value) in bins.into_iter().enumerate() {
         let center = bounds.minimum + (index as f64 + 0.5) * width;
         let value = match histogram.normalization {
-            HistogramNormalization::HistogramCounts => count_value as f64,
-            HistogramNormalization::HistogramProbability => count_value as f64 / included as f64,
-            HistogramNormalization::HistogramDensity => {
-                count_value as f64 / (included as f64 * width)
-            }
+            HistogramNormalization::Counts => count_value as f64,
+            HistogramNormalization::Probability => count_value as f64 / included as f64,
+            HistogramNormalization::Density => count_value as f64 / (included as f64 * width),
         };
         writeln!(
             output,
@@ -1497,10 +1491,8 @@ fn serialize_points3d(points: &[Point3D], name: &str) -> Result<String, GnuplotE
 fn serialize_path3d(data: &PathData3D) -> Result<String, GnuplotError> {
     let mut output = String::new();
     match data {
-        PathData3D::PathPoints3D(points) => {
-            output.push_str(&serialize_points3d(points, "3-D path")?)
-        }
-        PathData3D::PathSegments3D(segments) => {
+        PathData3D::Points(points) => output.push_str(&serialize_points3d(points, "3-D path")?),
+        PathData3D::Segments(segments) => {
             validate_segments(segments, "3-D path")?;
             for (index, points) in segments.iter().enumerate() {
                 if index > 0 {
@@ -1565,12 +1557,12 @@ fn write_legend(
     }
     output.push_str("set key");
     match legend.position {
-        LegendPosition::LegendTopLeft => output.push_str(" inside left top"),
-        LegendPosition::LegendTopRight => output.push_str(" inside right top"),
-        LegendPosition::LegendBottomLeft => output.push_str(" inside left bottom"),
-        LegendPosition::LegendBottomRight => output.push_str(" inside right bottom"),
-        LegendPosition::LegendOutsideRight => output.push_str(" outside right center"),
-        LegendPosition::LegendBelow => output.push_str(" outside center bottom"),
+        LegendPosition::TopLeft => output.push_str(" inside left top"),
+        LegendPosition::TopRight => output.push_str(" inside right top"),
+        LegendPosition::BottomLeft => output.push_str(" inside left bottom"),
+        LegendPosition::BottomRight => output.push_str(" inside right bottom"),
+        LegendPosition::OutsideRight => output.push_str(" outside right center"),
+        LegendPosition::Below => output.push_str(" outside center bottom"),
     }
     if legend.horizontal {
         output.push_str(" horizontal");
@@ -1606,13 +1598,13 @@ fn write_palette(output: &mut String, palette: &Palette) -> Result<(), GnuplotEr
 
 fn range_text(range: &AxisRange) -> Result<String, GnuplotError> {
     match range {
-        AxisRange::AutoRange => Ok("[*:*]".to_owned()),
-        AxisRange::NumericRange(bounds) => Ok(format!(
+        AxisRange::Auto => Ok("[*:*]".to_owned()),
+        AxisRange::Numeric(bounds) => Ok(format!(
             "[{}:{}]",
             number(bounds.minimum)?,
             number(bounds.maximum)?
         )),
-        AxisRange::TimeRange(bounds) => Ok(format!(
+        AxisRange::Time(bounds) => Ok(format!(
             "[{}:{}]",
             datetime_number(&bounds.minimum),
             datetime_number(&bounds.maximum)
@@ -1647,10 +1639,10 @@ fn title_clause(title: Option<&str>) -> Result<String, GnuplotError> {
 
 fn axes_clause(binding: AxisBinding) -> &'static str {
     match binding {
-        AxisBinding::PrimaryAxes => "axes x1y1",
+        AxisBinding::Primary => "axes x1y1",
         AxisBinding::SecondaryX => "axes x2y1",
         AxisBinding::SecondaryY => "axes x1y2",
-        AxisBinding::SecondaryAxes => "axes x2y2",
+        AxisBinding::Secondary => "axes x2y2",
     }
 }
 
@@ -1734,11 +1726,11 @@ fn fill_options(style: &FillStyle, fallback: &str) -> Result<String, GnuplotErro
     }
     let color = quoted(style.color.as_deref().unwrap_or(fallback))?;
     let mode = match style.mode {
-        FillMode::SolidFill => format!("fs transparent solid {}", number(style.opacity)?),
-        FillMode::PatternFill(pattern) if pattern >= 0 => {
+        FillMode::Solid => format!("fs transparent solid {}", number(style.opacity)?),
+        FillMode::Pattern(pattern) if pattern >= 0 => {
             format!("fs transparent pattern {pattern}")
         }
-        FillMode::PatternFill(_) => return Err(invalid("fill pattern cannot be negative")),
+        FillMode::Pattern(_) => return Err(invalid("fill pattern cannot be negative")),
     };
     Ok(format!(
         "fc rgb {color} {mode} {}",
@@ -1748,53 +1740,53 @@ fn fill_options(style: &FillStyle, fallback: &str) -> Result<String, GnuplotErro
 
 fn dash_type(dash: DashPattern) -> i32 {
     match dash {
-        DashPattern::SolidLine => 1,
-        DashPattern::DashedLine => 2,
-        DashPattern::DottedLine => 3,
-        DashPattern::DashDotLine => 4,
+        DashPattern::Solid => 1,
+        DashPattern::Dashed => 2,
+        DashPattern::Dotted => 3,
+        DashPattern::DashDot => 4,
     }
 }
 
 fn point_type(shape: PointShape) -> i32 {
     match shape {
-        PointShape::PointPlus => 1,
-        PointShape::PointCross => 2,
-        PointShape::PointStar => 3,
-        PointShape::PointSquare => 4,
-        PointShape::PointFilledSquare => 5,
-        PointShape::PointCircle => 6,
-        PointShape::PointFilledCircle => 7,
-        PointShape::PointTriangle => 8,
-        PointShape::PointFilledTriangle => 9,
-        PointShape::PointDiamond => 12,
-        PointShape::PointFilledDiamond => 13,
+        PointShape::Plus => 1,
+        PointShape::Cross => 2,
+        PointShape::Star => 3,
+        PointShape::Square => 4,
+        PointShape::FilledSquare => 5,
+        PointShape::Circle => 6,
+        PointShape::FilledCircle => 7,
+        PointShape::Triangle => 8,
+        PointShape::FilledTriangle => 9,
+        PointShape::Diamond => 12,
+        PointShape::FilledDiamond => 13,
     }
 }
 
 fn arrow_head(head: ArrowHead) -> &'static str {
     match head {
-        ArrowHead::NoArrowHead => "nohead",
-        ArrowHead::OpenArrowHead => "head empty",
-        ArrowHead::FilledArrowHead => "head filled",
+        ArrowHead::None => "nohead",
+        ArrowHead::Open => "head empty",
+        ArrowHead::Filled => "head filled",
     }
 }
 
 fn alignment(alignment: TextAlignment) -> &'static str {
     match alignment {
-        TextAlignment::AlignLeft => "left",
-        TextAlignment::AlignCenter => "center",
-        TextAlignment::AlignRight => "right",
+        TextAlignment::Left => "left",
+        TextAlignment::Center => "center",
+        TextAlignment::Right => "right",
     }
 }
 
 fn position2d(position: Position2D) -> Result<String, GnuplotError> {
     match position {
-        Position2D::DataPosition2D(x, y) => {
+        Position2D::Data(x, y) => {
             validate_finite(x, "annotation x")?;
             validate_finite(y, "annotation y")?;
             Ok(format!("first {}, first {}", number(x)?, number(y)?))
         }
-        Position2D::PanelPosition2D(x, y) => {
+        Position2D::Panel(x, y) => {
             validate_finite(x, "panel-relative annotation x")?;
             validate_finite(y, "panel-relative annotation y")?;
             if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
@@ -1907,9 +1899,9 @@ mod tests {
 
     fn curve_figure() -> Figure {
         Figure {
-            panels: vec![Some(Panel::Panel2D(Plot2D {
-                series: vec![Series2D::CurveSeries(Curve2D {
-                    data: XYData::NumericXY(vec![(0.0, 1.0), (1.0, 2.0)]),
+            panels: vec![Some(Panel::TwoDimensional(Plot2D {
+                series: vec![Series2D::Curve(Curve2D {
+                    data: XYData::Numeric(vec![(0.0, 1.0), (1.0, 2.0)]),
                     title: Some("observed".to_owned()),
                     ..Curve2D::default()
                 })],
@@ -1948,14 +1940,14 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let figure = Figure {
-            panels: vec![Some(Panel::Panel2D(Plot2D {
+            panels: vec![Some(Panel::TwoDimensional(Plot2D {
                 series: vec![
-                    Series2D::CurveSeries(Curve2D {
-                        data: XYData::NumericXY(vec![(0.0, 1.0)]),
+                    Series2D::Curve(Curve2D {
+                        data: XYData::Numeric(vec![(0.0, 1.0)]),
                         ..Curve2D::default()
                     }),
-                    Series2D::CurveSeries(Curve2D {
-                        data: XYData::TimeXY(vec![(timestamp, 2.0)]),
+                    Series2D::Curve(Curve2D {
+                        data: XYData::Time(vec![(timestamp, 2.0)]),
                         ..Curve2D::default()
                     }),
                 ],
@@ -1969,8 +1961,8 @@ mod tests {
     #[test]
     fn rejects_non_rectangular_heatmap() {
         let figure = Figure {
-            panels: vec![Some(Panel::Panel2D(Plot2D {
-                series: vec![Series2D::HeatmapSeries(Heatmap2D {
+            panels: vec![Some(Panel::TwoDimensional(Plot2D {
+                series: vec![Series2D::Heatmap(Heatmap2D {
                     grid: Grid2D {
                         x: vec![0.0, 1.0],
                         y: vec![0.0],
@@ -1989,7 +1981,7 @@ mod tests {
     fn histogram_binning_is_deterministic() {
         let histogram = Histogram {
             samples: vec![0.0, 0.2, 0.8, 1.0],
-            bins: HistogramBins::BinCount(2),
+            bins: HistogramBins::Count(2),
             range: Some(NumericBounds {
                 minimum: 0.0,
                 maximum: 1.0,
@@ -2008,13 +2000,13 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let figure = Figure {
-            panels: vec![Some(Panel::Panel2D(Plot2D {
+            panels: vec![Some(Panel::TwoDimensional(Plot2D {
                 x_axis: Axis {
-                    tick_format: TickFormat::TimeTicks("%Y-%m-%d".to_owned()),
+                    tick_format: TickFormat::Time("%Y-%m-%d".to_owned()),
                     ..Axis::default()
                 },
-                series: vec![Series2D::CurveSeries(Curve2D {
-                    data: XYData::TimeXY(vec![(timestamp, 1.0)]),
+                series: vec![Series2D::Curve(Curve2D {
+                    data: XYData::Time(vec![(timestamp, 1.0)]),
                     ..Curve2D::default()
                 })],
                 ..Plot2D::default()
@@ -2035,43 +2027,43 @@ mod tests {
             values: vec![vec![Some(0.0), Some(1.0)], vec![Some(1.0), Some(2.0)]],
         };
         let panels = vec![
-            Series2D::CurveSeries(Curve2D {
-                data: XYData::NumericXY(vec![(0.0, 0.0), (1.0, 1.0)]),
+            Series2D::Curve(Curve2D {
+                data: XYData::Numeric(vec![(0.0, 0.0), (1.0, 1.0)]),
                 ..Curve2D::default()
             }),
-            Series2D::ErrorSeries(ErrorBars2D {
+            Series2D::Error(ErrorBars2D {
                 data: vec![ErrorPoint2D {
                     x: 1.0,
                     y: 2.0,
                     x_error: None,
-                    y_error: Some(ErrorExtent::SymmetricError(0.2)),
+                    y_error: Some(ErrorExtent::Symmetric(0.2)),
                 }],
                 ..ErrorBars2D::default()
             }),
-            Series2D::BandSeries(Band2D {
-                data: BandData::BandPoints(vec![BandPoint2D {
+            Series2D::Band(Band2D {
+                data: BandData::Points(vec![BandPoint2D {
                     x: 0.0,
                     lower: 0.5,
                     upper: 1.5,
                 }]),
                 ..Band2D::default()
             }),
-            Series2D::BarSeries2D(BarChart {
+            Series2D::Bar(BarChart {
                 series: vec![BarSeries {
                     values: vec![("A".to_owned(), 1.0)],
                     ..BarSeries::default()
                 }],
                 ..BarChart::default()
             }),
-            Series2D::HistogramSeries(Histogram {
+            Series2D::Histogram(Histogram {
                 samples: vec![0.0, 0.5, 1.0],
                 ..Histogram::default()
             }),
-            Series2D::HeatmapSeries(Heatmap2D {
+            Series2D::Heatmap(Heatmap2D {
                 grid,
                 ..Heatmap2D::default()
             }),
-            Series2D::VectorSeries(Vectors2D {
+            Series2D::Vector(Vectors2D {
                 data: vec![Vector2D {
                     x: 0.0,
                     y: 0.0,
@@ -2080,7 +2072,7 @@ mod tests {
                 }],
                 ..Vectors2D::default()
             }),
-            Series2D::LabelSeries(Labels2D {
+            Series2D::Label(Labels2D {
                 data: vec![LabelPoint2D {
                     x: 0.0,
                     y: 0.0,
@@ -2091,7 +2083,7 @@ mod tests {
         ]
         .into_iter()
         .map(|series| {
-            Some(Panel::Panel2D(Plot2D {
+            Some(Panel::TwoDimensional(Plot2D {
                 series: vec![series],
                 ..Plot2D::default()
             }))
@@ -2133,30 +2125,30 @@ mod tests {
             z: 0.0,
         };
         let series = vec![
-            Series3D::PointSeries3D(PointCloud3D {
+            Series3D::Point(PointCloud3D {
                 data: vec![point],
                 ..PointCloud3D::default()
             }),
-            Series3D::PathSeries3D(Path3D {
-                data: PathData3D::PathPoints3D(vec![point]),
+            Series3D::Path(Path3D {
+                data: PathData3D::Points(vec![point]),
                 ..Path3D::default()
             }),
-            Series3D::SurfaceSeries3D(Surface3D {
+            Series3D::Surface(Surface3D {
                 grid: grid(),
-                mode: SurfaceMode::WireframeSurface,
+                mode: SurfaceMode::Wireframe,
                 ..Surface3D::default()
             }),
-            Series3D::SurfaceSeries3D(Surface3D {
+            Series3D::Surface(Surface3D {
                 grid: grid(),
-                mode: SurfaceMode::ColoredSurface,
+                mode: SurfaceMode::Colored,
                 ..Surface3D::default()
             }),
-            Series3D::SurfaceSeries3D(Surface3D {
+            Series3D::Surface(Surface3D {
                 grid: grid(),
                 mode: SurfaceMode::ContourLines,
                 ..Surface3D::default()
             }),
-            Series3D::SurfaceSeries3D(Surface3D {
+            Series3D::Surface(Surface3D {
                 grid: grid(),
                 mode: SurfaceMode::FilledContours,
                 ..Surface3D::default()
@@ -2165,7 +2157,7 @@ mod tests {
         let panels = series
             .into_iter()
             .map(|series| {
-                Some(Panel::Panel3D(Plot3D {
+                Some(Panel::ThreeDimensional(Plot3D {
                     series: vec![series],
                     ..Plot3D::default()
                 }))

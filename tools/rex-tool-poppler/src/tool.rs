@@ -121,10 +121,10 @@ mod api {
             return Ok(Err(unexpected("pdftocairo produced no output files")));
         }
         if planned.multiple {
-            Ok(Ok(CairoOutput::CairoPageFiles(files)))
+            Ok(Ok(CairoOutput::PageFiles(files)))
         } else {
             match files.as_slice() {
-                [file] => Ok(Ok(CairoOutput::CairoSingleFile(file.clone()))),
+                [file] => Ok(Ok(CairoOutput::SingleFile(file.clone()))),
                 _ => Ok(Err(unexpected(format!(
                     "pdftocairo produced {} files where one was expected",
                     files.len()
@@ -581,7 +581,7 @@ mod tests {
                 crop_box: false,
                 discard_diagonal_text: false,
                 column_spacing: None,
-                end_of_line: EndOfLine::EolUnix,
+                end_of_line: EndOfLine::Unix,
                 no_page_breaks: false,
                 owner_password: None,
                 user_password: None,
@@ -597,11 +597,11 @@ mod tests {
         let rendered = pdftocairo(
             state.clone(),
             source.clone(),
-            CairoFormat::CairoPng,
+            CairoFormat::Png,
             PdfToCairoOptions {
                 first_page: Some(1),
                 last_page: Some(1),
-                page_selection: PageSelection::AllPages,
+                page_selection: PageSelection::All,
                 single_file: true,
                 resolution: Some(72.0),
                 resolution_x: None,
@@ -611,9 +611,9 @@ mod tests {
                 scale_to_y: None,
                 crop: None,
                 crop_box: false,
-                color: CairoColorMode::CairoColor,
+                color: CairoColorMode::Color,
                 transparent: false,
-                antialias: CairoAntialias::AntialiasDefault,
+                antialias: CairoAntialias::Default,
                 jpeg_options: vec![],
                 tiff_compression: None,
                 owner_password: None,
@@ -623,7 +623,7 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
-        let CairoOutput::CairoSingleFile(rendered) = rendered else {
+        let CairoOutput::SingleFile(rendered) = rendered else {
             panic!("expected one rendered page")
         };
         assert!(state.store.size(rendered.content).await.unwrap() > 100);
@@ -631,11 +631,11 @@ mod tests {
         let rendered_pdf = pdftocairo(
             state.clone(),
             source.clone(),
-            CairoFormat::CairoPdf,
+            CairoFormat::Pdf,
             PdfToCairoOptions {
                 first_page: None,
                 last_page: None,
-                page_selection: PageSelection::AllPages,
+                page_selection: PageSelection::All,
                 single_file: false,
                 resolution: None,
                 resolution_x: None,
@@ -645,9 +645,9 @@ mod tests {
                 scale_to_y: None,
                 crop: None,
                 crop_box: false,
-                color: CairoColorMode::CairoColor,
+                color: CairoColorMode::Color,
                 transparent: false,
-                antialias: CairoAntialias::AntialiasDefault,
+                antialias: CairoAntialias::Default,
                 jpeg_options: vec![],
                 tiff_compression: None,
                 owner_password: None,
@@ -657,7 +657,7 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
-        let CairoOutput::CairoSingleFile(rendered_pdf) = rendered_pdf else {
+        let CairoOutput::SingleFile(rendered_pdf) = rendered_pdf else {
             panic!("expected one rendered PDF")
         };
         assert!(
@@ -675,7 +675,7 @@ mod tests {
             PdfImagesOptions {
                 first_page: None,
                 last_page: None,
-                format: PdfImagesFormat::ImagesAll,
+                format: PdfImagesFormat::All,
                 include_page_numbers: true,
                 owner_password: None,
                 user_password: None,
@@ -699,7 +699,7 @@ mod tests {
                 PdfImagesOptions {
                     first_page: None,
                     last_page: None,
-                    format: PdfImagesFormat::ImagesDefault,
+                    format: PdfImagesFormat::Default,
                     include_page_numbers: false,
                     owner_password: None,
                     user_password: None,

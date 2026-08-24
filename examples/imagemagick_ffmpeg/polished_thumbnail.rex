@@ -39,46 +39,46 @@ fn main (video: Hash, font: Hash, title: String)
         })
         (FF.ImageEncoding {
             format = FF.ContainerFormat { name = "png" },
-            video = FF.VideoEncoding { codec = FF.PngVideo, options = [] }
+            video = FF.VideoEncoding { codec = FF.VideoCodec.Png, options = [] }
         })
     with {
         case Err error -> Err (FfmpegFailed error);
         case Ok frame ->
             match IM.transform
-                (IM.StoredImage
+                (IM.ImageSource.Stored
                     (Image { content = frame.content })
-                    IM.AllFrames
+                    IM.FrameSelection.All
                     [])
                 [
-                    IM.Resize (IM.FillArea (IM.Size { width = 1280, height = 720 })),
+                    IM.Resize (IM.FillArea (IM.Size.Size { width = 1280, height = 720 })),
                     IM.Extent
-                        (IM.Rectangle { width = 1280, height = 720, x = 0, y = 0 })
-                        IM.GravityCenter
+                        (IM.Rectangle.Rectangle { width = 1280, height = 720, x = 0, y = 0 })
+                        IM.Gravity.Center
                         (IM.Color { value = "black" }),
                     IM.SigmoidalContrast IM.Enabled 4.0 50.0,
                     IM.Sharpen (IM.BlurGeometry { radius = 0.0, sigma = 0.7 }),
                     IM.Draw
                         [
-                            IM.DrawFill (IM.Color { value = "rgba(0,0,0,0.68)" }),
-                            IM.DrawNoStroke
+                            IM.DrawStyle.Fill (IM.Color { value = "rgba(0,0,0,0.68)" }),
+                            IM.DrawStyle.NoStroke
                         ]
                         [
-                            IM.DrawRectangle
-                                (IM.Rectangle { width = 1280, height = 104, x = 0, y = 616 })
+                            IM.DrawingPrimitive.Rectangle
+                                (IM.Rectangle.Rectangle { width = 1280, height = 104, x = 0, y = 616 })
                         ],
                     IM.Draw
                         [
-                            IM.DrawFill (IM.Color { value = "white" }),
-                            IM.DrawFont font,
-                            IM.DrawPointSize 40.0,
-                            IM.DrawGravity IM.GravityNorthWest
+                            IM.DrawStyle.Fill (IM.Color { value = "white" }),
+                            IM.DrawStyle.Font font,
+                            IM.DrawStyle.PointSize 40.0,
+                            IM.DrawStyle.Gravity IM.Gravity.NorthWest
                         ]
-                        [IM.DrawText (IM.Point { x = 48.0, y = 682.0 }) title]
+                        [IM.DrawingPrimitive.Text (IM.Point.Point { x = 48.0, y = 682.0 }) title]
                 ]
                 (IM.Encoding {
-                    format = IM.Format { name = "png" },
-                    mode = IM.AdjoinFrames,
-                    options = [IM.WriteStripMetadata]
+                    format = IM.Format.Format { name = "png" },
+                    mode = IM.OutputMode.Adjoin,
+                    options = [IM.WriteOption.StripMetadata]
                 })
             with {
                 case Err error -> Err (ImageMagickFailed error);

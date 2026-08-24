@@ -14,7 +14,7 @@
 //   cargo run -p rex --bin rex -- --store-path ./store run \
 //     examples/ffmpeg/overlay_video.rex --inputs inputs.json
 //
-// On success the one-element artifact list contains EncodedMedia whose Media
+// On success the one-element artifact list contains MediaArtifact.Encoded whose Media
 // content field is the composited MP4's CAS hash. No audio stream is included.
 import std.artifacts (Media);
 import tools.ffmpeg as FF;
@@ -29,8 +29,8 @@ fn main (background: Hash, overlay: Hash) -> Result (List FF.MediaArtifact) FF.F
             chains = [
                 FF.FilterChain {
                     inputs = [
-                        FF.InputPad (FF.StreamRef { input = 0, kind = FF.VideoStream, index = Some 0 }),
-                        FF.InputPad (FF.StreamRef { input = 1, kind = FF.VideoStream, index = Some 0 })
+                        FF.FilterPad.Input (FF.StreamRef { input = 0, kind = FF.MediaKind.Video, index = Some 0 }),
+                        FF.FilterPad.Input (FF.StreamRef { input = 1, kind = FF.MediaKind.Video, index = Some 0 })
                     ],
                     filters = [
                         FF.Video (FF.Overlay (FF.OverlayFilter {
@@ -50,13 +50,13 @@ fn main (background: Hash, overlay: Hash) -> Result (List FF.MediaArtifact) FF.F
                 mode = FF.SingleFile,
                 streams = [
                     FF.OutputStream {
-                        source = FF.FilterOutput "composited",
-                        encoding = FF.EncodeVideo (FF.VideoEncoding {
+                        source = FF.StreamSource.Filter "composited",
+                        encoding = FF.StreamEncoding.Video (FF.VideoEncoding {
                             codec = FF.H264,
                             options = [FF.ConstantRateFactor 20.0, FF.PixelFormat "yuv420p"]
                         }),
                         metadata = dict_empty,
-                        dispositions = [FF.DefaultDisposition]
+                        dispositions = [FF.StreamDisposition.Default]
                     }
                 ],
                 options = [FF.MovFlags ["faststart"]],

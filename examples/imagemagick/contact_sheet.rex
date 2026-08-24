@@ -26,16 +26,16 @@ fn to_image (hash: Hash) -> Image =
 fn main (inputs: List Hash, font: Hash) -> Result IM.ImageOutput IM.ImageMagickError =
     IM.montage
         (map to_image inputs)
-        (IM.MontageColumns 4)
+        (IM.MontageLayout.Columns 4)
         [
-            IM.MontageGeometry "240x180+12+12",
-            IM.MontageBackground (IM.Color { value = "#18181b" }),
-            IM.MontageBorder 1 (IM.Color { value = "#3f3f46" }),
-            IM.MontageShadow,
-            IM.MontageFont font
+            IM.MontageOption.Geometry "240x180+12+12",
+            IM.MontageOption.Background (IM.Color { value = "#18181b" }),
+            IM.MontageOption.Border 1 (IM.Color { value = "#3f3f46" }),
+            IM.MontageOption.Shadow,
+            IM.MontageOption.Font font
         ]
         (IM.Encoding {
-            format = IM.Format { name = "jpeg" },
-            mode = IM.AdjoinFrames,
-            options = [IM.WriteQuality 90]
+            format = IM.Format.Format { name = "jpeg" },
+            mode = IM.OutputMode.Adjoin,
+            options = [IM.WriteOption.Quality 90]
         });

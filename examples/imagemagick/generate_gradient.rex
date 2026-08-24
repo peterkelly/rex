@@ -13,12 +13,12 @@ import tools.imagemagick as IM;
 
 IM.generate
     (IM.LinearGradient
-        (IM.Size { width = 1200, height = 630 })
+        (IM.Size.Size { width = 1200, height = 630 })
         (IM.Color { value = "#0b1020" })
         (IM.Color { value = "#4f46e5" }))
     []
     (IM.Encoding {
-        format = IM.Format { name = "png" },
-        mode = IM.AdjoinFrames,
+        format = IM.Format.Format { name = "png" },
+        mode = IM.OutputMode.Adjoin,
         options = []
     })

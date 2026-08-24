@@ -23,7 +23,7 @@ fn main (video: Hash, subtitles: Hash) -> Result Media FF.FfmpegError =
     FF.transcode
         (FF.StoredMedia (Media { content = video }))
         [
-            FF.VideoOperation
+            FF.MediaOperation.Video
                 (FF.BurnSubtitles (FF.SubtitleFilter {
                     subtitles = Media { content = subtitles },
                     stream_index = None,
@@ -37,7 +37,7 @@ fn main (video: Hash, subtitles: Hash) -> Result Media FF.FfmpegError =
                 codec = FF.H264,
                 options = [FF.ConstantRateFactor 20.0, FF.PixelFormat "yuv420p"]
             }),
-            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioBitRate 160000] }),
+            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioEncodeOption.BitRate 160000] }),
             subtitle = None,
             options = [FF.MovFlags ["faststart"]],
             metadata = dict_empty

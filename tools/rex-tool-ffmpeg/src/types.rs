@@ -13,16 +13,16 @@ pub struct MediaPackage {
 /// One output produced by a general `MediaProgram`.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum MediaArtifact {
-    EncodedMedia(Media),
-    MediaSequence(Vec<Media>),
-    PackagedMedia(MediaPackage),
+    Encoded(Media),
+    Sequence(Vec<Media>),
+    Packaged(MediaPackage),
 }
 
 /// The streaming-package layout stored by a `MediaPackage`.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum PackageKind {
-    HlsPackage,
-    DashPackage,
+    Hls,
+    Dash,
 }
 
 /// Video dimensions in pixels.
@@ -74,12 +74,12 @@ pub struct NameValue {
 /// The media type of a stream.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum MediaKind {
-    VideoStream,
-    AudioStream,
-    SubtitleStream,
-    DataStream,
-    AttachmentStream,
-    UnknownStream(String),
+    Video,
+    Audio,
+    Subtitle,
+    Data,
+    Attachment,
+    Unknown(String),
 }
 
 /// A zero-based stream reference within one zero-based program input.
@@ -93,11 +93,11 @@ pub struct StreamRef {
 /// A stream read directly from an input or from a named filter-graph output pad.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum StreamSource {
-    InputStream(StreamRef),
-    FilterOutput(String),
+    Input(StreamRef),
+    Filter(String),
 }
 
-/// A generated video test pattern; custom names are accepted through `OtherTestPattern`.
+/// A generated video test pattern; custom names are accepted through `TestPattern.Other`.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum TestPattern {
     TestSource,
@@ -106,7 +106,7 @@ pub enum TestPattern {
     ColorBars,
     ColorBarsHd,
     ZonePlate,
-    OtherTestPattern(String),
+    Other(String),
 }
 
 /// Parameters for a generated FFmpeg test-video source.
@@ -157,21 +157,21 @@ pub enum MediaSource {
 /// An input-scoped FFmpeg option applied before its corresponding media source.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum InputOption {
-    InputFormat(ContainerFormat),
-    InputSeek(Time),
-    InputDuration(Time),
-    InputEndAt(Time),
-    InputFrameRate(Rational),
-    InputVideoSize(VideoSize),
-    InputPixelFormat(String),
-    InputSampleRate(u64),
-    InputChannels(u64),
-    InputStreamLoop(i64),
-    InputReadAtNativeRate,
-    InputThreadQueueSize(u64),
-    InputDecoder(String),
-    InputProtocolOption(NameValue),
-    InputDemuxerOption(NameValue),
+    Format(ContainerFormat),
+    Seek(Time),
+    Duration(Time),
+    EndAt(Time),
+    FrameRate(Rational),
+    VideoSize(VideoSize),
+    PixelFormat(String),
+    SampleRate(u64),
+    Channels(u64),
+    StreamLoop(i64),
+    ReadAtNativeRate,
+    ThreadQueueSize(u64),
+    Decoder(String),
+    ProtocolOption(NameValue),
+    DemuxerOption(NameValue),
 }
 
 /// One input to a general `MediaProgram`, including options that must precede it.
@@ -184,8 +184,8 @@ pub struct MediaInput {
 /// An input pad for a filter chain, sourced from an input stream or a prior named link.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum FilterPad {
-    InputPad(StreamRef),
-    LinkPad(String),
+    Input(StreamRef),
+    Link(String),
 }
 
 /// One filter option; `None` names a positional value and `Some` names a `key=value` option.
@@ -303,8 +303,8 @@ pub struct VideoFade {
 /// Whether a fade transitions into or out of the signal.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum FadeDirection {
-    FadeIn,
-    FadeOut,
+    In,
+    Out,
 }
 
 /// A semantic video-filter operation; list order is the FFmpeg filter order.
@@ -330,16 +330,16 @@ pub enum VideoFilter {
     Hue(f64, f64),
     Gamma(f64),
     ChromaKey(Color, f64, f64),
-    VideoFade(VideoFade),
+    Fade(VideoFade),
     Overlay(OverlayFilter),
     DrawText(DrawTextFilter),
     BurnSubtitles(SubtitleFilter),
     ThumbnailFrames(u64),
     SelectFrames(String),
     SetPresentationTimestamps(String),
-    ReverseVideo,
-    LoopVideo(u64, u64),
-    CustomVideoFilter(String, Vec<FilterOption>),
+    Reverse,
+    Loop(u64, u64),
+    Custom(String, Vec<FilterOption>),
 }
 
 /// EBU R128 loudness-normalization targets in LUFS/LU and dBTP.
@@ -365,7 +365,7 @@ pub enum AudioFilter {
     NormalizeLoudness(LoudnessNormalization),
     Resample(u64),
     ChannelLayout(String),
-    AudioFade(AudioFade),
+    Fade(AudioFade),
     Delay(Vec<Time>),
     Tempo(f64),
     Equalizer(f64, f64, f64),
@@ -376,8 +376,8 @@ pub enum AudioFilter {
     Gate(f64, f64),
     Echo(f64, f64, Time, f64),
     RemoveSilence(f64, Time),
-    ReverseAudio,
-    CustomAudioFilter(String, Vec<FilterOption>),
+    Reverse,
+    Custom(String, Vec<FilterOption>),
 }
 
 /// A filter usable in a general graph, including stream-specific and multi-stream operations.
@@ -387,14 +387,14 @@ pub enum MediaFilter {
     Audio(AudioFilter),
     TrimVideo(TimeRange),
     TrimAudio(TimeRange),
-    ConcatFilter(u64, u64, u64),
+    Concat(u64, u64, u64),
     SplitVideo(u64),
     SplitAudio(u64),
     MixAudio(u64, bool),
     MergeAudio(u64),
     CrossFadeVideo(Time, Time),
     CrossFadeAudio(Time),
-    CustomFilter(String, Vec<FilterOption>),
+    Custom(String, Vec<FilterOption>),
 }
 
 /// One ordered filter chain with input pads and named output pads.
@@ -413,7 +413,7 @@ pub struct FilterGraph {
     pub chains: Vec<FilterChain>,
 }
 
-/// A video encoder family; `OtherVideoCodec` accepts an installed FFmpeg encoder name.
+/// A video encoder family; `VideoCodec.Other` accepts an installed FFmpeg encoder name.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum VideoCodec {
     H264,
@@ -423,17 +423,17 @@ pub enum VideoCodec {
     Vp9,
     ProRes,
     DnxHd,
-    Mpeg2Video,
-    Mpeg4Video,
+    Mpeg2,
+    Mpeg4,
     Theora,
-    GifVideo,
-    PngVideo,
-    MjpegVideo,
-    RawVideo,
-    OtherVideoCodec(String),
+    Gif,
+    Png,
+    Mjpeg,
+    Raw,
+    Other(String),
 }
 
-/// An audio encoder family; `OtherAudioCodec` accepts an installed FFmpeg encoder name.
+/// An audio encoder family; `AudioCodec.Other` accepts an installed FFmpeg encoder name.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum AudioCodec {
     Aac,
@@ -447,7 +447,7 @@ pub enum AudioCodec {
     PcmS16Le,
     PcmS24Le,
     PcmF32Le,
-    OtherAudioCodec(String),
+    Other(String),
 }
 
 /// A subtitle encoder or stream-copy choice.
@@ -457,30 +457,30 @@ pub enum SubtitleCodec {
     SubRip,
     Ass,
     MovText,
-    DvdSubtitle,
-    CopySubtitle,
-    OtherSubtitleCodec(String),
+    Dvd,
+    Copy,
+    Other(String),
 }
 
 /// A video-encoder option scoped to its output video stream.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum VideoEncodeOption {
-    VideoBitRate(u64),
+    BitRate(u64),
     ConstantRateFactor(f64),
-    VideoQuality(f64),
+    Quality(f64),
     Preset(String),
     Tune(String),
     Profile(String),
     Level(String),
     PixelFormat(String),
-    VideoFrameRate(Rational),
+    FrameRate(Rational),
     GroupOfPictures(u64),
     BFrames(u64),
     MaximumBitRate(u64),
     BufferSize(u64),
     EncoderThreads(u64),
-    VideoBitstreamFilter(String, Vec<FilterOption>),
-    VideoEncoderOption(NameValue),
+    BitstreamFilter(String, Vec<FilterOption>),
+    EncoderOption(NameValue),
 }
 
 /// A video codec and the ordered options used to configure its encoder.
@@ -493,15 +493,15 @@ pub struct VideoEncoding {
 /// An audio-encoder option scoped to its output audio stream.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum AudioEncodeOption {
-    AudioBitRate(u64),
-    AudioQuality(f64),
-    AudioSampleRate(u64),
-    AudioChannels(u64),
-    AudioChannelLayout(String),
-    AudioCompressionLevel(f64),
-    AudioCutoff(f64),
-    AudioBitstreamFilter(String, Vec<FilterOption>),
-    AudioEncoderOption(NameValue),
+    BitRate(u64),
+    Quality(f64),
+    SampleRate(u64),
+    Channels(u64),
+    ChannelLayout(String),
+    CompressionLevel(f64),
+    Cutoff(f64),
+    BitstreamFilter(String, Vec<FilterOption>),
+    EncoderOption(NameValue),
 }
 
 /// An audio codec and the ordered options used to configure its encoder.
@@ -521,29 +521,29 @@ pub struct SubtitleEncoding {
 /// Copy or encode one output stream in a general `MediaProgram`.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum StreamEncoding {
-    CopyStream(MediaKind),
-    EncodeVideo(VideoEncoding),
-    EncodeAudio(AudioEncoding),
-    EncodeSubtitle(SubtitleEncoding),
-    EncodeData(String, Vec<NameValue>),
+    Copy(MediaKind),
+    Video(VideoEncoding),
+    Audio(AudioEncoding),
+    Subtitle(SubtitleEncoding),
+    Data(String, Vec<NameValue>),
 }
 
 /// An FFmpeg stream disposition flag applied to an output stream.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum StreamDisposition {
-    DefaultDisposition,
-    DubDisposition,
-    OriginalDisposition,
-    CommentaryDisposition,
-    LyricsDisposition,
-    KaraokeDisposition,
-    ForcedDisposition,
-    HearingImpairedDisposition,
-    VisualImpairedDisposition,
-    CleanEffectsDisposition,
-    AttachedPictureDisposition,
-    TimedThumbnailsDisposition,
-    OtherDisposition(String),
+    Default,
+    Dub,
+    Original,
+    Commentary,
+    Lyrics,
+    Karaoke,
+    Forced,
+    HearingImpaired,
+    VisualImpaired,
+    CleanEffects,
+    AttachedPicture,
+    TimedThumbnails,
+    Other(String),
 }
 
 /// One mapped output stream with encoding, metadata, and disposition choices.
@@ -558,16 +558,16 @@ pub struct OutputStream {
 /// An output-scoped muxer or timing option.
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum MuxOption {
-    ShortestOutput,
-    OutputDuration(Time),
-    OutputStartAt(Time),
+    Shortest,
+    Duration(Time),
+    StartAt(Time),
     CopyInputTimestamps,
     AvoidNegativeTimestamps(String),
     MaximumMuxingQueueSize(u64),
     MovFlags(Vec<String>),
     MapMetadataFrom(Option<u64>),
     MapChaptersFrom(Option<u64>),
-    MuxerOption(NameValue),
+    Other(NameValue),
 }
 
 /// HLS muxer settings; durations are targets and actual cuts normally follow keyframes.
@@ -630,8 +630,8 @@ pub struct MediaProgram {
 #[derive(Clone, Debug, PartialEq, Rex)]
 pub enum MediaOperation {
     Trim(TimeRange),
-    VideoOperation(VideoFilter),
-    AudioOperation(AudioFilter),
+    Video(VideoFilter),
+    Audio(AudioFilter),
     DropVideo,
     DropAudio,
     DropSubtitles,
@@ -702,12 +702,12 @@ pub struct MuxMapping {
 /// The FFprobe metadata sections included by `probe`.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Rex)]
 pub enum ProbeDetail {
-    ProbeContainer,
-    ProbeStreams,
-    ProbeChapters,
-    ProbePrograms,
+    Container,
+    Streams,
+    Chapters,
+    Programs,
     #[default]
-    ProbeAll,
+    All,
 }
 
 /// FFprobe metadata controls, including optional counting and interval restriction.
@@ -792,8 +792,8 @@ pub struct ProgramInfo {
 /// Whether `inspect` returns decoded frames/subtitles or demuxed packets.
 #[derive(Clone, Debug, Eq, PartialEq, Rex)]
 pub enum InspectionKind {
-    InspectPackets,
-    InspectFrames,
+    Packets,
+    Frames,
 }
 
 /// A selective FFprobe frame/packet query.

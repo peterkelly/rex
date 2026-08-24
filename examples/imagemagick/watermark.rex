@@ -23,30 +23,30 @@ import tools.imagemagick as IM;
 
 fn main (input: Hash, font: Hash) -> Result IM.ImageOutput IM.ImageMagickError =
     IM.transform
-        (IM.StoredImage (Image { content = input }) IM.AllFrames [])
+        (IM.ImageSource.Stored (Image { content = input }) IM.FrameSelection.All [])
         [
             IM.AutoOrient,
             IM.Draw
                 [
-                    IM.DrawFill (IM.Color { value = "rgba(0,0,0,0.55)" }),
-                    IM.DrawNoStroke
+                    IM.DrawStyle.Fill (IM.Color { value = "rgba(0,0,0,0.55)" }),
+                    IM.DrawStyle.NoStroke
                 ]
                 [
-                    IM.DrawRectangle
-                        (IM.Rectangle { width = 520, height = 72, x = 24, y = 24 })
+                    IM.DrawingPrimitive.Rectangle
+                        (IM.Rectangle.Rectangle { width = 520, height = 72, x = 24, y = 24 })
                 ],
             IM.Draw
                 [
-                    IM.DrawFill (IM.Color { value = "white" }),
-                    IM.DrawFont font,
-                    IM.DrawPointSize 32.0
+                    IM.DrawStyle.Fill (IM.Color { value = "white" }),
+                    IM.DrawStyle.Font font,
+                    IM.DrawStyle.PointSize 32.0
                 ]
                 [
-                    IM.DrawText (IM.Point { x = 44.0, y = 70.0 }) "Generated with Rex"
+                    IM.DrawingPrimitive.Text (IM.Point.Point { x = 44.0, y = 70.0 }) "Generated with Rex"
                 ]
         ]
         (IM.Encoding {
-            format = IM.Format { name = "png" },
-            mode = IM.AdjoinFrames,
+            format = IM.Format.Format { name = "png" },
+            mode = IM.OutputMode.Adjoin,
             options = []
         });

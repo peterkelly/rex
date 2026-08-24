@@ -12,7 +12,7 @@
 //   cargo run -p rex --bin rex -- --store-path ./store run \
 //     examples/ffmpeg/package_dash.rex --inputs inputs.json
 //
-// On success the MediaPackage has kind DashPackage and a content hash naming a
+// On success the MediaPackage has kind PackageKind.Dash and a content hash naming a
 // CAS tree containing the MPD manifest and all media segments. Export that tree
 // to a new directory with:
 //
@@ -32,7 +32,7 @@ fn main (input: Hash) -> Result FF.MediaPackage FF.FfmpegError =
                 codec = FF.H264,
                 options = [FF.ConstantRateFactor 21.0, FF.PixelFormat "yuv420p"]
             }),
-            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioBitRate 160000] }),
+            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioEncodeOption.BitRate 160000] }),
             subtitle = None,
             options = [],
             metadata = dict_empty

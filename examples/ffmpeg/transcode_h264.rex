@@ -32,7 +32,7 @@ fn main (input: Hash) -> Result Media FF.FfmpegError =
             }),
             audio = Some (FF.AudioEncoding {
                 codec = FF.Aac,
-                options = [FF.AudioBitRate 192000]
+                options = [FF.AudioEncodeOption.BitRate 192000]
             }),
             subtitle = None,
             options = [FF.MovFlags ["faststart"]],

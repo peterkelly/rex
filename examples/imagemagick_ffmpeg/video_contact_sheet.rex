@@ -42,25 +42,25 @@ fn main (video: Hash, font: Hash) -> Result IM.ImageOutput WorkflowError =
         ])
         (FF.ImageEncoding {
             format = FF.ContainerFormat { name = "png" },
-            video = FF.VideoEncoding { codec = FF.PngVideo, options = [] }
+            video = FF.VideoEncoding { codec = FF.VideoCodec.Png, options = [] }
         })
     with {
         case Err error -> Err (FfmpegFailed error);
         case Ok frames ->
             match IM.montage
                 (map frame_to_image frames)
-                (IM.MontageColumns 4)
+                (IM.MontageLayout.Columns 4)
                 [
-                    IM.MontageGeometry "320x180+12+12",
-                    IM.MontageBackground (IM.Color { value = "#111827" }),
-                    IM.MontageBorder 1 (IM.Color { value = "#4b5563" }),
-                    IM.MontageShadow,
-                    IM.MontageFont font
+                    IM.MontageOption.Geometry "320x180+12+12",
+                    IM.MontageOption.Background (IM.Color { value = "#111827" }),
+                    IM.MontageOption.Border 1 (IM.Color { value = "#4b5563" }),
+                    IM.MontageOption.Shadow,
+                    IM.MontageOption.Font font
                 ]
                 (IM.Encoding {
-                    format = IM.Format { name = "jpeg" },
-                    mode = IM.AdjoinFrames,
-                    options = [IM.WriteQuality 90, IM.WriteStripMetadata]
+                    format = IM.Format.Format { name = "jpeg" },
+                    mode = IM.OutputMode.Adjoin,
+                    options = [IM.WriteOption.Quality 90, IM.WriteOption.StripMetadata]
                 })
             with {
                 case Err error -> Err (ImageMagickFailed error);

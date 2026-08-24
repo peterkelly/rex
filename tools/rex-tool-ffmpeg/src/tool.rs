@@ -251,7 +251,7 @@ mod api {
             Ok(plan) => plan,
             Err(error) => return Ok(Err(error)),
         };
-        media_package(&state, plan, PackageKind::HlsPackage).await
+        media_package(&state, plan, PackageKind::Hls).await
     }
 
     /// Encode a source as a DASH package stored as one content-addressed directory tree.
@@ -270,7 +270,7 @@ mod api {
             Ok(plan) => plan,
             Err(error) => return Ok(Err(error)),
         };
-        media_package(&state, plan, PackageKind::DashPackage).await
+        media_package(&state, plan, PackageKind::Dash).await
     }
 
     /// Read stable container, stream, chapter, and program metadata with FFprobe.
@@ -424,7 +424,7 @@ fn artifacts_from_execution(
             .unwrap_or_default();
         let artifact = match &plan.kind {
             ArtifactKind::Single => match values.as_slice() {
-                [content] => MediaArtifact::EncodedMedia(Media { content: *content }),
+                [content] => MediaArtifact::Encoded(Media { content: *content }),
                 _ => {
                     return Err(unexpected(format!(
                         "FFmpeg output {} contained {} files instead of one",
@@ -440,7 +440,7 @@ fn artifacts_from_execution(
                         plan.output
                     )));
                 }
-                MediaArtifact::MediaSequence(
+                MediaArtifact::Sequence(
                     values
                         .into_iter()
                         .map(|content| Media { content })
@@ -448,7 +448,7 @@ fn artifacts_from_execution(
                 )
             }
             ArtifactKind::Package(kind) => match values.as_slice() {
-                [content] => MediaArtifact::PackagedMedia(MediaPackage {
+                [content] => MediaArtifact::Packaged(MediaPackage {
                     content: *content,
                     kind: kind.clone(),
                 }),
@@ -590,8 +590,8 @@ fn parse_program(object: &Map<String, Value>) -> ProgramInfo {
 fn parse_inspection(bytes: &[u8], kind: InspectionKind) -> FfResult<Vec<InspectionRecord>> {
     let root = parse_json(bytes, "ffprobe inspection")?;
     let key = match kind {
-        InspectionKind::InspectPackets => "packets",
-        InspectionKind::InspectFrames => "frames",
+        InspectionKind::Packets => "packets",
+        InspectionKind::Frames => "frames",
     };
     let records = root
         .get(key)
@@ -777,12 +777,12 @@ fn json_field(value: &Value) -> String {
 
 fn media_kind(value: &str) -> MediaKind {
     match value {
-        "video" => MediaKind::VideoStream,
-        "audio" => MediaKind::AudioStream,
-        "subtitle" => MediaKind::SubtitleStream,
-        "data" => MediaKind::DataStream,
-        "attachment" => MediaKind::AttachmentStream,
-        other => MediaKind::UnknownStream(other.to_string()),
+        "video" => MediaKind::Video,
+        "audio" => MediaKind::Audio,
+        "subtitle" => MediaKind::Subtitle,
+        "data" => MediaKind::Data,
+        "attachment" => MediaKind::Attachment,
+        other => MediaKind::Unknown(other.to_string()),
     }
 }
 
@@ -842,7 +842,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(info.streams[0].kind, MediaKind::VideoStream);
+        assert_eq!(info.streams[0].kind, MediaKind::Video);
         assert_eq!(info.streams[0].width, Some(1920));
         assert_eq!(info.streams[0].language.as_deref(), Some("eng"));
         assert_eq!(info.format.unwrap().duration, Some(12.5));
@@ -878,7 +878,7 @@ mod tests {
             state.clone(),
             media.clone(),
             ProbeOptions {
-                detail: ProbeDetail::ProbeAll,
+                detail: ProbeDetail::All,
                 count_frames: false,
                 count_packets: false,
                 read_intervals: None,
@@ -906,7 +906,7 @@ mod tests {
                     name: "png".to_string(),
                 },
                 video: VideoEncoding {
-                    codec: VideoCodec::PngVideo,
+                    codec: VideoCodec::Png,
                     options: vec![],
                 },
             },
@@ -932,7 +932,7 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(package.kind, PackageKind::HlsPackage);
+        assert_eq!(package.kind, PackageKind::Hls);
         assert!(
             !state
                 .store
@@ -1019,13 +1019,13 @@ mod tests {
             vec![
                 MuxMapping {
                     input: 0,
-                    kind: MediaKind::VideoStream,
+                    kind: MediaKind::Video,
                     stream_index: Some(0),
                     copy: true,
                 },
                 MuxMapping {
                     input: 1,
-                    kind: MediaKind::AudioStream,
+                    kind: MediaKind::Audio,
                     stream_index: Some(0),
                     copy: false,
                 },
@@ -1037,10 +1037,10 @@ mod tests {
                 video: None,
                 audio: Some(AudioEncoding {
                     codec: AudioCodec::Aac,
-                    options: vec![AudioEncodeOption::AudioBitRate(96_000)],
+                    options: vec![AudioEncodeOption::BitRate(96_000)],
                 }),
                 subtitle: None,
-                options: vec![MuxOption::ShortestOutput],
+                options: vec![MuxOption::Shortest],
                 metadata: BTreeMap::new(),
             },
         )
@@ -1051,7 +1051,7 @@ mod tests {
             state.clone(),
             muxed.clone(),
             ProbeOptions {
-                detail: ProbeDetail::ProbeStreams,
+                detail: ProbeDetail::Streams,
                 count_frames: false,
                 count_packets: false,
                 read_intervals: None,
@@ -1063,12 +1063,12 @@ mod tests {
         assert!(
             info.streams
                 .iter()
-                .any(|stream| stream.kind == MediaKind::VideoStream)
+                .any(|stream| stream.kind == MediaKind::Video)
         );
         assert!(
             info.streams
                 .iter()
-                .any(|stream| stream.kind == MediaKind::AudioStream)
+                .any(|stream| stream.kind == MediaKind::Audio)
         );
 
         let extracted = extract_audio(
@@ -1096,7 +1096,7 @@ mod tests {
                     name: "png".to_string(),
                 },
                 video: VideoEncoding {
-                    codec: VideoCodec::PngVideo,
+                    codec: VideoCodec::Png,
                     options: vec![],
                 },
             },
@@ -1114,8 +1114,8 @@ mod tests {
                     name: "jpg".to_string(),
                 },
                 video: VideoEncoding {
-                    codec: VideoCodec::MjpegVideo,
-                    options: vec![VideoEncodeOption::VideoQuality(3.0)],
+                    codec: VideoCodec::Mjpeg,
+                    options: vec![VideoEncodeOption::Quality(3.0)],
                 },
             },
         )
@@ -1177,17 +1177,17 @@ mod tests {
         assert!(
             artifacts
                 .iter()
-                .all(|artifact| matches!(artifact, MediaArtifact::EncodedMedia(_)))
+                .all(|artifact| matches!(artifact, MediaArtifact::Encoded(_)))
         );
 
         let records = inspect(
             state,
             muxed,
             InspectionQuery {
-                kind: InspectionKind::InspectPackets,
+                kind: InspectionKind::Packets,
                 stream: Some(StreamRef {
                     input: 0,
-                    kind: MediaKind::VideoStream,
+                    kind: MediaKind::Video,
                     index: Some(0),
                 }),
                 read_intervals: Some("%+0.2".to_string()),
@@ -1202,12 +1202,12 @@ mod tests {
 
     fn copied_output(format: &str) -> MediaOutput {
         let stream = |kind: MediaKind| OutputStream {
-            source: StreamSource::InputStream(StreamRef {
+            source: StreamSource::Input(StreamRef {
                 input: 0,
                 kind: kind.clone(),
                 index: Some(0),
             }),
-            encoding: StreamEncoding::CopyStream(kind),
+            encoding: StreamEncoding::Copy(kind),
             metadata: BTreeMap::new(),
             dispositions: vec![],
         };
@@ -1216,10 +1216,7 @@ mod tests {
                 name: format.to_string(),
             },
             mode: OutputMode::SingleFile,
-            streams: vec![
-                stream(MediaKind::VideoStream),
-                stream(MediaKind::AudioStream),
-            ],
+            streams: vec![stream(MediaKind::Video), stream(MediaKind::Audio)],
             options: vec![],
             metadata: BTreeMap::new(),
         }

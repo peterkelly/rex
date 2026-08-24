@@ -19,20 +19,20 @@ import tools.imagemagick as IM;
 
 fn main (input: Hash) -> Result IM.ImageOutput IM.ImageMagickError =
     IM.transform
-        (IM.StoredImage
+        (IM.ImageSource.Stored
             (Image { content = input })
-            IM.AllFrames
+            IM.FrameSelection.All
             [])
         [
             IM.AutoOrient,
-            IM.Resize (IM.FillArea (IM.Size { width = 256, height = 256 })),
+            IM.Resize (IM.FillArea (IM.Size.Size { width = 256, height = 256 })),
             IM.Extent
-                (IM.Rectangle { width = 256, height = 256, x = 0, y = 0 })
-                IM.GravityCenter
+                (IM.Rectangle.Rectangle { width = 256, height = 256, x = 0, y = 0 })
+                IM.Gravity.Center
                 (IM.Color { value = "transparent" })
         ]
         (IM.Encoding {
-            format = IM.Format { name = "png" },
-            mode = IM.AdjoinFrames,
-            options = [IM.WriteStripMetadata]
+            format = IM.Format.Format { name = "png" },
+            mode = IM.OutputMode.Adjoin,
+            options = [IM.WriteOption.StripMetadata]
         });

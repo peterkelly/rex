@@ -105,8 +105,8 @@ pub(crate) fn json_plan(
     builder.literal(format!(
         "--json-stream-data={}",
         match options.stream_data {
-            JsonStreamData::JsonStreamDataNone => "none",
-            JsonStreamData::JsonStreamDataInline => "inline",
+            JsonStreamData::None => "none",
+            JsonStreamData::Inline => "inline",
         }
     ));
     builder.literal(format!(
@@ -270,17 +270,17 @@ fn compile_write_options(
             WriteOption::ObjectStreams(mode) => builder.literal(format!(
                 "--object-streams={}",
                 match mode {
-                    ObjectStreamMode::ObjectStreamsPreserve => "preserve",
-                    ObjectStreamMode::ObjectStreamsDisable => "disable",
-                    ObjectStreamMode::ObjectStreamsGenerate => "generate",
+                    ObjectStreamMode::Preserve => "preserve",
+                    ObjectStreamMode::Disable => "disable",
+                    ObjectStreamMode::Generate => "generate",
                 }
             )),
             WriteOption::StreamData(mode) => builder.literal(format!(
                 "--stream-data={}",
                 match mode {
-                    StreamDataMode::StreamDataCompress => "compress",
-                    StreamDataMode::StreamDataPreserve => "preserve",
-                    StreamDataMode::StreamDataUncompress => "uncompress",
+                    StreamDataMode::Compress => "compress",
+                    StreamDataMode::Preserve => "preserve",
+                    StreamDataMode::Uncompress => "uncompress",
                 }
             )),
             WriteOption::DecodeStreams(level) => {
@@ -293,9 +293,9 @@ fn compile_write_options(
             WriteOption::RemoveUnreferencedResources(mode) => builder.literal(format!(
                 "--remove-unreferenced-resources={}",
                 match mode {
-                    RemoveUnreferencedResourcesMode::RemoveResourcesAuto => "auto",
-                    RemoveUnreferencedResourcesMode::RemoveResourcesYes => "yes",
-                    RemoveUnreferencedResourcesMode::RemoveResourcesNo => "no",
+                    RemoveUnreferencedResourcesMode::Auto => "auto",
+                    RemoveUnreferencedResourcesMode::Yes => "yes",
+                    RemoveUnreferencedResourcesMode::No => "no",
                 }
             )),
             WriteOption::CoalesceContents => builder.literal("--coalesce-contents"),
@@ -306,9 +306,9 @@ fn compile_write_options(
             WriteOption::FlattenAnnotations(mode) => builder.literal(format!(
                 "--flatten-annotations={}",
                 match mode {
-                    FlattenAnnotationsMode::FlattenAllAnnotations => "all",
-                    FlattenAnnotationsMode::FlattenPrintAnnotations => "print",
-                    FlattenAnnotationsMode::FlattenScreenAnnotations => "screen",
+                    FlattenAnnotationsMode::All => "all",
+                    FlattenAnnotationsMode::Print => "print",
+                    FlattenAnnotationsMode::Screen => "screen",
                 }
             )),
             WriteOption::RemovePageLabels => builder.literal("--remove-page-labels"),
@@ -360,28 +360,28 @@ fn compile_encryption(builder: &mut PlanBuilder, spec: EncryptionSpec) -> Result
         builder.literal(format!("--owner-password={password}"));
     }
     match spec.method {
-        EncryptionMethod::EncryptionAes128 => {
+        EncryptionMethod::Aes128 => {
             builder.literal("--bits=128");
             builder.literal("--use-aes=y");
         }
-        EncryptionMethod::EncryptionAes256 => builder.literal("--bits=256"),
+        EncryptionMethod::Aes256 => builder.literal("--bits=256"),
     }
     builder.literal(format!(
         "--print={}",
         match spec.print {
-            PrintPermission::PrintNone => "none",
-            PrintPermission::PrintLowResolution => "low",
-            PrintPermission::PrintFullResolution => "full",
+            PrintPermission::None => "none",
+            PrintPermission::LowResolution => "low",
+            PrintPermission::FullResolution => "full",
         }
     ));
     builder.literal(format!(
         "--modify={}",
         match spec.modify {
-            ModifyPermission::ModifyNone => "none",
-            ModifyPermission::ModifyAssembly => "assembly",
-            ModifyPermission::ModifyForms => "form",
-            ModifyPermission::ModifyAnnotations => "annotate",
-            ModifyPermission::ModifyAll => "all",
+            ModifyPermission::None => "none",
+            ModifyPermission::Assembly => "assembly",
+            ModifyPermission::Forms => "form",
+            ModifyPermission::Annotations => "annotate",
+            ModifyPermission::All => "all",
         }
     ));
     builder.literal(format!("--extract={}", yes_no(spec.extract)));
@@ -398,16 +398,14 @@ fn compile_encryption(builder: &mut PlanBuilder, spec: EncryptionSpec) -> Result
 
 fn compile_rotation(spec: RotationSpec) -> Result<String, QpdfError> {
     let (prefix, angle) = match spec.rotation {
-        Rotation::AbsoluteRotation(angle) if matches!(angle, 0 | 90 | 180 | 270) => ("", angle),
-        Rotation::AbsoluteRotation(_) => {
+        Rotation::Absolute(angle) if matches!(angle, 0 | 90 | 180 | 270) => ("", angle),
+        Rotation::Absolute(_) => {
             return Err(invalid("absolute rotation must be 0, 90, 180, or 270"));
         }
-        Rotation::RelativeRotation(angle)
-            if matches!(angle, -270 | -180 | -90 | 0 | 90 | 180 | 270) =>
-        {
+        Rotation::Relative(angle) if matches!(angle, -270 | -180 | -90 | 0 | 90 | 180 | 270) => {
             (if angle >= 0 { "+" } else { "" }, angle)
         }
-        Rotation::RelativeRotation(_) => {
+        Rotation::Relative(_) => {
             return Err(invalid(
                 "relative rotation must be a multiple of 90 from -270 to 270",
             ));
@@ -424,24 +422,24 @@ fn compile_rotation(spec: RotationSpec) -> Result<String, QpdfError> {
 
 fn json_key(key: JsonKey) -> &'static str {
     match key {
-        JsonKey::JsonAcroform => "acroform",
-        JsonKey::JsonAttachments => "attachments",
-        JsonKey::JsonEncrypt => "encrypt",
-        JsonKey::JsonObjectInfo => "objectinfo",
-        JsonKey::JsonObjects => "objects",
-        JsonKey::JsonOutlines => "outlines",
-        JsonKey::JsonPageLabels => "pagelabels",
-        JsonKey::JsonPages => "pages",
-        JsonKey::JsonQpdf => "qpdf",
+        JsonKey::Acroform => "acroform",
+        JsonKey::Attachments => "attachments",
+        JsonKey::Encrypt => "encrypt",
+        JsonKey::ObjectInfo => "objectinfo",
+        JsonKey::Objects => "objects",
+        JsonKey::Outlines => "outlines",
+        JsonKey::PageLabels => "pagelabels",
+        JsonKey::Pages => "pages",
+        JsonKey::Qpdf => "qpdf",
     }
 }
 
 fn decode_level(level: DecodeLevel) -> &'static str {
     match level {
-        DecodeLevel::DecodeNone => "none",
-        DecodeLevel::DecodeGeneralized => "generalized",
-        DecodeLevel::DecodeSpecialized => "specialized",
-        DecodeLevel::DecodeAll => "all",
+        DecodeLevel::None => "none",
+        DecodeLevel::Generalized => "generalized",
+        DecodeLevel::Specialized => "specialized",
+        DecodeLevel::All => "all",
     }
 }
 
@@ -513,7 +511,7 @@ mod tests {
             None,
             vec![
                 WriteOption::Linearize,
-                WriteOption::ObjectStreams(ObjectStreamMode::ObjectStreamsGenerate),
+                WriteOption::ObjectStreams(ObjectStreamMode::Generate),
             ],
         )
         .unwrap();
@@ -578,9 +576,9 @@ mod tests {
                 vec![WriteOption::Encrypt(EncryptionSpec {
                     user_password: Some("reader".to_string()),
                     owner_password: None,
-                    method: EncryptionMethod::EncryptionAes256,
-                    print: PrintPermission::PrintNone,
-                    modify: ModifyPermission::ModifyNone,
+                    method: EncryptionMethod::Aes256,
+                    print: PrintPermission::None,
+                    modify: ModifyPermission::None,
                     extract: false,
                     accessibility: true,
                     annotate: false,
@@ -600,9 +598,9 @@ mod tests {
                     WriteOption::Encrypt(EncryptionSpec {
                         user_password: None,
                         owner_password: Some("owner".to_string()),
-                        method: EncryptionMethod::EncryptionAes256,
-                        print: PrintPermission::PrintFullResolution,
-                        modify: ModifyPermission::ModifyAll,
+                        method: EncryptionMethod::Aes256,
+                        print: PrintPermission::FullResolution,
+                        modify: ModifyPermission::All,
                         extract: true,
                         accessibility: true,
                         annotate: true,

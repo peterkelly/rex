@@ -340,7 +340,7 @@ Its shape is:
 ```json
 {
   "Ok": {
-    "SingleImage": [
+    "Single": [
       { "content": "<content-hash>" }
     ]
   }

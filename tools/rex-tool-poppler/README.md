@@ -24,8 +24,8 @@ workspace and imports every declared output before returning. Rex code never sup
 | `pdfimages_list` | `pdfimages -list` | Typed image-object inventory |
 | `version` | `pdfinfo -v` | Installed Poppler version |
 
-Raster `pdftocairo` output normally returns `CairoPageFiles`; `single_file` returns only the first
-selected page as `CairoSingleFile`. PDF and PostScript are single artifacts. SVG and EPS require
+Raster `pdftocairo` output normally returns `CairoOutput.PageFiles`; `single_file` returns only the
+first selected page as `CairoOutput.SingleFile`. PDF and PostScript are single artifacts. SVG and EPS require
 one explicitly selected page. Crop, resolution, scaling, color, transparency, antialias, JPEG, and
 TIFF settings correspond to Poppler flags.
 

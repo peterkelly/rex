@@ -14,8 +14,8 @@ fn named_port (node: String) -> (name: String) -> G.Endpoint = G.Endpoint {
 };
 
 fn record_node (label: String) -> G.NodeAttributes = G.NodeAttributes {
-    label = Some (G.TextLabel label),
-    shape = Some G.ShapeRecord
+    label = Some (G.Label.Text label),
+    shape = Some G.NodeShape.Record
 };
 
 fn connection (attributes: G.EdgeAttributes)
@@ -30,12 +30,12 @@ let
     edge_attributes = G.EdgeAttributes {},
     diagnostic_edge = G.EdgeAttributes {
         colors = Some ["firebrick"],
-        styles = Some [G.EdgeDashed]
+        styles = Some [G.EdgeStyle.Dashed]
     },
     graph = G.Graph {
         id = Some "record_ports",
         attributes = G.GraphAttributes {
-            rank_direction = Some G.RankLeftToRight
+            rank_direction = Some G.RankDirection.LeftToRight
         },
         nodes = {
             input = record_node "<source> source | <config> compiler config",
@@ -62,4 +62,4 @@ let
         ]
     }
 in
-    G.render graph G.LayoutDot G.FormatSvg
+    G.render graph G.LayoutEngine.Dot G.RenderFormat.Svg

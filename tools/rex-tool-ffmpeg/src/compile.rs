@@ -197,8 +197,8 @@ fn simple_plan(
     for operation in operations {
         match operation {
             MediaOperation::Trim(range) => compile_time_range(&mut builder, &range),
-            MediaOperation::VideoOperation(filter) => video_filters.push(filter),
-            MediaOperation::AudioOperation(filter) => audio_filters.push(filter),
+            MediaOperation::Video(filter) => video_filters.push(filter),
+            MediaOperation::Audio(filter) => audio_filters.push(filter),
             MediaOperation::DropVideo => drop_video = true,
             MediaOperation::DropAudio => drop_audio = true,
             MediaOperation::DropSubtitles => drop_subtitles = true,
@@ -533,7 +533,7 @@ pub(crate) fn mux_plan(
         })?;
         builder.option("-map", selector);
         let (specifier, fallback) = match mapping.kind {
-            MediaKind::VideoStream => {
+            MediaKind::Video => {
                 let specifier = format!("v:{video}");
                 video += 1;
                 (
@@ -541,7 +541,7 @@ pub(crate) fn mux_plan(
                     encoding.video.as_ref().map(StreamEncodingRef::Video),
                 )
             }
-            MediaKind::AudioStream => {
+            MediaKind::Audio => {
                 let specifier = format!("a:{audio}");
                 audio += 1;
                 (
@@ -549,7 +549,7 @@ pub(crate) fn mux_plan(
                     encoding.audio.as_ref().map(StreamEncodingRef::Audio),
                 )
             }
-            MediaKind::SubtitleStream => {
+            MediaKind::Subtitle => {
                 let specifier = format!("s:{subtitle}");
                 subtitle += 1;
                 (
@@ -557,17 +557,17 @@ pub(crate) fn mux_plan(
                     encoding.subtitle.as_ref().map(StreamEncodingRef::Subtitle),
                 )
             }
-            MediaKind::DataStream => {
+            MediaKind::Data => {
                 let specifier = format!("d:{data}");
                 data += 1;
                 (specifier, None)
             }
-            MediaKind::AttachmentStream => {
+            MediaKind::Attachment => {
                 let specifier = format!("t:{attachment}");
                 attachment += 1;
                 (specifier, None)
             }
-            MediaKind::UnknownStream(name) => {
+            MediaKind::Unknown(name) => {
                 return Err(invalid(format!("cannot mux unknown stream kind `{name}`")));
             }
         };
@@ -599,11 +599,11 @@ pub(crate) fn probe_plan(
     builder.option("-v", "error");
     builder.option("-print_format", "json");
     match options.detail {
-        ProbeDetail::ProbeContainer => builder.literal("-show_format"),
-        ProbeDetail::ProbeStreams => builder.literal("-show_streams"),
-        ProbeDetail::ProbeChapters => builder.literal("-show_chapters"),
-        ProbeDetail::ProbePrograms => builder.literal("-show_programs"),
-        ProbeDetail::ProbeAll => {
+        ProbeDetail::Container => builder.literal("-show_format"),
+        ProbeDetail::Streams => builder.literal("-show_streams"),
+        ProbeDetail::Chapters => builder.literal("-show_chapters"),
+        ProbeDetail::Programs => builder.literal("-show_programs"),
+        ProbeDetail::All => {
             builder.literal("-show_format");
             builder.literal("-show_streams");
             builder.literal("-show_chapters");
@@ -632,8 +632,8 @@ pub(crate) fn inspect_plan(
     builder.option("-v", "error");
     builder.option("-print_format", "json");
     builder.literal(match query.kind {
-        InspectionKind::InspectPackets => "-show_packets",
-        InspectionKind::InspectFrames => "-show_frames",
+        InspectionKind::Packets => "-show_packets",
+        InspectionKind::Frames => "-show_frames",
     });
     if let Some(stream) = query.stream {
         builder.option("-select_streams", probe_stream_selector(&stream)?);
@@ -643,8 +643,8 @@ pub(crate) fn inspect_plan(
     }
     if !query.entries.is_empty() {
         let section = match query.kind {
-            InspectionKind::InspectPackets => "packet",
-            InspectionKind::InspectFrames => "frame",
+            InspectionKind::Packets => "packet",
+            InspectionKind::Frames => "frame",
         };
         builder.option(
             "-show_entries",
@@ -695,8 +695,8 @@ fn compile_input(builder: &mut PlanBuilder, input: MediaInput) -> Result<(), Ffm
         }
         MediaSource::StoredPackage(package) => {
             let manifest = match package.kind {
-                PackageKind::HlsPackage => "/index.m3u8",
-                PackageKind::DashPackage => "/manifest.mpd",
+                PackageKind::Hls => "/index.m3u8",
+                PackageKind::Dash => "/manifest.mpd",
             };
             let id = builder.input_tree(package);
             builder.literal("-i");
@@ -761,31 +761,29 @@ fn compile_input(builder: &mut PlanBuilder, input: MediaInput) -> Result<(), Ffm
 
 fn compile_input_option(builder: &mut PlanBuilder, option: InputOption) -> Result<(), FfmpegError> {
     match option {
-        InputOption::InputFormat(format) => {
+        InputOption::Format(format) => {
             builder.option("-f", checked_headless_format(&format.name, "input format")?)
         }
-        InputOption::InputSeek(time) => builder.option("-ss", seconds(time)),
-        InputOption::InputDuration(time) => builder.option("-t", seconds(time)),
-        InputOption::InputEndAt(time) => builder.option("-to", seconds(time)),
-        InputOption::InputFrameRate(rate) => builder.option("-framerate", rational(&rate)?),
-        InputOption::InputVideoSize(size) => {
+        InputOption::Seek(time) => builder.option("-ss", seconds(time)),
+        InputOption::Duration(time) => builder.option("-t", seconds(time)),
+        InputOption::EndAt(time) => builder.option("-to", seconds(time)),
+        InputOption::FrameRate(rate) => builder.option("-framerate", rational(&rate)?),
+        InputOption::VideoSize(size) => {
             builder.option("-video_size", format!("{}x{}", size.width, size.height))
         }
-        InputOption::InputPixelFormat(format) => builder.option("-pixel_format", format),
-        InputOption::InputSampleRate(rate) => builder.option("-sample_rate", rate.to_string()),
-        InputOption::InputChannels(channels) => builder.option("-channels", channels.to_string()),
-        InputOption::InputStreamLoop(count) => builder.option("-stream_loop", count.to_string()),
-        InputOption::InputReadAtNativeRate => builder.literal("-re"),
-        InputOption::InputThreadQueueSize(size) => {
+        InputOption::PixelFormat(format) => builder.option("-pixel_format", format),
+        InputOption::SampleRate(rate) => builder.option("-sample_rate", rate.to_string()),
+        InputOption::Channels(channels) => builder.option("-channels", channels.to_string()),
+        InputOption::StreamLoop(count) => builder.option("-stream_loop", count.to_string()),
+        InputOption::ReadAtNativeRate => builder.literal("-re"),
+        InputOption::ThreadQueueSize(size) => {
             builder.option("-thread_queue_size", size.to_string())
         }
-        InputOption::InputDecoder(codec) => builder.option("-c", codec),
-        InputOption::InputProtocolOption(option) | InputOption::InputDemuxerOption(option) => {
-            builder.option(
-                &format!("-{}", checked_name(&option.name, "input option")?),
-                option.value,
-            )
-        }
+        InputOption::Decoder(codec) => builder.option("-c", codec),
+        InputOption::ProtocolOption(option) | InputOption::DemuxerOption(option) => builder.option(
+            &format!("-{}", checked_name(&option.name, "input option")?),
+            option.value,
+        ),
     }
     Ok(())
 }
@@ -841,9 +839,9 @@ fn compile_media_filter(
         MediaFilter::TrimAudio(range) => {
             Ok(vec![ToolArgument::literal(trim_filter("atrim", range))])
         }
-        MediaFilter::ConcatFilter(inputs, video, audio) => Ok(vec![ToolArgument::literal(
-            format!("concat=n={inputs}:v={video}:a={audio}"),
-        )]),
+        MediaFilter::Concat(inputs, video, audio) => Ok(vec![ToolArgument::literal(format!(
+            "concat=n={inputs}:v={video}:a={audio}"
+        ))]),
         MediaFilter::SplitVideo(outputs) => {
             Ok(vec![ToolArgument::literal(format!("split={outputs}"))])
         }
@@ -866,9 +864,9 @@ fn compile_media_filter(
             "acrossfade=d={}",
             seconds(duration)
         ))]),
-        MediaFilter::CustomFilter(name, options) => Ok(vec![ToolArgument::literal(
-            custom_filter_text(&name, &options)?,
-        )]),
+        MediaFilter::Custom(name, options) => Ok(vec![ToolArgument::literal(custom_filter_text(
+            &name, &options,
+        )?)]),
     }
 }
 
@@ -1051,7 +1049,7 @@ fn video_filter_text(filter: &VideoFilter) -> Result<String, FfmpegError> {
             similarity,
             blend
         ),
-        VideoFilter::VideoFade(fade) => format!(
+        VideoFilter::Fade(fade) => format!(
             "fade=t={}:st={}:d={}:color={}",
             fade_direction(&fade.direction),
             seconds(fade.start),
@@ -1072,11 +1070,11 @@ fn video_filter_text(filter: &VideoFilter) -> Result<String, FfmpegError> {
         VideoFilter::SetPresentationTimestamps(expression) => {
             format!("setpts={}", quote_filter_value(expression))
         }
-        VideoFilter::ReverseVideo => "reverse".to_string(),
-        VideoFilter::LoopVideo(loop_count, size) => {
+        VideoFilter::Reverse => "reverse".to_string(),
+        VideoFilter::Loop(loop_count, size) => {
             format!("loop=loop={loop_count}:size={size}")
         }
-        VideoFilter::CustomVideoFilter(name, options) => custom_filter_text(name, options)?,
+        VideoFilter::Custom(name, options) => custom_filter_text(name, options)?,
         VideoFilter::DrawText(_) | VideoFilter::BurnSubtitles(_) => {
             return Err(invalid("path-based video filter requires plan compilation"));
         }
@@ -1095,7 +1093,7 @@ fn audio_filter_text(filter: &AudioFilter) -> Result<String, FfmpegError> {
         AudioFilter::ChannelLayout(layout) => {
             format!("aformat=channel_layouts={}", quote_filter_value(layout))
         }
-        AudioFilter::AudioFade(fade) => format!(
+        AudioFilter::Fade(fade) => format!(
             "afade=t={}:st={}:d={}",
             fade_direction(&fade.direction),
             seconds(fade.start),
@@ -1131,8 +1129,8 @@ fn audio_filter_text(filter: &AudioFilter) -> Result<String, FfmpegError> {
             seconds(*duration),
             threshold
         ),
-        AudioFilter::ReverseAudio => "areverse".to_string(),
-        AudioFilter::CustomAudioFilter(name, options) => custom_filter_text(name, options)?,
+        AudioFilter::Reverse => "areverse".to_string(),
+        AudioFilter::Custom(name, options) => custom_filter_text(name, options)?,
     })
 }
 
@@ -1239,7 +1237,7 @@ fn compile_output_target(
             builder.argument(ToolArgument::output_with_suffix(output, "/index.m3u8"));
             Ok(PlannedArtifact {
                 output,
-                kind: ArtifactKind::Package(PackageKind::HlsPackage),
+                kind: ArtifactKind::Package(PackageKind::Hls),
             })
         }
         OutputMode::DashStreaming(dash) => {
@@ -1253,7 +1251,7 @@ fn compile_output_target(
             builder.argument(ToolArgument::output_with_suffix(output, "/manifest.mpd"));
             Ok(PlannedArtifact {
                 output,
-                kind: ArtifactKind::Package(PackageKind::DashPackage),
+                kind: ArtifactKind::Package(PackageKind::Dash),
             })
         }
     }
@@ -1342,16 +1340,14 @@ fn compile_stream_encoding(
     specifier: &str,
 ) -> Result<(), FfmpegError> {
     match encoding {
-        StreamEncoding::CopyStream(_) => {
+        StreamEncoding::Copy(_) => {
             builder.option(&format!("-c:{specifier}"), "copy");
             Ok(())
         }
-        StreamEncoding::EncodeVideo(value) => compile_video_encoding(builder, value, specifier),
-        StreamEncoding::EncodeAudio(value) => compile_audio_encoding(builder, value, specifier),
-        StreamEncoding::EncodeSubtitle(value) => {
-            compile_subtitle_encoding(builder, value, specifier)
-        }
-        StreamEncoding::EncodeData(codec, options) => {
+        StreamEncoding::Video(value) => compile_video_encoding(builder, value, specifier),
+        StreamEncoding::Audio(value) => compile_audio_encoding(builder, value, specifier),
+        StreamEncoding::Subtitle(value) => compile_subtitle_encoding(builder, value, specifier),
+        StreamEncoding::Data(codec, options) => {
             builder.option(&format!("-c:{specifier}"), codec);
             for option in options {
                 builder.option(
@@ -1378,13 +1374,13 @@ fn compile_video_encoding(
     );
     for option in &encoding.options {
         match option {
-            VideoEncodeOption::VideoBitRate(value) => {
+            VideoEncodeOption::BitRate(value) => {
                 builder.option(&format!("-b:{specifier}"), value.to_string())
             }
             VideoEncodeOption::ConstantRateFactor(value) => {
                 builder.option(&format!("-crf:{specifier}"), value.to_string())
             }
-            VideoEncodeOption::VideoQuality(value) => {
+            VideoEncodeOption::Quality(value) => {
                 builder.option(&format!("-q:{specifier}"), value.to_string())
             }
             VideoEncodeOption::Preset(value) => {
@@ -1400,7 +1396,7 @@ fn compile_video_encoding(
             VideoEncodeOption::PixelFormat(value) => {
                 builder.option(&format!("-pix_fmt:{specifier}"), value)
             }
-            VideoEncodeOption::VideoFrameRate(value) => {
+            VideoEncodeOption::FrameRate(value) => {
                 builder.option(&format!("-r:{specifier}"), rational(value)?)
             }
             VideoEncodeOption::GroupOfPictures(value) => {
@@ -1418,11 +1414,11 @@ fn compile_video_encoding(
             VideoEncodeOption::EncoderThreads(value) => {
                 builder.option(&format!("-threads:{specifier}"), value.to_string())
             }
-            VideoEncodeOption::VideoBitstreamFilter(name, options) => builder.option(
+            VideoEncodeOption::BitstreamFilter(name, options) => builder.option(
                 &format!("-bsf:{specifier}"),
                 custom_filter_text(name, options)?,
             ),
-            VideoEncodeOption::VideoEncoderOption(option) => builder.option(
+            VideoEncodeOption::EncoderOption(option) => builder.option(
                 &format!(
                     "-{}:{specifier}",
                     checked_name(&option.name, "video encoder option")?
@@ -1445,33 +1441,33 @@ fn compile_audio_encoding(
     );
     for option in &encoding.options {
         match option {
-            AudioEncodeOption::AudioBitRate(value) => {
+            AudioEncodeOption::BitRate(value) => {
                 builder.option(&format!("-b:{specifier}"), value.to_string())
             }
-            AudioEncodeOption::AudioQuality(value) => {
+            AudioEncodeOption::Quality(value) => {
                 builder.option(&format!("-q:{specifier}"), value.to_string())
             }
-            AudioEncodeOption::AudioSampleRate(value) => {
+            AudioEncodeOption::SampleRate(value) => {
                 builder.option(&format!("-ar:{specifier}"), value.to_string())
             }
-            AudioEncodeOption::AudioChannels(value) => {
+            AudioEncodeOption::Channels(value) => {
                 builder.option(&format!("-ac:{specifier}"), value.to_string())
             }
-            AudioEncodeOption::AudioChannelLayout(value) => {
+            AudioEncodeOption::ChannelLayout(value) => {
                 builder.option(&format!("-channel_layout:{specifier}"), value)
             }
-            AudioEncodeOption::AudioCompressionLevel(value) => builder.option(
+            AudioEncodeOption::CompressionLevel(value) => builder.option(
                 &format!("-compression_level:{specifier}"),
                 value.to_string(),
             ),
-            AudioEncodeOption::AudioCutoff(value) => {
+            AudioEncodeOption::Cutoff(value) => {
                 builder.option(&format!("-cutoff:{specifier}"), value.to_string())
             }
-            AudioEncodeOption::AudioBitstreamFilter(name, options) => builder.option(
+            AudioEncodeOption::BitstreamFilter(name, options) => builder.option(
                 &format!("-bsf:{specifier}"),
                 custom_filter_text(name, options)?,
             ),
-            AudioEncodeOption::AudioEncoderOption(option) => builder.option(
+            AudioEncodeOption::EncoderOption(option) => builder.option(
                 &format!(
                     "-{}:{specifier}",
                     checked_name(&option.name, "audio encoder option")?
@@ -1506,9 +1502,9 @@ fn compile_subtitle_encoding(
 
 fn compile_mux_option(builder: &mut PlanBuilder, option: MuxOption) -> Result<(), FfmpegError> {
     match option {
-        MuxOption::ShortestOutput => builder.literal("-shortest"),
-        MuxOption::OutputDuration(time) => builder.option("-t", seconds(time)),
-        MuxOption::OutputStartAt(time) => builder.option("-ss", seconds(time)),
+        MuxOption::Shortest => builder.literal("-shortest"),
+        MuxOption::Duration(time) => builder.option("-t", seconds(time)),
+        MuxOption::StartAt(time) => builder.option("-ss", seconds(time)),
         MuxOption::CopyInputTimestamps => builder.literal("-copyts"),
         MuxOption::AvoidNegativeTimestamps(mode) => builder.option("-avoid_negative_ts", mode),
         MuxOption::MaximumMuxingQueueSize(size) => {
@@ -1523,7 +1519,7 @@ fn compile_mux_option(builder: &mut PlanBuilder, option: MuxOption) -> Result<()
             "-map_chapters",
             input.map_or_else(|| "-1".to_string(), |value| value.to_string()),
         ),
-        MuxOption::MuxerOption(option) => builder.option(
+        MuxOption::Other(option) => builder.option(
             &format!("-{}", checked_name(&option.name, "muxer option")?),
             option.value,
         ),
@@ -1562,16 +1558,16 @@ struct StreamCounters {
 impl StreamCounters {
     fn next(&mut self, encoding: &StreamEncoding) -> String {
         match encoding {
-            StreamEncoding::CopyStream(kind) => match kind {
-                MediaKind::VideoStream => next_specifier("v", &mut self.video),
-                MediaKind::AudioStream => next_specifier("a", &mut self.audio),
-                MediaKind::SubtitleStream => next_specifier("s", &mut self.subtitle),
+            StreamEncoding::Copy(kind) => match kind {
+                MediaKind::Video => next_specifier("v", &mut self.video),
+                MediaKind::Audio => next_specifier("a", &mut self.audio),
+                MediaKind::Subtitle => next_specifier("s", &mut self.subtitle),
                 _ => next_specifier("d", &mut self.data),
             },
-            StreamEncoding::EncodeVideo(_) => next_specifier("v", &mut self.video),
-            StreamEncoding::EncodeAudio(_) => next_specifier("a", &mut self.audio),
-            StreamEncoding::EncodeSubtitle(_) => next_specifier("s", &mut self.subtitle),
-            StreamEncoding::EncodeData(_, _) => next_specifier("d", &mut self.data),
+            StreamEncoding::Video(_) => next_specifier("v", &mut self.video),
+            StreamEncoding::Audio(_) => next_specifier("a", &mut self.audio),
+            StreamEncoding::Subtitle(_) => next_specifier("s", &mut self.subtitle),
+            StreamEncoding::Data(_, _) => next_specifier("d", &mut self.data),
         }
     }
 }
@@ -1584,15 +1580,15 @@ fn next_specifier(prefix: &str, counter: &mut usize) -> String {
 
 fn stream_source_name(source: &StreamSource) -> Result<String, FfmpegError> {
     match source {
-        StreamSource::InputStream(stream) => stream_selector(stream),
-        StreamSource::FilterOutput(label) => Ok(format!("[{}]", checked_label(label)?)),
+        StreamSource::Input(stream) => stream_selector(stream),
+        StreamSource::Filter(label) => Ok(format!("[{}]", checked_label(label)?)),
     }
 }
 
 fn filter_pad_name(pad: &FilterPad) -> Result<String, FfmpegError> {
     match pad {
-        FilterPad::InputPad(stream) => stream_selector(stream),
-        FilterPad::LinkPad(label) => checked_label(label),
+        FilterPad::Input(stream) => stream_selector(stream),
+        FilterPad::Link(label) => checked_label(label),
     }
 }
 
@@ -1614,12 +1610,12 @@ fn probe_stream_selector(stream: &StreamRef) -> Result<String, FfmpegError> {
 
 fn stream_kind_letter(kind: &MediaKind) -> Result<&'static str, FfmpegError> {
     match kind {
-        MediaKind::VideoStream => Ok("v"),
-        MediaKind::AudioStream => Ok("a"),
-        MediaKind::SubtitleStream => Ok("s"),
-        MediaKind::DataStream => Ok("d"),
-        MediaKind::AttachmentStream => Ok("t"),
-        MediaKind::UnknownStream(_) => Err(invalid(
+        MediaKind::Video => Ok("v"),
+        MediaKind::Audio => Ok("a"),
+        MediaKind::Subtitle => Ok("s"),
+        MediaKind::Data => Ok("d"),
+        MediaKind::Attachment => Ok("t"),
+        MediaKind::Unknown(_) => Err(invalid(
             "unknown stream kinds cannot be used as stream selectors",
         )),
     }
@@ -1634,14 +1630,14 @@ fn video_codec_name(codec: &VideoCodec) -> Result<&str, FfmpegError> {
         VideoCodec::Vp9 => Ok("libvpx-vp9"),
         VideoCodec::ProRes => Ok("prores_ks"),
         VideoCodec::DnxHd => Ok("dnxhd"),
-        VideoCodec::Mpeg2Video => Ok("mpeg2video"),
-        VideoCodec::Mpeg4Video => Ok("mpeg4"),
+        VideoCodec::Mpeg2 => Ok("mpeg2video"),
+        VideoCodec::Mpeg4 => Ok("mpeg4"),
         VideoCodec::Theora => Ok("libtheora"),
-        VideoCodec::GifVideo => Ok("gif"),
-        VideoCodec::PngVideo => Ok("png"),
-        VideoCodec::MjpegVideo => Ok("mjpeg"),
-        VideoCodec::RawVideo => Ok("rawvideo"),
-        VideoCodec::OtherVideoCodec(name) => checked_name_ref(name, "video codec"),
+        VideoCodec::Gif => Ok("gif"),
+        VideoCodec::Png => Ok("png"),
+        VideoCodec::Mjpeg => Ok("mjpeg"),
+        VideoCodec::Raw => Ok("rawvideo"),
+        VideoCodec::Other(name) => checked_name_ref(name, "video codec"),
     }
 }
 
@@ -1658,7 +1654,7 @@ fn audio_codec_name(codec: &AudioCodec) -> Result<&str, FfmpegError> {
         AudioCodec::PcmS16Le => Ok("pcm_s16le"),
         AudioCodec::PcmS24Le => Ok("pcm_s24le"),
         AudioCodec::PcmF32Le => Ok("pcm_f32le"),
-        AudioCodec::OtherAudioCodec(name) => checked_name_ref(name, "audio codec"),
+        AudioCodec::Other(name) => checked_name_ref(name, "audio codec"),
     }
 }
 
@@ -1668,9 +1664,9 @@ fn subtitle_codec_name(codec: &SubtitleCodec) -> Result<&str, FfmpegError> {
         SubtitleCodec::SubRip => Ok("subrip"),
         SubtitleCodec::Ass => Ok("ass"),
         SubtitleCodec::MovText => Ok("mov_text"),
-        SubtitleCodec::DvdSubtitle => Ok("dvdsub"),
-        SubtitleCodec::CopySubtitle => Ok("copy"),
-        SubtitleCodec::OtherSubtitleCodec(name) => checked_name_ref(name, "subtitle codec"),
+        SubtitleCodec::Dvd => Ok("dvdsub"),
+        SubtitleCodec::Copy => Ok("copy"),
+        SubtitleCodec::Other(name) => checked_name_ref(name, "subtitle codec"),
     }
 }
 
@@ -1682,7 +1678,7 @@ fn test_pattern_name(pattern: &TestPattern) -> Result<&str, FfmpegError> {
         TestPattern::ColorBars => Ok("smptebars"),
         TestPattern::ColorBarsHd => Ok("smptehdbars"),
         TestPattern::ZonePlate => Ok("zoneplate"),
-        TestPattern::OtherTestPattern(name) => checked_name_ref(name, "test pattern"),
+        TestPattern::Other(name) => checked_name_ref(name, "test pattern"),
     }
 }
 
@@ -1707,26 +1703,26 @@ fn custom_filter_text(name: &str, options: &[FilterOption]) -> Result<String, Ff
 
 fn disposition_name(disposition: &StreamDisposition) -> &str {
     match disposition {
-        StreamDisposition::DefaultDisposition => "default",
-        StreamDisposition::DubDisposition => "dub",
-        StreamDisposition::OriginalDisposition => "original",
-        StreamDisposition::CommentaryDisposition => "comment",
-        StreamDisposition::LyricsDisposition => "lyrics",
-        StreamDisposition::KaraokeDisposition => "karaoke",
-        StreamDisposition::ForcedDisposition => "forced",
-        StreamDisposition::HearingImpairedDisposition => "hearing_impaired",
-        StreamDisposition::VisualImpairedDisposition => "visual_impaired",
-        StreamDisposition::CleanEffectsDisposition => "clean_effects",
-        StreamDisposition::AttachedPictureDisposition => "attached_pic",
-        StreamDisposition::TimedThumbnailsDisposition => "timed_thumbnails",
-        StreamDisposition::OtherDisposition(value) => value,
+        StreamDisposition::Default => "default",
+        StreamDisposition::Dub => "dub",
+        StreamDisposition::Original => "original",
+        StreamDisposition::Commentary => "comment",
+        StreamDisposition::Lyrics => "lyrics",
+        StreamDisposition::Karaoke => "karaoke",
+        StreamDisposition::Forced => "forced",
+        StreamDisposition::HearingImpaired => "hearing_impaired",
+        StreamDisposition::VisualImpaired => "visual_impaired",
+        StreamDisposition::CleanEffects => "clean_effects",
+        StreamDisposition::AttachedPicture => "attached_pic",
+        StreamDisposition::TimedThumbnails => "timed_thumbnails",
+        StreamDisposition::Other(value) => value,
     }
 }
 
 fn fade_direction(direction: &FadeDirection) -> &str {
     match direction {
-        FadeDirection::FadeIn => "in",
-        FadeDirection::FadeOut => "out",
+        FadeDirection::In => "in",
+        FadeDirection::Out => "out",
     }
 }
 
@@ -1844,15 +1840,13 @@ mod tests {
             MediaSource::StoredMedia(Media {
                 content: hash(b"video"),
             }),
-            vec![MediaOperation::VideoOperation(VideoFilter::Scale(
-                ScaleFilter {
-                    width: 1280,
-                    height: 720,
-                    algorithm: Some("lanczos".to_string()),
-                    preserve_aspect_ratio: true,
-                    prevent_upscale: true,
-                },
-            ))],
+            vec![MediaOperation::Video(VideoFilter::Scale(ScaleFilter {
+                width: 1280,
+                height: 720,
+                algorithm: Some("lanczos".to_string()),
+                preserve_aspect_ratio: true,
+                prevent_upscale: true,
+            }))],
             Encoding {
                 format: ContainerFormat {
                     name: "mp4".to_string(),
@@ -1919,10 +1913,7 @@ mod tests {
             }),
         )
         .unwrap();
-        assert_eq!(
-            artifact.kind,
-            ArtifactKind::Package(PackageKind::HlsPackage)
-        );
+        assert_eq!(artifact.kind, ArtifactKind::Package(PackageKind::Hls));
     }
 
     #[test]

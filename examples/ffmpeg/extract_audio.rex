@@ -21,6 +21,6 @@ fn main (input: Hash) -> Result Media FF.FfmpegError =
         (Media { content = input })
         (FF.AudioEncoding {
             codec = FF.Opus,
-            options = [FF.AudioBitRate 128000, FF.AudioSampleRate 48000]
+            options = [FF.AudioEncodeOption.BitRate 128000, FF.AudioEncodeOption.SampleRate 48000]
         })
         (FF.ContainerFormat { name = "ogg" });

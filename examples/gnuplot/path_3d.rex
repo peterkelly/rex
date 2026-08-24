@@ -3,7 +3,7 @@ import tools.gnuplot as G;
 
 let
     path = G.Path3D {
-        data = G.PathSegments3D [
+        data = G.PathData3D.Segments [
             [
                 G.Point3D { x = 0.0, y = 0.0, z = 0.0 },
                 G.Point3D { x = 1.0, y = 0.4, z = 0.8 },
@@ -21,7 +21,7 @@ let
             width = 2.0
         },
         points = Some (G.PointStyle {
-            shape = G.PointFilledDiamond,
+            shape = G.PointShape.FilledDiamond,
             size = 1.0
         })
     },
@@ -30,9 +30,9 @@ let
         x_axis = G.Axis { label = Some "x" },
         y_axis = G.Axis { label = Some "y" },
         z_axis = G.Axis { label = Some "z" },
-        series = [G.PathSeries3D path]
+        series = [G.Series3D.Path path]
     }
 in
     G.render_svg
-        (G.Figure { panels = [Some (G.Panel3D plot)] })
+        (G.Figure { panels = [Some (G.Panel.ThreeDimensional plot)] })
         G.SvgOptions {}

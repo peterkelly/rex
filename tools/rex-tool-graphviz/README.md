@@ -15,9 +15,10 @@ function accepts raw DOT source.
 - `Graph.attributes` contains final graph settings such as rank direction, margins, colors, and
   spline policy. The layout engine is selected exactly once by the `render` argument.
 - `Endpoint` and `Port` attach edges to named label regions or standard compass positions.
-- `TextLabel` and `HtmlLabel` distinguish ordinary text from Graphviz's HTML-like label language.
+- `Label.Text` and `Label.Html` distinguish ordinary text from Graphviz's HTML-like label language.
 - `Subgraph` contains its own node dictionary, binary edge list, final attributes, and child arena
-  references. `PlainSubgraph` represents a layout group and `Cluster` represents a visible cluster.
+  references. `SubgraphKind.Plain` represents a layout group and `SubgraphKind.Cluster` represents
+  a visible cluster.
 - Every node is defined in exactly one graph or subgraph dictionary. Node identifiers are global
   across the graph, matching Graphviz's node identity semantics.
 - Attribute records have an `extra: Dict String` escape hatch for attributes supported by the
@@ -66,7 +67,7 @@ let
         ]
     }
 in
-    G.render graph G.LayoutDot G.FormatSvg
+    G.render graph G.LayoutEngine.Dot G.RenderFormat.Svg
 ```
 
 `render` returns `Result RenderedGraph GraphvizError`. The artifact's `content` is a CAS hash.

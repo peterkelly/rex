@@ -26,8 +26,8 @@ fn main (input: Hash) -> Result Media FF.FfmpegError =
                 start = Some (FF.Time { seconds = 2.0 }),
                 duration = Some (FF.Time { seconds = 4.0 })
             }),
-            FF.VideoOperation (FF.FrameRate (FF.Rational { numerator = 12, denominator = 1 })),
-            FF.VideoOperation (FF.Scale (FF.ScaleFilter {
+            FF.MediaOperation.Video (FF.FrameRate (FF.Rational { numerator = 12, denominator = 1 })),
+            FF.MediaOperation.Video (FF.Scale (FF.ScaleFilter {
                 width = 640,
                 height = -2,
                 algorithm = Some "lanczos",
@@ -37,7 +37,7 @@ fn main (input: Hash) -> Result Media FF.FfmpegError =
         ]
         (FF.Encoding {
             format = FF.ContainerFormat { name = "gif" },
-            video = Some (FF.VideoEncoding { codec = FF.GifVideo, options = [] }),
+            video = Some (FF.VideoEncoding { codec = FF.VideoCodec.Gif, options = [] }),
             audio = None,
             subtitle = None,
             options = [],

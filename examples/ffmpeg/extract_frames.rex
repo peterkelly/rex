@@ -22,5 +22,5 @@ fn main (input: Hash) -> Result (List Media) FF.FfmpegError =
         (FF.FramesPerSecond 1.0)
         (FF.ImageEncoding {
             format = FF.ContainerFormat { name = "png" },
-            video = FF.VideoEncoding { codec = FF.PngVideo, options = [] }
+            video = FF.VideoEncoding { codec = FF.VideoCodec.Png, options = [] }
         });

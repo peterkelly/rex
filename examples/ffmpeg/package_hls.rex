@@ -12,7 +12,7 @@
 //   cargo run -p rex --bin rex -- --store-path ./store run \
 //     examples/ffmpeg/package_hls.rex --inputs inputs.json
 //
-// On success the MediaPackage has kind HlsPackage and a content hash naming a
+// On success the MediaPackage has kind PackageKind.Hls and a content hash naming a
 // CAS tree containing the playlist and every segment. Export that tree to a new
 // directory with:
 //
@@ -36,7 +36,7 @@ fn main (input: Hash) -> Result FF.MediaPackage FF.FfmpegError =
                     FF.PixelFormat "yuv420p"
                 ]
             }),
-            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioBitRate 160000] }),
+            audio = Some (FF.AudioEncoding { codec = FF.Aac, options = [FF.AudioEncodeOption.BitRate 160000] }),
             subtitle = None,
             options = [],
             metadata = dict_empty

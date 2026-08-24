@@ -12,20 +12,20 @@
 //   cargo run -p rex --bin rex -- --store-path ./store run \
 //     examples/imagemagick/extract_frames.rex --inputs inputs.json
 //
-// On success the ImageOutput is MultipleImages. Its ordered image list has one
+// On success the ImageOutput is ImageOutput.Multiple. Its ordered image list has one
 // entry per decoded frame, and each content field is that PNG frame's CAS hash.
 import std.artifacts (Image);
 import tools.imagemagick as IM;
 
 fn main (animation: Hash) -> Result IM.ImageOutput IM.ImageMagickError =
     IM.transform
-        (IM.StoredImage
+        (IM.ImageSource.Stored
             (Image { content = animation })
-            IM.AllFrames
+            IM.FrameSelection.All
             [])
         [IM.AutoOrient]
         (IM.Encoding {
-            format = IM.Format { name = "png" },
-            mode = IM.SeparateFrames,
-            options = [IM.WriteStripMetadata]
+            format = IM.Format.Format { name = "png" },
+            mode = IM.OutputMode.Separate,
+            options = [IM.WriteOption.StripMetadata]
         });
