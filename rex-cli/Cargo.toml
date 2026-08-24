@@ -12,8 +12,8 @@ publish = false
 clap = { workspace = true }
 futures = { workspace = true }
 rand = { workspace = true }
-rex = { path = "../rex", version = "3.9.14" }
-rex-util = { path = "../rex-util", version = "3.9.14" }
+rex = { path = "../rex", version = "3.9.15" }
+rex-util = { path = "../rex-util", version = "3.9.15" }
 serde_json = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }

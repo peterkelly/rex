@@ -10,11 +10,11 @@ version.workspace = true
 [dependencies]
 blake3 = { workspace = true }
 thiserror = { workspace = true }
-rex-ast = { path = "../rex-ast", version = "3.9.14" }
+rex-ast = { path = "../rex-ast", version = "3.9.15" }
 chrono = { workspace = true }
 uuid = { workspace = true }
 rpds = { workspace = true }
-rex-util = { path = "../rex-util", version = "3.9.14" }
+rex-util = { path = "../rex-util", version = "3.9.15" }
 serde = { workspace = true }
 
 [lints]

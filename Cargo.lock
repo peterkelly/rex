@@ -1010,7 +1010,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "rex"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "blake3",
  "chrono",
@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "rex-ast"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "rex-cli"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "clap",
  "futures",
@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "rex-engine"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "blake3",
  "chrono",
@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "rex-fuzz"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "rex-ast",
  "rex-engine",
@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "rex-lsp"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "blake3",
  "futures",
@@ -1114,14 +1114,14 @@ dependencies = [
 
 [[package]]
 name = "rex-mdbook"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "rex-parser"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "regex",
  "rex-ast",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "rex-proc-macro"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "rex-tool-ffmpeg"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "blake3",
  "rex",
@@ -1152,7 +1152,7 @@ dependencies = [
 
 [[package]]
 name = "rex-tool-gnuplot"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "blake3",
  "chrono",
@@ -1164,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "rex-tool-graphviz"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "blake3",
  "rex",
@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "rex-tool-imagemagick"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "blake3",
  "rex",
@@ -1186,7 +1186,7 @@ dependencies = [
 
 [[package]]
 name = "rex-tool-poppler"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "blake3",
  "rex",
@@ -1197,7 +1197,7 @@ dependencies = [
 
 [[package]]
 name = "rex-tool-qpdf"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "blake3",
  "rex",
@@ -1208,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "rex-tools-integration"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "blake3",
  "rex",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "rex-typesystem"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "blake3",
  "chrono",
@@ -1234,14 +1234,14 @@ dependencies = [
 
 [[package]]
 name = "rex-util"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "thiserror 1.0.69",
 ]
 
 [[package]]
 name = "rex-wasm"
-version = "3.9.14"
+version = "3.9.15"
 dependencies = [
  "futures",
  "rex-ast",
