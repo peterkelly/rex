@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 regex = { workspace = true }
-rex-ast = { path = "../rex-ast", version = "3.9.15" }
+rex-ast = { path = "../rex-ast", version = "4.0.0" }
 serde = { workspace = true }
 thiserror = { workspace = true }
-rex-util = { path = "../rex-util", version = "3.9.15" }
+rex-util = { path = "../rex-util", version = "4.0.0" }

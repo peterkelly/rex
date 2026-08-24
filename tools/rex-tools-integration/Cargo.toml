@@ -8,7 +8,7 @@ version.workspace = true
 
 [dev-dependencies]
 blake3.workspace = true
-rex = { path = "../../rex", version = "3.9.15" }
+rex = { path = "../../rex", version = "4.0.0" }
 serde_json.workspace = true
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

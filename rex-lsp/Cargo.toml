@@ -12,18 +12,18 @@ blake3 = { workspace = true }
 lsp-types = "0.94"
 futures = { workspace = true }
 serde_json = "1"
-rex-ast = { path = "../rex-ast", version = "3.9.15" }
-rex-parser = { path = "../rex-parser", version = "3.9.15" }
-rex-typesystem = { path = "../rex-typesystem", version = "3.9.15" }
-rex-util = { path = "../rex-util", version = "3.9.15" }
-rex-engine = { path = "../rex-engine", version = "3.9.15" }
+rex-ast = { path = "../rex-ast", version = "4.0.0" }
+rex-parser = { path = "../rex-parser", version = "4.0.0" }
+rex-typesystem = { path = "../rex-typesystem", version = "4.0.0" }
+rex-util = { path = "../rex-util", version = "4.0.0" }
+rex-engine = { path = "../rex-engine", version = "4.0.0" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread"] }
 tower-lsp = { workspace = true }
 
 [dev-dependencies]
-rex = { path = "../rex", version = "3.9.15" }
+rex = { path = "../rex", version = "4.0.0" }
 
 [lints]
 workspace = true

@@ -14,12 +14,12 @@ chrono = { workspace = true }
 clap = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true }
-rex-ast = { path = "../rex-ast", version = "3.9.15" }
-rex-engine = { path = "../rex-engine", version = "3.9.15" }
-rex-parser = { path = "../rex-parser", version = "3.9.15" }
-rex-proc-macro = { path = "../rex-proc-macro", version = "3.9.15" }
-rex-typesystem = { path = "../rex-typesystem", version = "3.9.15" }
-rex-util = { path = "../rex-util", version = "3.9.15" }
+rex-ast = { path = "../rex-ast", version = "4.0.0" }
+rex-engine = { path = "../rex-engine", version = "4.0.0" }
+rex-parser = { path = "../rex-parser", version = "4.0.0" }
+rex-proc-macro = { path = "../rex-proc-macro", version = "4.0.0" }
+rex-typesystem = { path = "../rex-typesystem", version = "4.0.0" }
+rex-util = { path = "../rex-util", version = "4.0.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = "3.27.0"
