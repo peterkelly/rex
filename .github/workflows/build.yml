@@ -26,7 +26,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install wasm-bindgen CLI
-        run: cargo install wasm-bindgen-cli --version 0.2.106
+        run: cargo install wasm-bindgen-cli --version 0.2.127
 
       - name: Install mdBook
         uses: peaceiris/actions-mdbook@v2

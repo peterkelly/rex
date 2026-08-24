@@ -30,7 +30,7 @@ jobs:
           rustup target add wasm32-unknown-unknown --toolchain stable
 
       - name: Install wasm-bindgen CLI
-        run: cargo install wasm-bindgen-cli --version 0.2.106
+        run: cargo install wasm-bindgen-cli --version 0.2.127
 
       - name: Install mdBook
         uses: peaceiris/actions-mdbook@v2
