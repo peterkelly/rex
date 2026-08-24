@@ -40,11 +40,6 @@ fast, high-signal feedback, pure code is easier to inspect, and each installed
 tool's closed API sharply limits what generated programs can ask the host to execute.
 See [LLM guidance](docs/src/LLMS.md) for syntax and validation advice.
 
-> **Project status:** the `main` branch contains the work in progress toward
-> Rex v4 and is currently versioned as 3.9.x. The workflow runtime is new and under
-> active development. The older production release of the core Rex language
-> is available at [talo/rex](https://github.com/talo/rex).
-
 ## Why a functional language for workflows?
 
 Many workflow systems begin with a directed acyclic graph and gradually grow
